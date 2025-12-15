@@ -1,5 +1,6 @@
 # Visual Studio / VFB 临时文件
 .vs/
+<<<<<<< HEAD
 x64/Debug/SnowSword/
 x64/Debug/SnowSword.tlog/
 *.suo
@@ -8,6 +9,11 @@ x64/Debug/SnowSword.tlog/
 *.recipe
 *.tlog
 *.lastbuildstate
+=======
+*.suo
+*.user
+*.aps
+>>>>>>> 64069cc18fe3533c211272be6802b6bb2e497e1c
 
 # 编译输出
 [Rr]elease/

@@ -2,7 +2,11 @@
 # 使用方法：右键点击此脚本，选择“使用PowerShell运行”
 
 # ====== 用户配置区域 ======
+<<<<<<< HEAD
 $SourceRing3 = "D:\Programs\VisualFreeBasic6.0\Projects\MyProjects\SnowSword\"
+=======
+$SourceRing3 = "D:\Programs\VisualFreeBasic6.0\Projects\MyProjects\SnowSword32\"
+>>>>>>> 64069cc18fe3533c211272be6802b6bb2e497e1c
 $SourceRing0 = "C:\Users\21607\source\repos\SnowSword\"
 $RepoDir = "D:\GitHub Project\SnowSword\"
 $GitUserName = "user-lzy"  # 替换

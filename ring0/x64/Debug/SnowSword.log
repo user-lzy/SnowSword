@@ -1,0 +1,8 @@
+﻿  Building 'SnowSword' with toolset 'WindowsKernelModeDriver10.0' and the 'Universal' target platform.
+  EnumDriverInfo.c
+C:\Users\21607\source\repos\SnowSword\sources\EnumDriverInfo.c(472,11): warning C4189: “deviceIndex”: 局部变量已初始化但不引用
+  SnowSword.vcxproj -> C:\Users\21607\source\repos\SnowSword\x64\Debug\SnowSword.sys
+  Done Adding Additional Store
+  Successfully signed: C:\Users\21607\source\repos\SnowSword\x64\Debug\SnowSword.sys
+  
+  Driver is 'Universal'.

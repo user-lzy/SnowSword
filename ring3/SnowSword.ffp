@@ -1,0 +1,181 @@
+﻿#VisualFreeBasic_Project#  Version=5.9.7
+NumObjects=40
+ProjectName=SnowSword
+CompilationMode=0
+CompilationDebug=-1
+ProjectType=GUI
+UseGDIPlus=-1
+ShowConsole=-1
+MultiLanguage=0
+OmitInformation=0
+StartupIcon=SnowSword.ico
+UseWinXPthemes=-1
+StrUnicode=0
+UseAdminPriv=0
+DeleteGeneratedCode=-1
+Namespace=0
+AutoAdd64=0
+APIversion=0
+AddCompOps=  -gen gas64
+LastRunFilename=SnowSword.exe
+Major=1
+Minor=0
+Revision=0
+Build=0
+FileMajor=1
+FileMinor=0
+FileRevision=0
+FileBuild=2717
+AutoIncrement=1
+DefaultCompiler=64
+Comments=
+CompanyName=
+FileDescription=Lzy写的一个小软件
+LegalCopyrights=
+LegalTrademarks=
+ProductName=SnowSword
+
+[Objects]
+Module=.\modules\ModProcess.Inc|806|31494||Yes|
+Form=.\forms\FrmMain.frm|358|19099|Startup|Yes|
+Form=.\forms\FrmModule.Frm|0|250||Yes|
+Module=.\modules\ModModule.Inc|108|5025||Yes|
+Form=.\forms\FrmThread.Frm|0|250||Yes|
+Module=.\modules\ModThread.Inc|123|6396||Yes|
+Form=.\forms\FrmListView.Frm|168|10448||Yes|
+Module=.\modules\ModKernel.Inc|625|26963||Yes|
+Module=.\modules\ModStringFunc.Inc|68|2792||Yes|
+Module=.\modules\ModFile.Inc|840|37052||Yes|
+Module=.\modules\ModSelfProtect.Inc|114|4524||Yes|
+Module=.\modules\ModLoadDriver.Inc|218|10320||Yes|
+Module=.\modules\ModWindow.Inc|146|6569||Yes|
+Module=.\modules\ModLowFile.Inc|0|0||Yes|
+Module=.\modules\ModTools.Inc|46|2387||Yes|
+Module=.\modules\ModCallbacks.Inc|42|1457||Yes|
+Module=.\modules\ModHandle.Inc|214|8458||Yes|
+Module=.\modules\ModLog.Inc|0|0||Yes|
+Module=.\modules\ModListView.Inc|593|27183||Yes|
+Module=.\modules\ModCheckApiHook.Inc|46|2481||Yes|
+Module=.\modules\ModMemory.Inc|156|6507||Yes|
+Module=.\modules\ModData.Inc|0|443||Yes|
+Module=.\modules\ModReg.Inc|190|8593||Yes|
+Module=.\modules\ModNetstat.Inc|110|5401||Yes|
+Module=.\modules\ModService.Inc|73|3804||Yes|
+Module=.\modules\ModInternet.Inc|65|2585||Yes|
+Module=.\modules\ModIoctl.Inc|58|6266||Yes|
+Module=.\modules\ModOther.Inc|215|8148||Yes|
+Resource=SnowSword.ico|0|0||No|
+Form=.\forms\FrmPowerManager.Frm|16|1859||Yes|
+Module=.\modules\ModAttack.Inc|92|3582||Yes|
+Form=.\forms\FrmFireWall.Frm|18|1918||Yes|
+Form=.\forms\FrmFireWall_Options.Frm|0|0||Yes|
+Form=.\forms\FrmMemoryEditor.Frm|36|3434||Yes|
+Module=.\modules\ModGlobal.Inc|0|0||Yes|
+Module=.\modules\ModHook.Inc|556|21896||Yes|
+Module=.\modules\ModPrivilege.Inc|79|3162||Yes|
+
+TopTab=.\modules\ModProcess.Inc|False|0|809|31494
+TopTab=.\forms\FrmMain.frm|False|0|363|19099
+TopTab=.\modules\ModIoctl.Inc|False|0|58|6266
+TopTab=.\modules\ModKernel.Inc|False|0|625|26963
+TopTab=.\forms\FrmListView.Frm|False|0|180|10448
+TopTab=.\modules\ModHook.Inc|False|0|556|21896
+TopTab=.\modules\ModPrivilege.Inc|False|0|79|3162
+TopTab=.\modules\ModListView.Inc|False|0|601|27183
+TopTab=.\modules\ModSelfProtect.Inc|False|0|114|4524
+TopTab=.\modules\ModThread.Inc|True|0|135|6396
+TopTab=.\modules\ModModule.Inc|False|0|108|5025
+TopTab=.\modules\ModTools.Inc|False|0|46|2387
+TopTab=.\modules\ModMemory.Inc|False|0|156|6507
+TopTab=.\forms\FrmMemoryEditor.Frm|False|0|59|3434
+TopTab=.\modules\ModCallbacks.Inc|False|0|47|1457
+TopTab=.\modules\ModOther.Inc|False|0|199|8148
+TopTab=.\modules\ModFile.Inc|False|0|854|37052
+#END_MAIN_PROPERTIES#
+
+
+[FF_APPSTART_START]
+'************ 应用程序起始模块 ************
+' 这里是打开软件后最初被执行代码的地方，此时软件内部还未初始化。（注：一般情况EXE包含DLL的，DLL先于EXE执行DLL自己的起始代码）
+' 不管是EXE还是DLL，都从这里开始执行，然后到【程序入口函数】执行，整个软件结束或DLL被卸载就执行【程序出口】过程。(这里的EXE、DLL表示自己程序)
+' 一般情况在这里写 DLL 声明、自定义声明、常量和#Include的包含文件。由于很多初始化代码未执行，这里不建议写用户代码。
+
+#define UNICODE                 '表示WIN的API默认使用 W系列，宽字符处理，如果删除（使用ASCII字符）会造成控件和API使用的代码编写方式，影响深远。
+#lang "FB"                      '表示为标准FB格式
+#include Once "windows.bi"      'WIN系统基础库，主要是WIN系统常用的API，不使用API可以不包含它。
+#include Once "win/shlobj.bi"   'WIN系统对象库，shell32.dll的头文件，主要涉及shell及通用对话框等。
+#include Once "afx/CWindow.inc" 'WinFBX 库，是WIN系统增强基础库，使用窗口和控件必须要用到它。
+#include Once "vbcompat.bi"     '一些兼容VB的语句和常数，不包含就会无法使用它们了。
+#include Once "fbthread.bi"     'VisualFreeBasic线程语句支持库，要用线程语句，就必须包含。
+
+'以上 包含文件 会影响最终编译生成文件的大小，而不会影响运行效率，对于文件大小比较敏感的，可以根据需要调整。
+
+'当你打开这个模块的同时，证明你已经对 VisualFreeBasic 有所了解，即将进入高手阶段。
+'此时你需要了解VFB的工作过程。
+'VFB 代码执行流程：
+'系统加载EXE -->【起始模块】-->【入口函数】-->【启动窗口】-->关闭启动窗口后-->【出口函数】--> 进程退出 
+'
+'为了简化编写代码，VisualFreeBasic 对代码进行加工，但不包括【起始模块】，就是说【起始模块】不处理任何东西直接去编译的。
+'因此本模块不要写用户代码，一般写定义和引用。
+'
+'代码进行加工过程如下：
+'1，将窗口设计，转换为WIn系统SDK模式的纯代码，包括事件和消息流程处理等等非常复杂的操作。
+'2，把中文代码替换成英文代码后编译，让FreeBasic支持中文代码（前提：VFB选项中选择了这个功能，默认选择的）
+'3，提取函数名，类、全局变量等的定义设置放到单独文件中引用。让你写代码无需考虑函数先后顺序问题，以及自己写定义。
+'4，自动检查代码调用了【源码库】和【我的代码库】，把相关代码全部放入单独文件中引用。让我们可以直接使用源码库，而无需自己去复制源码。
+'5，当你工程属性选择多国语言，将支持多国语言函数。多国语言用法见相关例题。
+'6，当工程中包含其它模块时，自动帮你引用。
+'加工过程产生临时文件，在工程属性里设置是否自动删除。
+[FF_APPSTART_END]
+[FF_WINMAIN_START]
+Function FF_WINMAIN(ByVal hInstance As HINSTANCE) As Long '程序入口函数
+   'hInstance EXE或DLL的模块句柄，就是在内存中的地址，EXE 通常固定为 &H400000  DLL 一般不固定 
+   '编译为 LIB静态库时，这里是无任何用处 
+   ' -------------------------------------------------------------------------------------------
+   '  DLL 例题 ********  函数无需返回值
+   '  DLL被加载到内存时，不要执行太耗时间的代码，若需要耗时就用多线程。
+   '        AfxMsg "DLL被加载到内存时"
+   ' -------------------------------------------------------------------------------------------
+   '  EXE 例题 ********   
+   '        AfxMsg "EXE刚启动"
+   ' 如果这个函数返回TRUE（非零），将会结束该软件。如果没有启动窗口，那么此函数过后，也会终止软件。
+   ' 您可以在此函数做程序初始化。
+   ' -------------------------------------------------------------------------------------------
+   ' (这里的EXE、DLL表示自己程序，无法获取其它EXE、DLL入口和出口)
+
+   Function = False   
+End Function
+
+Sub FF_WINEND(ByVal hInstance As HINSTANCE) '程序出口，程序终止后的最后代码。
+   'hInstance EXE或DLL的模块句柄，就是在内存中的地址，EXE 通常固定为 &H400000  DLL 一般不固定 
+   '编译为 LIB静态库时，这里是无任何用处 
+   ' -------------------------------------------------------------------------------------------
+   '  DLL 例题 ********    
+   '    卸载DLL，DLL被卸载，需要快速完成，不能用进程锁。
+   '    AfxMsg "DLL被卸载时" 
+   ' -------------------------------------------------------------------------------------------
+   '  EXE 例题 ********   
+   '   程序即将结束，这里是最后要执行的代码，（：无法停止被退出的命运。
+   '      AfxMsg "EXE退出"
+   ' -------------------------------------------------------------------------------------------
+   ' (这里的EXE、DLL表示自己程序，无法获取其它EXE、DLL入口和出口)
+
+End Sub
+
+
+[FF_WINMAIN_END]
+[FF_PUMPHOOK_START]
+Function FF_PUMPHOOK( uMsg As Msg ) As Long '消息钩子
+   '所有窗口消息都经过这里，你可以在这里拦截消息。
+
+   ' 如果这个函数返回 FALSE（零），那么 VisualFreeBasic 消息泵将继续进行。
+   ' 返回 TRUE（非零）将绕过消息泵（屏蔽消息），就是吃掉这消息不给窗口和控件处理。
+   ' 
+
+   Function = False    '如果你需要屏蔽消息，返回 TRUE 。
+
+End Function
+
+
+[FF_PUMPHOOK_END]
+

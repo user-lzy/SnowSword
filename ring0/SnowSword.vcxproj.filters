@@ -1,0 +1,163 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Driver Files">
+      <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
+      <Extensions>inf;inv;inx;mof;mc;</Extensions>
+    </Filter>
+    <Filter Include="Source Files\main">
+      <UniqueIdentifier>{8726863e-d0ac-4676-a837-7ef69cde4aa5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\EnumCallbacks">
+      <UniqueIdentifier>{35c8a283-8487-4269-b7fc-a1a6924ff332}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\EnumCallbacks">
+      <UniqueIdentifier>{8f97f608-f5bb-4b75-8d60-a6564ff5e4f5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\DriverControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\EnumDriverInfo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\EnumTimer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\File.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\GDT.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\global.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\HookSysenter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IDT.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ioctl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Memory.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Module.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ObjectInfo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\OtherFunctions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\OtherTools.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Process.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Registry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\SSDT.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Thread.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="wfp.h">
+      <Filter>Header Files\EnumCallbacks</Filter>
+    </ClInclude>
+    <ClInclude Include="include\EnumCallbacks.h">
+      <Filter>Header Files\EnumCallbacks</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Hook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="sources\DriverControl.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\EnumDriverInfo.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\EnumTimer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\File.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\GDT.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\global.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\HookSysenter.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\IDT.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Memory.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Module.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\ObjectInfo.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\OtherFunctions.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\OtherTools.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Process.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Registry.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\main\Driver.c">
+      <Filter>Source Files\main</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\SSDT.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Thread.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\EnumCallbacks.c">
+      <Filter>Source Files\EnumCallbacks</Filter>
+    </ClCompile>
+    <ClCompile Include="wfp.c">
+      <Filter>Source Files\EnumCallbacks</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\GUI.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Hook.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

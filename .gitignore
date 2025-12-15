@@ -1,0 +1,25 @@
+# Visual Studio / VFB 临时文件
+.vs/
+x64/Debug/SnowSword/
+x64/Debug/SnowSword.tlog/
+*.suo
+*.user
+*.aps
+*.recipe
+*.tlog
+*.lastbuildstate
+
+# 编译输出
+[Rr]elease/
+*.dll
+*.lib
+*.pdb
+*.obj
+*.txt
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 你自己的同步脚本（如果不想上传的话）
+# SyncAndCommit.ps1

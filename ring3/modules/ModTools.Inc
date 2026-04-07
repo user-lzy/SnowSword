@@ -62,25 +62,46 @@ Sub ForceReboot()
     End If
 End Sub
 
-Function AddUnlockFileMenu() As BOOLEAN
-    Dim KeyHandle As HKEY
-    Dim result As Long
+Function AddUnlockFileMenu() As Boolean
+    Dim hKey As HKEY
+    Dim hCmdKey As HKEY
+    Dim ret As Long
 
-    ' 创建注册表项
-    Dim strName As WString * MAX_PATH
-    strName = "*\shell\SnowSword"
-    result = RegCreateKey(HKEY_CLASSES_ROOT, @strName, @KeyHandle)
-    If result = ERROR_SUCCESS Then
-        ' 设置默认值
-        strName = "UnlockFile By SnowSword"
-        result = RegSetValueExW(KeyHandle, vbNullString, 0, REG_SZ, CPtr(Const UByte Ptr, @strName), LenW(strName))
-        ' 设置命令
-        Dim strCommand As WString * MAX_PATH = App.Path & App.EXEName & !" -UnlockFile \"%1\""
-        result = RegSetValueExW(KeyHandle, "command", 0, REG_SZ, CPtr(Const UByte Ptr, @strCommand), MAX_PATH)
-        ' 关闭注册表项
-        RegCloseKey KeyHandle
-        Return True
-    Else
+    ' 创建 *\shell\SnowSword
+    Dim keyPath As WString * MAX_PATH
+    keyPath = "*\shell\SnowSword"
+    ret = RegCreateKeyW(HKEY_CLASSES_ROOT, @keyPath, @hKey)
+    If ret <> ERROR_SUCCESS Then Return False
+
+    ' 默认显示名
+    Dim menuText As WString * 260
+    menuText = "UnlockFile By SnowSword"
+    RegSetValueExW(hKey, NULL, 0, REG_SZ, _
+                   CPtr(Const BYTE Ptr, @menuText), _
+                   (Len(menuText) + 1) * 2)
+
+    ' ★★★ 核心：声明需要管理员权限 ★★★
+    RegSetValueExW(hKey, "HasLUAShield", 0, REG_SZ, _
+                   NULL, 0)
+
+    ' 创建 command 子键
+    ret = RegCreateKeyW(hKey, "command", @hCmdKey)
+    If ret <> ERROR_SUCCESS Then
+        RegCloseKey hKey
         Return False
     End If
+
+    ' 命令行
+    Dim cmd As WString * 520
+    cmd = """" & App.Path & "\" & App.EXEName & """" & _
+          " -UnlockFile ""%1"""
+
+    RegSetValueExW(hCmdKey, NULL, 0, REG_SZ, _
+                   CPtr(Const BYTE Ptr, @cmd), _
+                   (Len(cmd) + 1) * 2)
+
+    RegCloseKey hCmdKey
+    RegCloseKey hKey
+
+    Return True
 End Function

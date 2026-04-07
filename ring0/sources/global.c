@@ -2,6 +2,14 @@
 
 #include "global.h"
 #include "OtherFunctions.h"
+#include "ntimage.h"
+
+NTKERNELAPI PVOID RtlImageDirectoryEntryToData(
+    _In_ PVOID Base,
+    _In_ BOOLEAN MappedAsImage,
+    _In_ USHORT DirectoryEntry,
+    _Out_ PULONG Size
+);
 
 // 假设pUserUnicodeString是用户模式传来的UNICODE_STRING指针
 NTSTATUS ValidateUserUnicodeString(PUNICODE_STRING pUserUnicodeString, PUNICODE_STRING pKernelUnicodeString) {
@@ -235,4 +243,182 @@ VOID MyExEnumHandleTable(
         DbgPrint("提示: 错误,非法! ");
         return;
     }
+}
+
+/**
+ * @brief 解析PE导出表，根据函数名查找函数地址（替代内部的MiFindExportedRoutineByName）
+ * @param DllBase 模块基址
+ * @param FunctionName ANSI格式的函数名
+ * @return 函数地址（NULL表示未找到）
+ */
+PVOID FindExportedFunctionByName(
+    _In_ PVOID DllBase,
+    _In_ PCHAR FunctionName
+)
+{
+    // 基础参数校验
+    if (DllBase == NULL || FunctionName == NULL || *FunctionName == '\0')
+    {
+        return NULL;
+    }
+
+    ULONG ExportDirSize = 0;
+    // 获取PE导出目录（公开接口）
+    PIMAGE_EXPORT_DIRECTORY ExportDir = (PIMAGE_EXPORT_DIRECTORY)RtlImageDirectoryEntryToData(
+        DllBase,
+        TRUE,                  // 是PE镜像
+        IMAGE_DIRECTORY_ENTRY_EXPORT,
+        &ExportDirSize
+    );
+    
+
+    // 无导出表则直接返回
+    if (ExportDir == NULL || ExportDirSize == 0)
+    {
+        return NULL;
+    }
+
+    // 计算导出表各子表的实际地址
+    PULONG  NameTable = (PULONG)((PUCHAR)DllBase + ExportDir->AddressOfNames);
+    PUSHORT OrdinalTable = (PUSHORT)((PUCHAR)DllBase + ExportDir->AddressOfNameOrdinals);
+    PULONG  FunctionTable = (PULONG)((PUCHAR)DllBase + ExportDir->AddressOfFunctions);
+
+    // 子表地址无效则返回
+    if (NameTable == NULL || OrdinalTable == NULL || FunctionTable == NULL)
+    {
+        return NULL;
+    }
+
+    // 二分查找（导出表名称表按字母序排序，效率最高）
+    LONG   Low = 0;
+    LONG   High = ExportDir->NumberOfNames - 1;
+    LONG   Mid = 0;
+    INT    Cmp = 0;
+
+    while (Low <= High)
+    {
+        Mid = (Low + High) / 2; // 等价于位运算 (Low+High)>>1，更易读
+        PCHAR CurrentFuncName = (PCHAR)DllBase + NameTable[Mid];
+
+        Cmp = strcmp(FunctionName, CurrentFuncName);
+        if (Cmp == 0)
+        {
+            // 找到匹配的函数名，退出循环
+            break;
+        }
+        else if (Cmp < 0)
+        {
+            // 目标名称更小，查左半区
+            High = Mid - 1;
+        }
+        else
+        {
+            // 目标名称更大，查右半区
+            Low = Mid + 1;
+        }
+    }
+
+    // 未找到匹配的函数名
+    if (Low > High)
+    {
+        return NULL;
+    }
+
+    // 验证序号有效性
+    USHORT Ordinal = OrdinalTable[Mid];
+    if (Ordinal >= ExportDir->NumberOfFunctions)
+    {
+        return NULL;
+    }
+
+    // 计算最终的函数地址
+    PVOID FuncAddr = (PVOID)((PUCHAR)DllBase + FunctionTable[Ordinal]);
+    return FuncAddr;
+}
+
+/**
+ * @brief 内核版GetProcAddress：根据模块名和函数名查找导出函数地址
+ * @param ModuleName ANSI格式的模块名（如"ntoskrnl.exe"、"hal.dll"）
+ * @param FunctionName ANSI格式的函数名（如"ZwCreateProcess"）
+ * @return 函数地址（NULL表示未找到/参数错误）
+ */
+PVOID KernelGetProcAddress(
+    _In_ PCHAR ModuleName,
+    _In_ PCHAR FunctionName
+)
+{
+    // 1. 基础参数校验
+    if (ModuleName == NULL || *ModuleName == '\0' ||
+        FunctionName == NULL || *FunctionName == '\0')
+    {
+        DbgPrint("KernelGetProcAddress: Invalid parameters\n");
+        return NULL;
+    }
+
+    PVOID                  DllBase = NULL;
+    PVOID                  FuncAddr = NULL;
+    UNICODE_STRING         UnicodeModName = { 0 };
+    ANSI_STRING            AnsiModName = { 0 };
+    PLIST_ENTRY            NextEntry = NULL;
+    PKLDR_DATA_TABLE_ENTRY  LdrEntry = NULL;
+    NTSTATUS               Status = STATUS_SUCCESS;
+
+    // 2. 初始化ANSI字符串并转换为UNICODE（模块列表用UNICODE匹配）
+    RtlInitAnsiString(&AnsiModName, ModuleName);
+    Status = RtlAnsiStringToUnicodeString(&UnicodeModName, &AnsiModName, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("KernelGetProcAddress: RtlAnsiStringToUnicodeString failed (0x%08X)\n", Status);
+        return NULL;
+    }
+
+    // 3. 同步：获取模块列表的共享锁（避免遍历过程中列表被修改）
+    KeEnterCriticalRegion();
+    //ExAcquireResourceSharedLite(&PsLoadedModuleResource, TRUE); // 会导致ATTEMPTED_WRITE_TO_READONLY_MEMORY蓝屏
+
+    // 4. 遍历已加载模块列表，匹配目标模块
+    NextEntry = PsLoadedModuleList->Flink;
+    while (NextEntry != PsLoadedModuleList)
+    {
+        // 获取当前模块的LDR条目
+        LdrEntry = CONTAINING_RECORD(NextEntry, KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        if (LdrEntry == NULL)
+        {
+            NextEntry = NextEntry->Flink;
+            continue;
+        }
+
+        // 匹配模块名（TRUE=不区分大小写，符合Windows规则）
+        if (RtlEqualUnicodeString(&UnicodeModName, &LdrEntry->BaseDllName, TRUE))
+        {
+            DllBase = (PVOID)LdrEntry->DllBase;
+            break;
+        }
+
+        NextEntry = NextEntry->Flink;
+    }
+
+    // 5. 释放同步资源
+    //ExReleaseResourceLite(&PsLoadedModuleResource);
+    KeLeaveCriticalRegion();
+
+    // 6. 模块未找到的处理
+    if (DllBase == NULL)
+    {
+        DbgPrint("KernelGetProcAddress: Module '%s' not found\n", ModuleName);
+        RtlFreeUnicodeString(&UnicodeModName);
+        return NULL;
+    }
+
+    // 7. 解析导出表，查找函数地址
+    FuncAddr = FindExportedFunctionByName(DllBase, FunctionName);
+    if (FuncAddr == NULL)
+    {
+        DbgPrint("KernelGetProcAddress: Function '%s' not found in '%s'\n", FunctionName, ModuleName);
+    }
+
+    // 8. 释放UNICODE字符串资源
+    RtlFreeUnicodeString(&UnicodeModName);
+
+    return FuncAddr;
 }

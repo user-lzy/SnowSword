@@ -100,27 +100,47 @@ NTSTATUS SetImageMonitorStatus(BOOLEAN flag)
 
 PVOID GetModuleBase(UNICODE_STRING ModuleName, PULONG pModuleSize)
 {
-	PLIST_ENTRY ModuleListHead = PsLoadedModuleList;
+	PVOID ModuleBase = NULL;
+	ULONG ModuleSize = 0;
+
+	// 1. 确保在 PASSIVE_LEVEL 且禁用 APC 以便安全获取 ERESOURCE
 	KeEnterCriticalRegion();
-	PLIST_ENTRY CurrentEntry = ModuleListHead->Flink;
 
-	while (CurrentEntry != ModuleListHead)
+	// 2. 以共享模式获取模块列表锁（允许多个读者并发）
+	//ExAcquireResourceSharedLite(&PsLoadedModuleResource, TRUE);
+
+	// 3. 安全遍历模块链表
+	PLIST_ENTRY ModuleListHead = PsLoadedModuleList;
+	if (ModuleListHead != NULL)
 	{
-		PKLDR_DATA_TABLE_ENTRY ModuleEntry = CONTAINING_RECORD(CurrentEntry, KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-		UNICODE_STRING CurrentModuleName = ModuleEntry->BaseDllName;
-
-		if (RtlCompareUnicodeString(&ModuleName, &CurrentModuleName, TRUE) == 0)
+		PLIST_ENTRY CurrentEntry = ModuleListHead->Flink;
+		while (CurrentEntry != ModuleListHead)
 		{
-			KeLeaveCriticalRegion();
-			*pModuleSize = ModuleEntry->SizeOfImage;
-			return (PVOID)ModuleEntry->DllBase;
-		}
+			PKLDR_DATA_TABLE_ENTRY ModuleEntry = CONTAINING_RECORD(CurrentEntry, KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 
-		CurrentEntry = CurrentEntry->Flink;
+			// 4. 比较模块名（不区分大小写，Windows 模块名实际存储为大写）
+			if (RtlCompareUnicodeString(&ModuleName, &ModuleEntry->BaseDllName, TRUE) == 0)
+			{
+				ModuleBase = (PVOID)ModuleEntry->DllBase;
+				ModuleSize = ModuleEntry->SizeOfImage;
+				break;
+			}
+
+			CurrentEntry = CurrentEntry->Flink;
+		}
 	}
+
+	// 5. 释放锁并恢复 APC 状态
+	//ExReleaseResourceLite(&PsLoadedModuleResource);
 	KeLeaveCriticalRegion();
-	*pModuleSize = 0;
-	return NULL;
+
+	// 6. 输出模块大小（移除不可靠的 MmIsAddressValid）
+	if (pModuleSize != NULL)
+	{
+		*pModuleSize = ModuleSize;
+	}
+
+	return ModuleBase;
 }
 
 PVOID GetProcAddress(PCHAR FunctionName, PVOID ModuleBase)
@@ -345,6 +365,7 @@ _exit:
 NTSTATUS DumpKernelModule(
 	PVOID ModuleBase,
 	PVOID pOutputBuffer,
+	SIZE_T BufferSize,          // 传入目标缓冲区大小（原 stMemory.Size）
 	PSIZE_T pBytesWritten
 )
 {
@@ -364,31 +385,32 @@ NTSTATUS DumpKernelModule(
 		MM_COPY_MEMORY_VIRTUAL, &bytesRead);
 
 	SIZE_T imageSize = ntHeaders.OptionalHeader.SizeOfImage;
+	SIZE_T copySize = min(imageSize, BufferSize);  // 实际能复制的最大字节数
+	*pBytesWritten = 0;
 
-	// 3. 关键：按页DUMP，跳过无效页但保留对齐
-	for (SIZE_T offset = 0; offset < imageSize; offset += PAGE_SIZE) {
+	for (SIZE_T offset = 0; offset < copySize; offset += PAGE_SIZE) {
 		PVOID currentPage = (PVOID)((ULONG_PTR)ModuleBase + offset);
 		PVOID destPage = (PVOID)((PUCHAR)pOutputBuffer + offset);
 
-		// 检查页有效
-		//if (MmIsAddressValid(currentPage)) {
-		_try {
-			MmCopyMemory(destPage,
-				(MM_COPY_ADDRESS) {
-				.VirtualAddress = currentPage
-			},
-				PAGE_SIZE,
-				MM_COPY_MEMORY_VIRTUAL,
-				&bytesRead);
-			*pBytesWritten += bytesRead;
+		SIZE_T bytesToCopy = PAGE_SIZE;
+		// 最后一页可能不足 PAGE_SIZE
+		if (offset + PAGE_SIZE > copySize) {
+			bytesToCopy = copySize - offset;
 		}
-		//else {
-		_except(EXCEPTION_EXECUTE_HANDLER) {
-			// 关键：用0填充无效页以保持PE结构对齐
-			RtlZeroMemory(destPage, PAGE_SIZE);
-			DbgPrint("[DumpKernelModule] 填充无效页: %p", currentPage);
-		}
-	}
 
+		NTSTATUS status = MmCopyMemory(destPage,
+			(MM_COPY_ADDRESS) {
+			.VirtualAddress = currentPage
+		},
+			bytesToCopy,
+			MM_COPY_MEMORY_VIRTUAL,
+			& bytesRead);
+		if (!NT_SUCCESS(status)) {
+			// 复制失败时用零填充该页（保持 PE 结构对齐）
+			RtlZeroMemory(destPage, bytesToCopy);
+			DbgPrint("[DumpKernelModule] 复制失败 %p, 填充零\n", currentPage);
+		}
+		*pBytesWritten += bytesRead;
+	}
 	return STATUS_SUCCESS;
 }

@@ -55,7 +55,7 @@ BOOLEAN PhysicalReadMemory(PVOID pBaseAddress, PVOID pReadData, SIZE_T readDataS
     // 获取物理地址
     physAddr = MmGetPhysicalAddress(pBaseAddress);
     if (!physAddr.QuadPart) {
-        DbgPrint("无法获取0x%p的物理地址", pBaseAddress);
+        //DbgPrint("无法获取0x%p的物理地址", pBaseAddress);
         return FALSE;
     }
 
@@ -195,6 +195,53 @@ PVOID SearchSpecialCode1(PVOID pSearchBeginAddr, ULONG ulSearchLength, PUCHAR pS
         }
     }
 
+    return pDestAddr;
+}
+
+PVOID SearchSpecialCodeWithMask(
+    PVOID pSearchBeginAddr,
+    ULONG ulSearchLength,
+    PUCHAR pSpecialCode,
+    PUCHAR pMask,  // 掩码数组，1表示需要匹配，0表示通配符
+    ULONG ulSpecialCodeLength)
+{
+    PVOID pDestAddr = NULL;
+    PUCHAR pBeginAddr = (PUCHAR)pSearchBeginAddr;
+    PUCHAR pEndAddr = pBeginAddr + ulSearchLength - ulSpecialCodeLength;
+    PUCHAR i = NULL;
+    ULONG j = 0;
+
+    if (!pSearchBeginAddr || !pSpecialCode || !pMask) return NULL;
+
+    for (i = pBeginAddr; i <= pEndAddr; i++)
+    {
+        // 遍历特征码
+        for (j = 0; j < ulSpecialCodeLength; j++)
+        {
+            // 读取内存中的字节
+            UCHAR bytCode = 0;
+            if (!PhysicalReadMemory(i + j, &bytCode, sizeof(UCHAR))) {
+                break;
+            }
+
+            // 检查是否需要匹配（掩码为1）
+            if (pMask[j] != 0) {
+                // 匹配特征码
+                if (bytCode != pSpecialCode[j])
+                {
+                    break;
+                }
+            }
+            // 掩码为0表示通配符，跳过比较
+        }
+
+        // 匹配成功
+        if (j >= ulSpecialCodeLength)
+        {
+            pDestAddr = (PVOID)i;
+            break;
+        }
+    }
     return pDestAddr;
 }
 

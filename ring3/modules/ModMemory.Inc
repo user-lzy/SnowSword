@@ -1,4 +1,6 @@
-﻿Enum MEMORY_SCAN_RESULT
+﻿#include Once "crt/string.bi"
+
+Enum MEMORY_SCAN_RESULT
     Normal = 0
     Shellcode
     HideDriver
@@ -141,35 +143,31 @@ Private Sub AddMemoryBlockDirectly(ByRef lvwMemory As Class_ListView, ByVal dwPr
         actualProtect = mbi.AllocationProtect
     End If
     
-    With lvwMemory
-        .AddItem "0x" & WHex(mbi.BaseAddress)
-        .SetItemText .ItemCount - 1, 1, "0x" & WHex(mbi.RegionSize)
-        .SetItemText .ItemCount - 1, 2, GetProtectString(actualProtect)
-        .SetItemText .ItemCount - 1, 3, GetStateString(mbi.State)
-        .SetItemText .ItemCount - 1, 4, GetTypeString(mbi.Type)
-        .SetItemText .ItemCount - 1, 5, "0x" & WHex(mbi.AllocationBase)
-        
-        If mbi.Type = MEM_IMAGE Then
-            Dim szModuleName As WString * MAX_PATH
-            GetModuleByAddress dwProcessId, mbi.BaseAddress, @szModuleName
-            .SetItemText .ItemCount - 1, 6, szModuleName
-        Else
-            .SetItemText .ItemCount - 1, 6, ""
-        End If
-    End With
+    'Dim ItemCount As Long = AddItemEx(lvwMemory, "0x" & WHex(mbi.BaseAddress)) ' lvwMemory.ItemCount
+    Dim szModuleName As WString * MAX_PATH = ""
+    If mbi.Type = MEM_IMAGE Then GetModuleByAddress dwProcessId, mbi.BaseAddress, @szModuleName
+    
+    AddItemColListEx lvwMemory, 7,,, "0x" & WHex(mbi.BaseAddress), "0x" & WHex(mbi.RegionSize), WStr(GetProtectString(actualProtect)), _
+    WStr(GetStateString(mbi.State)), WStr(GetTypeString(mbi.Type)), "0x" & WHex(mbi.AllocationBase), szModuleName
 End Sub
 
 ' 如果需要合并功能，使用这个版本（更安全的合并逻辑）
 Private Sub GetMemoryBlockList(ByVal dwProcessId As DWORD, lvwMemory As Class_ListView)
     Dim mbi As MEMORY_BASIC_INFORMATION
     Dim QueryAddress As PVOID
-    Dim hProcess As HANDLE = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, dwProcessId)
+    Dim hProcess As HANDLE = NULL
     
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, dwProcessId)
+    End If
     If (hProcess <= 0) Then
         Print "OpenProcess " & dwProcessId & " Failed!"
-        If IsDriverLoaded Then hProcess = SnowSword_OpenProcess(dwProcessId)
-        If hProcess <= 0 Then Exit Sub
+        Exit Sub
     End If
+    
+    InitListViewData lvwMemory
     
     ' 使用集合来存储内存块信息，避免在遍历时合并
     Dim memoryBlocks() As MEMORY_BASIC_INFORMATION
@@ -222,6 +220,7 @@ Private Sub GetMemoryBlockList(ByVal dwProcessId As DWORD, lvwMemory As Class_Li
     End If
     
     CloseHandle hProcess
+    CommitListViewView lvwMemory
 End Sub
 
 Private Function GetMemoryScanType(ByVal MemoryScanType As MEMORY_SCAN_RESULT) As String
@@ -432,4 +431,5 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     
     ' 扫描完成
     AfxMsg "扫描完成，发现 " & suspectCount & " 处可疑内存"
+    CommitListViewView lvwSuspectKernelMemory
 End Sub

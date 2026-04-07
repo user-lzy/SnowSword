@@ -540,7 +540,7 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
         End If
     End If
     
-    ListView.DeleteAllItems
+    InitListViewData ListView
     
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
@@ -584,18 +584,17 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
             ProcessName = RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
         End If
         'If FilePath <> "" AndAlso InStr(strHandleName, FilePath) <= 0 Then Goto ContinueDo
-        ListView.AddItem ProcessName
-        ListView.SetItemText j, 1, WStr(pHandleEntry->Handles(i).UniqueProcessId)
-        ListView.SetItemText j, 2, strHandleName
-        ListView.SetItemText j, 3, ProcessPath
-        ListView.SetItemText j, 4, "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
+        'If bInited Then ' 直接AddItemColList
+        AddItemColListEx ListView, 5,,, WStr(ProcessName), WStr(pHandleEntry->Handles(i).UniqueProcessId), strHandleName, WStr(ProcessPath), _
+        "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
         j += 1
         ContinueDo : 
         FF_DoEvents
     Next
+    CommitListViewView ListView
 End Sub
 
-Private Function GetProcessIdOfProcessHandle(ByVal dwProcessId As DWORD, ByVal dwHandle As HANDLE, ByRef ProcessId As DWORD) As BOOLEAN
+Private Function GetProcessIdOfProcessHandle(ByVal dwProcessId As DWORD, ByVal dwHandle As HANDLE, ByRef ProcessId As DWORD) As Boolean
     Dim hProcess As HANDLE, hTargetHandle As HANDLE, st As NTSTATUS
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(dwProcessId)
@@ -622,7 +621,7 @@ Private Function GetProcessIdOfProcessHandle(ByVal dwProcessId As DWORD, ByVal d
     Return True
 End Function
 
-Private Function GetThreadIdOfThreadHandle(ByVal dwProcessId As DWORD, ByVal dwHandle As HANDLE, ByRef ThreadId As DWORD, ByRef ProcessId As DWORD) As BOOLEAN
+Private Function GetThreadIdOfThreadHandle(ByVal dwProcessId As DWORD, ByVal dwHandle As HANDLE, ByRef ThreadId As DWORD, ByRef ProcessId As DWORD) As Boolean
     Dim hProcess As HANDLE, hTargetHandle As HANDLE, st As NTSTATUS
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(CLngInt(dwProcessId))
@@ -652,7 +651,9 @@ End Function
 
 Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
     Dim st As NTSTATUS
-    lvwHandle.DeleteAllItems
+    
+    InitListViewData lvwHandle
+    
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
     Do
@@ -712,13 +713,11 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
             End If
         End If
         'If FilePath <> "" AndAlso InStr(strHandleName, FilePath) <= 0 Then Goto ContinueDo
-        lvwHandle.AddItem MyHandleInfo.strType
-        lvwHandle.SetItemText j, 1, strHandleName
-        lvwHandle.SetItemText j, 2, "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
-        lvwHandle.SetItemText j, 3, "0x" & WHex(pHandleEntry->Handles(i).GrantedAccess)
-        lvwHandle.SetItemText j, 4, "0x" & WHex(pHandleEntry->Handles(i).pObject)
+        AddItemColListEx lvwHandle, 5,,, MyHandleInfo.strType, strHandleName, "0x" & WHex(pHandleEntry->Handles(i).HandleValue), _
+        "0x" & WHex(pHandleEntry->Handles(i).GrantedAccess), "0x" & WHex(pHandleEntry->Handles(i).pObject)
         j += 1
         ContinueDo : 
         FF_DoEvents
     Next
+    CommitListViewView lvwHandle
 End Sub

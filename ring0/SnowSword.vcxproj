@@ -88,13 +88,13 @@
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
     </DriverSign>
     <ClCompile>
-      <DisableSpecificWarnings>4201;4218;4131;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4201;4218;4131;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <TreatWarningAsError>false</TreatWarningAsError>
       <PreprocessorDefinitions>_AMD64_</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
-      <AdditionalDependencies>$(DDK_LIB_PATH)fltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)fltMgr.lib;$(DDK_LIB_PATH)fwpkclnt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>DriverEntry</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
@@ -137,7 +137,7 @@
     <ClInclude Include="include\Registry.h" />
     <ClInclude Include="include\SSDT.h" />
     <ClInclude Include="include\Thread.h" />
-    <ClInclude Include="wfp.h" />
+    <ClInclude Include="include\Window.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources\DriverControl.c" />
@@ -161,7 +161,7 @@
     <ClCompile Include="sources\Registry.c" />
     <ClCompile Include="sources\SSDT.c" />
     <ClCompile Include="sources\Thread.c" />
-    <ClCompile Include="wfp.c" />
+    <ClCompile Include="sources\Window.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

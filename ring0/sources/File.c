@@ -1,10 +1,33 @@
-#include "File.h"
+ï»¿#include "File.h"
 
-PDRIVER_DISPATCH g_OriginalDiskWriteDispatch = NULL;
-PDRIVER_DISPATCH g_OriginalDiskReadDispatch = NULL;
-PDRIVER_DISPATCH g_OriginalDiskDeviceControlDispatch = NULL;
-PDRIVER_DISPATCH g_OriginalStorPortScsiDispatch = NULL;
-PDRIVER_DISPATCH g_OriginalNtfsDispatch = NULL;
+// ============================================================================
+// æ± æ ‡ç­¾å®šä¹‰
+// ============================================================================
+#define POOL_TAG_PATH        'htpC'  // CtpH - Copy Path
+#define POOL_TAG_BUFFER      'fubC'  // Cubf - Copy Buffer
+#define POOL_TAG_WORKITEM    'kwoC'  // Cowk - Copy Work Item
+
+// ============================================================================
+// å·¥ä½œé˜Ÿåˆ—ç»“æž„ï¼ˆç”¨äºŽè¿­ä»£æ›¿ä»£é€’å½’ï¼‰
+// ============================================================================
+typedef struct _COPY_WORK_ITEM {
+    LIST_ENTRY ListEntry;
+    UNICODE_STRING SourcePath;  // æ·±æ‹·è´çš„æºè·¯å¾„
+    UNICODE_STRING DestPath;    // æ·±æ‹·è´çš„ç›®æ ‡è·¯å¾„
+    BOOLEAN IsDirectory;
+} COPY_WORK_ITEM, * PCOPY_WORK_ITEM;
+
+// ============================================================================
+// è¾…åŠ©å‡½æ•°ï¼šIRQLæ£€æŸ¥
+// ============================================================================
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS CheckIrqlPassiveLevel(VOID) {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        DbgPrint("[ERROR] IRQL is %d, must be PASSIVE_LEVEL!\n", KeGetCurrentIrql());
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    return STATUS_SUCCESS;
+}
 
 NTSTATUS
 IoCompletionRoutine(
@@ -15,16 +38,19 @@ IoCompletionRoutine(
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
 	UNREFERENCED_PARAMETER(Context);
-    *Irp->UserIosb = Irp->IoStatus;
-    if (Irp->UserEvent)
+    //*Irp->UserIosb = Irp->IoStatus;
+    if (Irp->UserEvent) {
         KeSetEvent(Irp->UserEvent, IO_NO_INCREMENT, 0);
-    if (Irp->MdlAddress)
+        //ExFreePoolWithTag(Irp->UserEvent, 'kevn');
+    }
+    /*if (Irp->MdlAddress)
     {
         IoFreeMdl(Irp->MdlAddress);
         Irp->MdlAddress = NULL;
-    }
+    }*/
     IoFreeIrp(Irp);
     return STATUS_MORE_PROCESSING_REQUIRED;
+    //return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -49,18 +75,20 @@ IrpCreateFile(
     OBJECT_ATTRIBUTES ObjectAttributes;
     PDEVICE_OBJECT DeviceObject, RealDevice;
     PIRP Irp;
-    //KEVENT kEvent;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
     //ACCESS_STATE AccessState;
     //AUX_ACCESS_DATA AuxData;
     //IO_SECURITY_CONTEXT SecurityContext;
+    if (!FileObject) return STATUS_UNSUCCESSFUL;
 
-    //³õÊ¼»¯½á¹¹Ìå
-    KEVENT* pkEvent = NULL;
+    //åˆå§‹åŒ–ç»“æž„ä½“
+    //KEVENT* pkEvent = NULL;
     ACCESS_STATE* pAccessState = NULL;
     AUX_ACCESS_DATA * pAuxData = NULL;
     IO_SECURITY_CONTEXT* pSecurityContext = NULL;
-    //Îª½á¹¹Ìå·ÖÅä¿Õ¼ä
+
+    //ä¸ºç»“æž„ä½“åˆ†é…ç©ºé—´
     pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
@@ -73,7 +101,7 @@ IrpCreateFile(
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
-    pAuxData = (AUX_ACCESS_DATA*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(AUX_ACCESS_DATA), 'aaed');
+    pAuxData = (AUX_ACCESS_DATA*)ExAllocatePool2(POOL_FLAG_NON_PAGED, 0xE0, 'aaed');
     if (!pAuxData) {
         DbgPrint("Failed to allocate memory for AUX_ACCESS_DATA\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
@@ -85,32 +113,27 @@ IrpCreateFile(
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
-    // ³õÊ¼»¯¶ÔÏó
+    // åˆå§‹åŒ–å¯¹è±¡
     RtlZeroMemory(pkEvent, sizeof(KEVENT));
     RtlZeroMemory(pAccessState, sizeof(ACCESS_STATE));
     RtlZeroMemory(pAuxData, sizeof(AUX_ACCESS_DATA));
     RtlZeroMemory(pSecurityContext, sizeof(IO_SECURITY_CONTEXT));
 
-    if (FilePath->Length < 6)
-    {
-        DbgPrint("FilePath->Length:%d", FilePath->Length);
-        ntStatus = STATUS_INVALID_PARAMETER;
-        goto Cleanup;
-    }
     //RtlInitUnicodeString(&UniDeviceNameString, L"//DosDevices//*://");
     //UniDeviceNameString.Buffer[12] = FilePath->Buffer[0];
     InitializeObjectAttributes(&ObjectAttributes, FilePath, OBJ_KERNEL_HANDLE, NULL, NULL);
-    ntStatus = IoCreateFile(&hFile,
-        GENERIC_READ | SYNCHRONIZE,
+    ntStatus = IoCreateFile(
+        &hFile,
+        DesiredAccess | SYNCHRONIZE,  // ä¿ç•™åŒæ­¥æƒé™ï¼Œè¡¥å……ä¼ å…¥çš„è®¿é—®æƒé™
         &ObjectAttributes,
         IoStatusBlock,
-        NULL,
-        FILE_ATTRIBUTE_NORMAL,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        FILE_OPEN,
-        FILE_SYNCHRONOUS_IO_NONALERT,
-        NULL,
-        0,
+        AllocationSize,               // ä½¿ç”¨ä¼ å…¥çš„AllocationSize
+        FileAttributes,               // ä½¿ç”¨ä¼ å…¥çš„FileAttributesï¼ˆç›®å½•/æ–‡ä»¶ï¼‰
+        ShareAccess,                  // ä½¿ç”¨ä¼ å…¥çš„ShareAccess
+        CreateDisposition,            // ä½¿ç”¨ä¼ å…¥çš„CreateDispositionï¼ˆåˆ›å»º/æ‰“å¼€ï¼‰
+        CreateOptions,                // ä½¿ç”¨ä¼ å…¥çš„CreateOptions
+        EaBuffer,                     // ä½¿ç”¨ä¼ å…¥çš„EaBuffer
+        EaLength,                     // ä½¿ç”¨ä¼ å…¥çš„EaLength
         CreateFileTypeNone,
         NULL,
         IO_NO_PARAMETER_CHECKING);
@@ -118,7 +141,7 @@ IrpCreateFile(
     if (!NT_SUCCESS(ntStatus)) goto Cleanup;
 
     ntStatus = ObReferenceObjectByHandle(hFile,
-        FILE_READ_ACCESS, // ACCESS_MASK
+        FILE_ALL_ACCESS, // ACCESS_MASK
         *IoFileObjectType,
         KernelMode,
         &pFile,
@@ -127,11 +150,11 @@ IrpCreateFile(
     DbgPrint("ObReferenceObjectByHandle status:%d", ntStatus);
     if (!NT_SUCCESS(ntStatus)) goto Cleanup;
 
-    PDEVICE_OBJECT fsdDevice = IoGetRelatedDeviceObject(pFile);//»ñµÃÓëÎÄ¼þ¶ÔÏóÏà¹ØÁªµÄÉè±¸¶ÔÏó
+    PDEVICE_OBJECT fsdDevice = IoGetRelatedDeviceObject(pFile);//èŽ·å¾—ä¸Žæ–‡ä»¶å¯¹è±¡ç›¸å…³è”çš„è®¾å¤‡å¯¹è±¡
 
     DeviceObject = pFile->Vpb->DeviceObject;
     RealDevice = pFile->Vpb->RealDevice;
-    ObDereferenceObject(pFile);
+    //ObDereferenceObject(pFile);
     InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_CASE_INSENSITIVE, 0, NULL);
     /*ntStatus = ObCreateObject(KernelMode,
         *IoFileObjectType,
@@ -216,16 +239,16 @@ IrpCreateFile(
     else
     {
         //InterlockedIncrement(&_FileObject->DeviceObject->ReferenceCount);
-        InterlockedIncrement(&pFile->DeviceObject->ReferenceCount);
+        //InterlockedIncrement(&pFile->DeviceObject->ReferenceCount);
         //if (_FileObject->Vpb) InterlockedIncrement(&_FileObject->Vpb->ReferenceCount);
-        if (pFile->Vpb) InterlockedIncrement((volatile LONG*)&pFile->Vpb->ReferenceCount);
+        //if (pFile->Vpb) InterlockedIncrement((volatile LONG*)&pFile->Vpb->ReferenceCount);
         //*FileObject = _FileObject;
         *FileObject = pFile;
     }
 
 Cleanup:
 
-    if (pkEvent != NULL) ExFreePoolWithTag(pkEvent, 'keve');
+	if (pkEvent != NULL) ExFreePoolWithTag(pkEvent, 'kevn');
     if (pAccessState != NULL) ExFreePoolWithTag(pAccessState, 'aest');
     if (pAuxData != NULL) ExFreePoolWithTag(pAuxData, 'aaed');
     if (pSecurityContext != NULL) ExFreePoolWithTag(pSecurityContext, 'iosc');
@@ -233,23 +256,29 @@ Cleanup:
 }
 
 NTSTATUS
-IrpClose(
+IrpCloseFile(
     IN PFILE_OBJECT  FileObject)
 {
     NTSTATUS ntStatus;
     IO_STATUS_BLOCK  IoStatusBlock;
     PIRP Irp;
-    KEVENT kEvent;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
     PDEVICE_OBJECT pBaseDeviceObject = FileObject->Vpb->DeviceObject;
 
-    if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
+    if (!FileObject || FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
 
     Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
     if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
-    Irp->UserEvent = &kEvent;
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = &IoStatusBlock;
     Irp->RequestorMode = KernelMode;
     Irp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
@@ -261,7 +290,7 @@ IrpClose(
     IrpSp->FileObject = FileObject;
 
     ntStatus = IoCallDriver(pBaseDeviceObject, Irp);
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
+    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
 
     ntStatus = IoStatusBlock.Status;
     if (!NT_SUCCESS(ntStatus))
@@ -270,10 +299,10 @@ IrpClose(
         return ntStatus;
     }
 
-    KeClearEvent(&kEvent);
+    KeClearEvent(pkEvent);
     IoReuseIrp(Irp, STATUS_SUCCESS);
 
-    Irp->UserEvent = &kEvent;
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = &IoStatusBlock;
     Irp->Tail.Overlay.OriginalFileObject = FileObject;
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
@@ -286,12 +315,12 @@ IrpClose(
 
     if (FileObject->Vpb && !(FileObject->Flags & FO_DIRECT_DEVICE_OPEN))
     {
-        InterlockedDecrement((volatile LONG*)&FileObject->Vpb->ReferenceCount);
-        FileObject->Flags |= FO_FILE_OPEN_CANCELLED;
+        //InterlockedDecrement((volatile LONG*)&FileObject->Vpb->ReferenceCount);
+        //FileObject->Flags |= FO_FILE_OPEN_CANCELLED;
     }
 
     ntStatus = IoCallDriver(pBaseDeviceObject, Irp);
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
+    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
 
     IoFreeIrp(Irp);
 
@@ -306,42 +335,78 @@ IrpQueryDirectoryFile(
     OUT PVOID  FileInformation,
     IN ULONG  Length,
     IN FILE_INFORMATION_CLASS  FileInformationClass,
-    IN PUNICODE_STRING  FileName  OPTIONAL)
+    IN PUNICODE_STRING  FileName  OPTIONAL,
+    IN BOOLEAN bRestartScan  // æ”¹ä¸ºå¸ƒå°”å€¼ï¼šTRUE=ä»Žå¤´æ‰«ï¼ŒFALSE=ç»§ç»­æ‰«
+)
 {
-    NTSTATUS ntStatus;
-    PIRP Irp;
-    KEVENT kEvent;
-    PIO_STACK_LOCATION IrpSp;
+    NTSTATUS ntStatus = STATUS_SUCCESS;
+    PIRP Irp = NULL;
+    PKEVENT pkEvent = NULL;
+    PIO_STACK_LOCATION IrpSp = NULL;
 
-    if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
+    // ä¸¥æ ¼å…¥å‚æ ¡éªŒ
+    if (!FileObject || !IoStatusBlock || !FileInformation || Length == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!FileObject->Vpb || !FileObject->Vpb->DeviceObject) {
+        return STATUS_UNSUCCESSFUL;
+    }
 
+    // åˆ†é…IRP
     Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
-    if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+    if (!Irp) {
+        ntStatus = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    // åˆ†é…äº‹ä»¶
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        ntStatus = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    // åˆå§‹åŒ–äº‹ä»¶å’Œç¼“å†²åŒº
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
     RtlZeroMemory(FileInformation, Length);
 
-    Irp->UserEvent = &kEvent;
+    // å¡«å……IRP
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = IoStatusBlock;
-    Irp->UserBuffer = FileInformation;
+    Irp->AssociatedIrp.SystemBuffer = FileInformation;
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
     Irp->Tail.Overlay.OriginalFileObject = FileObject;
-    Irp->Overlay.AsynchronousParameters.UserApcRoutine = (PIO_APC_ROUTINE)NULL;
+    Irp->Overlay.AsynchronousParameters.UserApcRoutine = NULL;
+    Irp->Flags = IRP_SYNCHRONOUS_API;
 
+    // å¡«å……IRPæ ˆ
     IrpSp = IoGetNextIrpStackLocation(Irp);
     IrpSp->MajorFunction = IRP_MJ_DIRECTORY_CONTROL;
     IrpSp->MinorFunction = IRP_MN_QUERY_DIRECTORY;
     IrpSp->FileObject = FileObject;
-    IrpSp->Flags = SL_RESTART_SCAN;
+    IrpSp->Flags = bRestartScan ? SL_RESTART_SCAN : 0;
     IrpSp->Parameters.QueryDirectory.Length = Length;
     IrpSp->Parameters.QueryDirectory.FileName = FileName;
     IrpSp->Parameters.QueryDirectory.FileInformationClass = FileInformationClass;
-
+    
+    // è°ƒç”¨é©±åŠ¨å¹¶ç­‰å¾…å®Œæˆ
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
     ntStatus = IoCallDriver(FileObject->Vpb->DeviceObject, Irp);
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, TRUE, 0);
+    if (ntStatus == STATUS_PENDING) {
+        KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
+    }
 
-    return IoStatusBlock->Status;
+    // æ›´æ–°æœ€ç»ˆçŠ¶æ€
+    ntStatus = IoStatusBlock->Status;
+
+Cleanup:
+    // é‡Šæ”¾èµ„æºï¼ˆé¿å…æ³„æ¼ï¼‰
+    if (pkEvent) ExFreePoolWithTag(pkEvent, 'kevn');
+    if (Irp && !NT_SUCCESS(ntStatus)) {  // ä»…å¤±è´¥æ—¶é‡Šæ”¾IRPï¼ˆæˆåŠŸåˆ™ç”±é©±åŠ¨å¤„ç†ï¼‰
+        IoFreeIrp(Irp);
+    }
+    return ntStatus;
 }
 
 NTSTATUS
@@ -354,20 +419,26 @@ IrpQueryInformationFile(
 {
     NTSTATUS ntStatus;
     PIRP Irp;
-    KEVENT kEvent;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
 
-    if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
+    if (!FileObject || FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
 
     Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
     if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
 
     RtlZeroMemory(FileInformation, Length);
 
     Irp->AssociatedIrp.SystemBuffer = FileInformation;
-    Irp->UserEvent = &kEvent;
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = IoStatusBlock;
     Irp->RequestorMode = KernelMode;
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
@@ -382,28 +453,79 @@ IrpQueryInformationFile(
 
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
     ntStatus = IoCallDriver(FileObject->Vpb->DeviceObject, Irp);
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, TRUE, 0);
+    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, 0);
 
     return IoStatusBlock->Status;
 }
 
 NTSTATUS
 IrpSetInformationFile(
-	IN HANDLE  FileHandle,
+    IN PFILE_OBJECT  FileObject,
+    OUT PIO_STATUS_BLOCK  IoStatusBlock,
     IN PVOID  FileInformation,
     IN FILE_INFORMATION_CLASS  FileInformationClass,
 	IN ULONG  Length
 )
 {
-    NTSTATUS ntStatus;
     PIRP Irp;
-    KEVENT kEvent;
-    PFILE_OBJECT  pFileObject;
-    IO_STATUS_BLOCK  IoStatusBlock;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
 	PDEVICE_OBJECT pDeviceObject;
 
-    // »ñÈ¡ÎÄ¼þ¶ÔÏó   
+	if (!FileObject) return STATUS_INVALID_PARAMETER;
+
+    // èŽ·å–ä¸ŽæŒ‡å®šæ–‡ä»¶å¯¹è±¡ç›¸å…³è”çš„è®¾å¤‡å¯¹è±¡   
+    pDeviceObject = IoGetRelatedDeviceObject(FileObject);
+
+    Irp = IoAllocateIrp(pDeviceObject->StackSize, TRUE);
+    if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+
+    Irp->AssociatedIrp.SystemBuffer = FileInformation;
+    Irp->UserEvent = pkEvent;
+    Irp->UserIosb = IoStatusBlock;
+    Irp->RequestorMode = KernelMode;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+
+    IrpSp = IoGetNextIrpStackLocation(Irp);
+    IrpSp->MajorFunction = IRP_MJ_SET_INFORMATION;
+    IrpSp->DeviceObject = pDeviceObject;
+    IrpSp->FileObject = FileObject;
+    IrpSp->Parameters.SetFile.Length = Length;
+    IrpSp->Parameters.SetFile.FileInformationClass = FileInformationClass;
+    IrpSp->Parameters.SetFile.FileObject = FileObject;
+
+    IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
+    IoCallDriver(pDeviceObject, Irp);
+    KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, 0);
+    return IoStatusBlock->Status;
+}
+
+NTSTATUS
+MySetInformationFile(
+    IN HANDLE  FileHandle,
+    IN PVOID  FileInformation,
+    IN FILE_INFORMATION_CLASS  FileInformationClass,
+    IN ULONG  Length
+)
+{
+    NTSTATUS ntStatus;
+    PIRP Irp;
+    PKEVENT pkEvent = NULL;
+    PFILE_OBJECT  pFileObject;
+    IO_STATUS_BLOCK  IoStatusBlock;
+    PIO_STACK_LOCATION IrpSp;
+    PDEVICE_OBJECT pDeviceObject;
+
+    // èŽ·å–æ–‡ä»¶å¯¹è±¡   
     ntStatus = ObReferenceObjectByHandle(FileHandle, DELETE,
         *IoFileObjectType, KernelMode, &pFileObject, NULL);
     if (!NT_SUCCESS(ntStatus))
@@ -412,9 +534,9 @@ IrpSetInformationFile(
         return FALSE;
     }
 
-	if (pFileObject == NULL) return STATUS_INVALID_PARAMETER;
+    if (pFileObject == NULL) return STATUS_INVALID_PARAMETER;
 
-    // »ñÈ¡ÓëÖ¸¶¨ÎÄ¼þ¶ÔÏóÏà¹ØÁªµÄÉè±¸¶ÔÏó   
+    // èŽ·å–ä¸ŽæŒ‡å®šæ–‡ä»¶å¯¹è±¡ç›¸å…³è”çš„è®¾å¤‡å¯¹è±¡   
     pDeviceObject = IoGetRelatedDeviceObject(pFileObject);
 
     Irp = IoAllocateIrp(pDeviceObject->StackSize, TRUE);
@@ -423,10 +545,16 @@ IrpSetInformationFile(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
 
     Irp->AssociatedIrp.SystemBuffer = FileInformation;
-    Irp->UserEvent = &kEvent;
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = &IoStatusBlock;
     Irp->RequestorMode = KernelMode;
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
@@ -442,8 +570,8 @@ IrpSetInformationFile(
 
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
     IoCallDriver(pDeviceObject, Irp);
-    KeWaitForSingleObject(&kEvent, Executive, KernelMode, TRUE, 0);
-	ObDereferenceObject(pFileObject);
+    KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, 0);
+    ObDereferenceObject(pFileObject);
     return IoStatusBlock.Status;
 }
 
@@ -457,7 +585,7 @@ IrpReadFile(
 {
     NTSTATUS ntStatus;
     PIRP Irp;
-    KEVENT kEvent;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
 
     if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
@@ -493,9 +621,15 @@ IrpReadFile(
         Irp->UserBuffer = Buffer;
     }
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-    Irp->UserEvent = &kEvent;
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = IoStatusBlock;
     Irp->RequestorMode = KernelMode;
     Irp->Flags = IRP_READ_OPERATION;
@@ -513,7 +647,7 @@ IrpReadFile(
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
 
     ntStatus = IoCallDriver(FileObject->Vpb->DeviceObject, Irp);
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, TRUE, 0);
+    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, 0);
 
     return IoStatusBlock->Status;
 }
@@ -528,7 +662,7 @@ IrpWriteFile(
 {
     NTSTATUS ntStatus;
     PIRP Irp;
-    KEVENT kEvent;
+    PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
 
     if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
@@ -558,9 +692,15 @@ IrpWriteFile(
         MmBuildMdlForNonPagedPool(Irp->MdlAddress);
     }
 
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        DbgPrint("Failed to allocate memory for KEVENT\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-    Irp->UserEvent = &kEvent;
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+
+    Irp->UserEvent = pkEvent;
     Irp->UserIosb = IoStatusBlock;
     Irp->RequestorMode = KernelMode;
     Irp->Flags = IRP_WRITE_OPERATION;
@@ -578,7 +718,7 @@ IrpWriteFile(
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, NULL, TRUE, TRUE, TRUE);
     ntStatus = IoCallDriver(FileObject->Vpb->DeviceObject, Irp);
 
-    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(&kEvent, Executive, KernelMode, TRUE, NULL);
+    if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, NULL);
 
     return IoStatusBlock->Status;
 }
@@ -586,9 +726,9 @@ IrpWriteFile(
 UNICODE_STRING RtlGetUnicodeString(LPWSTR wStr)
 {
     UNICODE_STRING uStr;
-    //¼ÆËã×Ö·û´®µÄ³¤¶È£¨²»°üÀ¨½áÎ²µÄ NULL£©
+    //è®¡ç®—å­—ç¬¦ä¸²çš„é•¿åº¦ï¼ˆä¸åŒ…æ‹¬ç»“å°¾çš„ NULLï¼‰
     uStr.Length = (USHORT)(wcslen(wStr) * sizeof(WCHAR));
-    //¼ÆËã×Ö·û´®µÄ×î´ó³¤¶È£¨°üÀ¨½áÎ²µÄ NULL£©
+    //è®¡ç®—å­—ç¬¦ä¸²çš„æœ€å¤§é•¿åº¦ï¼ˆåŒ…æ‹¬ç»“å°¾çš„ NULLï¼‰
     uStr.MaximumLength = (USHORT)(uStr.Length + sizeof(WCHAR));
     uStr.Buffer = wStr;
     return uStr;
@@ -600,20 +740,20 @@ NTSTATUS MyCreateFile(PUNICODE_STRING ustrFileName, PHANDLE pFileHandle)
     OBJECT_ATTRIBUTES   objectAttributes;
     IO_STATUS_BLOCK     ioStatus;
 
-    // È·±£IRQLÔÚPASSIVE_LEVELÉÏ   
+    // ç¡®ä¿IRQLåœ¨PASSIVE_LEVELä¸Š   
 	if (KeGetCurrentIrql() > PASSIVE_LEVEL) return STATUS_INVALID_LEVEL;
 
-    //³õÊ¼»¯¶ÔÏóÊôÐÔ   
+    //åˆå§‹åŒ–å¯¹è±¡å±žæ€§   
     InitializeObjectAttributes(&objectAttributes, ustrFileName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-    // ´ò¿ªÎÄ¼þ   
+    // æ‰“å¼€æ–‡ä»¶   
     ntStatus = IoCreateFile(pFileHandle, FILE_READ_ATTRIBUTES, &objectAttributes, &ioStatus,
         0, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_OPEN, 0, NULL, 0, CreateFileTypeNone, NULL, IO_NO_PARAMETER_CHECKING);
     if (!NT_SUCCESS(ntStatus)) {
         DbgPrint("IoCreateFile error:%X", ntStatus);
 		return ntStatus;
     }
-	// ·µ»Ø³É¹¦×´Ì¬
+	// è¿”å›žæˆåŠŸçŠ¶æ€
 	return STATUS_SUCCESS;
 }
 
@@ -629,7 +769,7 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
     PIO_STACK_LOCATION              irpSp;
     PSECTION_OBJECT_POINTERS        pSectionObjectPointer;
 
-    // »ñÈ¡ÎÄ¼þ¶ÔÏó   
+    // èŽ·å–æ–‡ä»¶å¯¹è±¡   
     ntStatus = ObReferenceObjectByHandle(FileHandle, DELETE,
         *IoFileObjectType, KernelMode, (PVOID*)&fileObject, NULL);
     if (!NT_SUCCESS(ntStatus))
@@ -638,10 +778,10 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
         return FALSE;
     }
 
-    // »ñÈ¡ÓëÖ¸¶¨ÎÄ¼þ¶ÔÏóÏà¹ØÁªµÄÉè±¸¶ÔÏó   
+    // èŽ·å–ä¸ŽæŒ‡å®šæ–‡ä»¶å¯¹è±¡ç›¸å…³è”çš„è®¾å¤‡å¯¹è±¡   
     DeviceObject = IoGetRelatedDeviceObject(fileObject);
 
-    // ´´½¨IRP   
+    // åˆ›å»ºIRP   
     Irp = IoAllocateIrp(DeviceObject->StackSize, TRUE);
     if (Irp == NULL)
     {
@@ -650,12 +790,12 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
         return FALSE;
     }
 
-    // ³õÊ¼»¯Í¬²½ÊÂ¼þ¶ÔÏó   
+    // åˆå§‹åŒ–åŒæ­¥äº‹ä»¶å¯¹è±¡   
     KeInitializeEvent(&SycEvent, SynchronizationEvent, FALSE);
 
     FileInformation.DeleteFile = TRUE;
 
-    // ³õÊ¼»¯IRP   
+    // åˆå§‹åŒ–IRP   
     Irp->AssociatedIrp.SystemBuffer = &FileInformation;
     Irp->UserEvent = &SycEvent;
     Irp->UserIosb = &ioStatus;
@@ -663,7 +803,7 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
     Irp->Tail.Overlay.Thread = (PETHREAD)KeGetCurrentThread();
     Irp->RequestorMode = KernelMode;
 
-    // ÉèÖÃIRP¶ÑÕ»   
+    // è®¾ç½®IRPå †æ ˆ   
     irpSp = IoGetNextIrpStackLocation(Irp);
     irpSp->MajorFunction = IRP_MJ_SET_INFORMATION;
     irpSp->DeviceObject = DeviceObject;
@@ -672,10 +812,10 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
     irpSp->Parameters.SetFile.FileInformationClass = FileDispositionInformation;
     irpSp->Parameters.SetFile.FileObject = fileObject;
 
-    // ÉèÖÃÍê³ÉÀý³Ì   
+    // è®¾ç½®å®Œæˆä¾‹ç¨‹   
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, NULL, TRUE, TRUE, TRUE);
 
-    // Èç¹ûÃ»ÓÐÕâ3ÐÐ£¬¾ÍÎÞ·¨É¾³ýÕýÔÚÔËÐÐµÄÎÄ¼þ   
+    // å¦‚æžœæ²¡æœ‰è¿™3è¡Œï¼Œå°±æ— æ³•åˆ é™¤æ­£åœ¨è¿è¡Œçš„æ–‡ä»¶   
     pSectionObjectPointer = fileObject->SectionObjectPointer;
     pSectionObjectPointer->ImageSectionObject = NULL;
     pSectionObjectPointer->DataSectionObject = NULL;
@@ -688,448 +828,45 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle)
     fileObject->DeleteAccess = 0;
     fileObject->DeletePending = FALSE;*/
 
-    // ÅÉ·¢IRP   
+    // æ´¾å‘IRP   
     IoCallDriver(DeviceObject, Irp);
     
-    // µÈ´ýIRPÍê³É   
+    // ç­‰å¾…IRPå®Œæˆ   
     KeWaitForSingleObject(&SycEvent, Executive, KernelMode, TRUE, NULL);
 
-    // µÝ¼õÒýÓÃ¼ÆÊý   
+    // é€’å‡å¼•ç”¨è®¡æ•°   
     ObDereferenceObject(fileObject);
 
 	return ioStatus.Status;
 }
 
-// Ç¿ÖÆÉ¾³ýÎÄ¼þ
+// å¼ºåˆ¶åˆ é™¤æ–‡ä»¶
 NTSTATUS ForceDeleteFile(UNICODE_STRING ustrFileName)
 {
     NTSTATUS status = STATUS_SUCCESS;
     FILE_BASIC_INFORMATION fileBaseInfo = { 0 };
 	HANDLE hFile = NULL;
-    // ·¢ËÍIRP´ò¿ªÎÄ¼þ
+    // å‘é€IRPæ‰“å¼€æ–‡ä»¶
     status = MyCreateFile(&ustrFileName, &hFile);//, GENERIC_READ | GENERIC_WRITE, ,
         //&iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         //FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
     DbgPrint("MyCreateFile Error[0x%X]\n", status);
     if (!NT_SUCCESS(status)) goto Cleanup;
 
-    // ·¢ËÍIRPÉèÖÃÎÄ¼þÊôÐÔ, È¥µôÖ»¶ÁÊôÐÔ, ÐÞ¸ÄÎª FILE_ATTRIBUTE_NORMAL
+    // å‘é€IRPè®¾ç½®æ–‡ä»¶å±žæ€§, åŽ»æŽ‰åªè¯»å±žæ€§, ä¿®æ”¹ä¸º FILE_ATTRIBUTE_NORMAL
     RtlZeroMemory(&fileBaseInfo, sizeof(fileBaseInfo));
     fileBaseInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-    status = IrpSetInformationFile(hFile, &fileBaseInfo, FileBasicInformation, sizeof(fileBaseInfo));
+    status = MySetInformationFile(hFile, &fileBaseInfo, FileBasicInformation, sizeof(fileBaseInfo));
     DbgPrint("IrpSetInformationFile[SetInformation] Error[0x%X]\n", status);
     if (!NT_SUCCESS(status)) goto Cleanup;
 
-    // ·¢ËÍIRPÉèÖÃÎÄ¼þÊôÐÔ, ÉèÖÃÉ¾³ýÎÄ¼þ²Ù×÷
+    // å‘é€IRPè®¾ç½®æ–‡ä»¶å±žæ€§, è®¾ç½®åˆ é™¤æ–‡ä»¶æ“ä½œ
     status = MyDeleteFile(hFile);
     DbgPrint("MyDeleteFile Error[0x%X]\n", status);
 
 Cleanup:
 	ZwClose(hFile);
     return status;
-}
-
-NTSTATUS FakeDiskWriteDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
-{
-#define STATUS_INVALID_VALUE 0xC000000D
-    NTSTATUS status = STATUS_SUCCESS;
-    IO_STACK_LOCATION* irpSp = IoGetCurrentIrpStackLocation(Irp);
-    LARGE_INTEGER writeOffsetInBytes = irpSp->Parameters.Write.ByteOffset;
-    ULONG writeLength = irpSp->Parameters.Write.Length;
-
-    //DbgPrint("Enter the FakeDiskWriteDispatch,CurrentPID:%d", PsGetCurrentProcessId());
-
-    // ±£»¤MBR£ºMBRÎ»ÓÚ´ÅÅÌµÄÆðÊ¼ÉÈÇø£¨0ÉÈÇø£©
-    if (writeOffsetInBytes.QuadPart == 0 && writeLength >= 512)
-    {
-        // ¾Ü¾øÐ´ÈëMBR
-        DbgPrint("ÒÑ¾Ü¾øMBRÐ´²Ù×÷");
-
-        // »ñÈ¡Ð´ÈëµÄÊý¾Ý»º³åÇø
-        PUCHAR buffer = Irp->AssociatedIrp.SystemBuffer; // ÏµÍ³»º³åÇø
-        if (!buffer) buffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority); // Èç¹ûÊ¹ÓÃ MDL
-
-        // ´òÓ¡»ò´¦ÀíÐ´ÈëµÄÊý¾Ý
-        DbgPrint("Data to be written:\n");
-        if (!buffer) {
-            DbgPrint("Buffer is NULL.\n");
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return status;
-		}
-        _try{
-            for (ULONG i = 0; i < writeLength; i++) {
-                DbgPrint("%02llX ", (ULONG_PTR)buffer[i]);
-            }
-        }
-        _except (EXCEPTION_EXECUTE_HANDLER) {
-            DbgPrint("Exception occurred while accessing buffer.\n");
-		}
-        DbgPrint("\n");
-        Irp->IoStatus.Information = 0;
-        Irp->IoStatus.Status = status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return status;
-    }
-
-    // ÆäËûÐ´²Ù×÷Õý³£´¦Àí
-    return g_OriginalDiskWriteDispatch(DeviceObject, Irp);
-}
-
-NTSTATUS FakeDiskReadDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
-{
-#define STATUS_IO_ERROR 0xC0000036
-    NTSTATUS status = STATUS_SUCCESS;
-    IO_STACK_LOCATION* irpSp = IoGetCurrentIrpStackLocation(Irp);
-    LARGE_INTEGER readOffsetInBytes = irpSp->Parameters.Read.ByteOffset;
-    ULONG readLength = irpSp->Parameters.Read.Length;
-
-    //DbgPrint("Enter the FakeDiskReadDispatch,CurrentPID:%d", PsGetCurrentProcessId());
-
-    // ±£»¤MBR£ºMBRÎ»ÓÚ´ÅÅÌµÄÆðÊ¼ÉÈÇø£¨0ÉÈÇø£©
-    if (readOffsetInBytes.QuadPart == 0 && readLength >= 512)
-    {
-        // ¾Ü¾ø¶ÁÈ¡MBR
-        DbgPrint("ÒÑ¾Ü¾øMBR¶Á²Ù×÷²¢·µ»Ø¼Ù½á¹û!");
-
-        // »ñÈ¡¶ÁÈ¡µÄÊý¾Ý»º³åÇø
-        PUCHAR buffer = Irp->AssociatedIrp.SystemBuffer; // ÏµÍ³»º³åÇø
-        if (!buffer) buffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority); // Èç¹ûÊ¹ÓÃ MDL
-
-        // Î±ÔìÊý¾Ý
-        PUCHAR fakeData = (PUCHAR)"Hello, I'm Faked MBR Data!";
-        size_t fakeDataLength = strlen((const char*)fakeData) + 1; // °üÀ¨×Ö·û´®µÄ½áÊø·û
-
-        // ½«Î±ÔìÊý¾ÝÐ´Èë»º³åÇø
-        RtlCopyMemory(buffer, fakeData, fakeDataLength);
-
-        // ÉèÖÃ IRP µÄ×´Ì¬ºÍÐÅÏ¢
-        Irp->IoStatus.Status = status;
-        Irp->IoStatus.Information = fakeDataLength;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return STATUS_INVALID_VALUE;//·¢ÉúI/O´íÎó
-    }
-
-    // ÆäËûÐ´²Ù×÷Õý³£´¦Àí
-    return g_OriginalDiskReadDispatch(DeviceObject, Irp);
-}
-
-NTSTATUS FakeDiskDeviceControlDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
-{
-    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
-    ULONG ioctlCode = stack->Parameters.DeviceIoControl.IoControlCode;
-
-    // ¼ì²éÊÇ·ñÊÇ¸ñÊ½»¯ÇëÇó
-    if (ioctlCode == IOCTL_DISK_FORMAT_TRACKS || ioctlCode == IOCTL_DISK_FORMAT_PARTITIONS) {
-        // ¾Ü¾ø¸ñÊ½»¯ÇëÇó
-        DbgPrint("ÒÑÀ¹½Ø¸ñÊ½»¯ÇëÇó!");
-        Irp->IoStatus.Status = STATUS_ACCESS_DENIED;
-        Irp->IoStatus.Information = 0;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return STATUS_ACCESS_DENIED;
-    }
-
-    // µ÷ÓÃÔ­Ê¼µÄÅÉÇ²º¯Êý
-    return g_OriginalDiskDeviceControlDispatch(DeviceObject, Irp);
-}
-
-NTSTATUS HookDiskWriteDispatch()
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PDRIVER_OBJECT diskDrvObj;
-    UNICODE_STRING uniObjName;
-
-    // ³õÊ¼»¯Çý¶¯¶ÔÏóÃû³Æ
-    RtlInitUnicodeString(&uniObjName, L"\\Driver\\Disk");
-
-    // »ñÈ¡disk.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&uniObjName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &diskDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return status;
-    }
-
-    // ±£´æÔ­Ê¼µÄIRP_MJ_WRITEº¯ÊýÖ¸Õë
-    g_OriginalDiskReadDispatch = diskDrvObj->MajorFunction[IRP_MJ_READ];
-    g_OriginalDiskWriteDispatch = diskDrvObj->MajorFunction[IRP_MJ_WRITE];
-    g_OriginalDiskDeviceControlDispatch = diskDrvObj->MajorFunction[IRP_MJ_DEVICE_CONTROL];
-
-    // Ìæ»»Îª×Ô¶¨ÒåµÄIRP_MJ_WRITEº¯Êý
-    diskDrvObj->MajorFunction[IRP_MJ_READ] = FakeDiskReadDispatch;
-    diskDrvObj->MajorFunction[IRP_MJ_WRITE] = FakeDiskWriteDispatch;
-    diskDrvObj->MajorFunction[IRP_MJ_DEVICE_CONTROL] = FakeDiskDeviceControlDispatch;
-
-    DbgPrint("IRP Hook Success!");
-
-    // ÉèÖÃ¹Ò¹³×´Ì¬
-    //g_bHooked = TRUE;
-
-    // ÊÍ·Å¶ÔÇý¶¯¶ÔÏóµÄÒýÓÃ
-    ObDereferenceObject(diskDrvObj);
-
-    return status;
-}
-
-NTSTATUS UnhookDiskWriteDispatch()
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PDRIVER_OBJECT diskDrvObj;
-    UNICODE_STRING uniObjName;
-
-    // ³õÊ¼»¯Çý¶¯¶ÔÏóÃû³Æ
-    RtlInitUnicodeString(&uniObjName, L"\\Driver\\Disk");
-
-    // »ñÈ¡disk.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&uniObjName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &diskDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return status;
-    }
-
-    // ¼ì²éÊÇ·ñÒÑ¾­¹Ò¹³
-    //if (g_bHooked)
-    //{
-    // »Ö¸´Ô­Ê¼µÄIRP_MJ_WRITEº¯ÊýÖ¸Õë
-    diskDrvObj->MajorFunction[IRP_MJ_READ] = g_OriginalDiskReadDispatch;
-    diskDrvObj->MajorFunction[IRP_MJ_WRITE] = g_OriginalDiskWriteDispatch;
-    //g_bHooked = FALSE;
-    //}
-
-    DbgPrint("IRP Unhook Success!");
-
-    // ÊÍ·Å¶ÔÇý¶¯¶ÔÏóµÄÒýÓÃ
-    ObDereferenceObject(diskDrvObj);
-
-    return status;
-}
-
-NTSTATUS FakeStorPortScsiDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
-{
-    IO_STACK_LOCATION* irpSp = IoGetCurrentIrpStackLocation(Irp);
-    SCSI_REQUEST_BLOCK* srb = (SCSI_REQUEST_BLOCK*)irpSp->Parameters.Scsi.Srb;
-
-    // ¼ì²éÊÇ·ñÎªÐ´ÈëMBRµÄ²Ù×÷
-    if (srb->Cdb[0] == SCSIOP_WRITE && srb->Cdb[2] == 0 && srb->Cdb[3] == 0)
-    {
-        // ¾Ü¾øÐ´ÈëMBR
-        DbgPrint("ÒÑ¾Ü¾øMBRÐ´²Ù×÷");
-        Irp->IoStatus.Status = STATUS_ACCESS_DENIED;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return STATUS_ACCESS_DENIED;
-    }
-
-    // ÆäËû²Ù×÷Õý³£´¦Àí
-    return g_OriginalStorPortScsiDispatch(DeviceObject, Irp);
-}
-
-NTSTATUS HookStorPortScsiDispatch()
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PDRIVER_OBJECT storPortDrvObj;
-    UNICODE_STRING uniObjName;
-    //IoDeviceObjectType
-    // ³õÊ¼»¯Çý¶¯¶ÔÏóÃû³Æ
-    RtlInitUnicodeString(&uniObjName, L"\\Driver\\StorPort");//SCSI MiniportÇý¶¯
-
-    // »ñÈ¡disk.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&uniObjName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &storPortDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return status;
-    }
-
-    // ±£´æÔ­Ê¼µÄIRP_MJ_SCSIº¯ÊýÖ¸Õë
-    g_OriginalStorPortScsiDispatch = storPortDrvObj->MajorFunction[IRP_MJ_SCSI];
-
-    // Ìæ»»Îª×Ô¶¨ÒåµÄIRP_MJ_SCSIº¯Êý
-    storPortDrvObj->MajorFunction[IRP_MJ_SCSI] = FakeStorPortScsiDispatch;
-
-    DbgPrint("IRP Hook Success!");
-
-    // ÉèÖÃ¹Ò¹³×´Ì¬
-    //g_bHooked = TRUE;
-
-    // ÊÍ·Å¶ÔÇý¶¯¶ÔÏóµÄÒýÓÃ
-    ObDereferenceObject(storPortDrvObj);
-
-    return status;
-}
-
-VOID UnhookStorPortScsiDispatch()
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PDRIVER_OBJECT storPortDrvObj;
-    UNICODE_STRING uniObjName;
-
-    // ³õÊ¼»¯Çý¶¯¶ÔÏóÃû³Æ
-    RtlInitUnicodeString(&uniObjName, L"\\Driver\\StorPort");//SCSI MiniportÇý¶¯
-
-    // »ñÈ¡disk.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&uniObjName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &storPortDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return;
-    }
-    //if (g_bHooked)
-    //{
-    storPortDrvObj->MajorFunction[IRP_MJ_SCSI] = g_OriginalStorPortScsiDispatch;
-    //g_bHooked = FALSE;
-    //}
-
-    DbgPrint("IRP Unhook Success!");
-
-    ObDereferenceObject(storPortDrvObj);
-}
-
-//Í¨¹ýFILE_OBJECTÄÃµ½ÎÄ¼þÃû
-BOOLEAN QueryFileObjectDosName(PFILE_OBJECT pFileObject, PWCHAR OutputBufferFreeByCaller)
-{
-    UNICODE_STRING volumeDosName = { 0 };
-    //³õÊ¼»¯Êä³öÂ·¾¶
-    OutputBufferFreeByCaller = ExAllocatePool2(POOL_FLAG_NON_PAGED, pFileObject->FileName.Length + 32, 'aaaa');
-    RtlZeroMemory(OutputBufferFreeByCaller, pFileObject->FileName.Length + 32);
-    //È¡µÃÅÌ·ûDOSÃû
-    RtlInitEmptyUnicodeString(&volumeDosName, NULL, 0);
-    if (!NT_SUCCESS(IoVolumeDeviceToDosName(pFileObject->DeviceObject, &volumeDosName)) && volumeDosName.Buffer == NULL) return FALSE;
-    memcpy(OutputBufferFreeByCaller, volumeDosName.Buffer, volumeDosName.Length);
-    //Á¬½ÓÎÄ¼þÃû
-    memcpy((PUCHAR)OutputBufferFreeByCaller + volumeDosName.Length, pFileObject->FileName.Buffer, pFileObject->FileName.Length);
-    return TRUE;
-}
-
-NTSTATUS FakeNtfsCreateDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
-{
-    // »ñÈ¡µ±Ç°¶ÑÕ»Î»ÖÃ
-    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
-
-    // »ñÈ¡ÎÄ¼þÃû
-    WCHAR wFileName[260] = { 0 };
-    QueryFileObjectDosName(stack->FileObject, wFileName);
-    DbgPrint("Process %Iu try to create/open the file %ls", (ULONG_PTR)PsGetCurrentProcessId(), wFileName);
-
-    /*
-    if (NT_SUCCESS(status)) {
-        // ½« OBJECT_NAME_INFORMATION ×ª»»Îª UNICODE_STRING
-        fileName.Buffer = objectNameInfo.Name.Buffer;
-        fileName.Length = objectNameInfo.Name.Length;
-        fileName.MaximumLength = objectNameInfo.Name.MaximumLength;
-
-        DbgPrint("Process %d try to create/open the file %wS", PsGetCurrentProcessId(), objectNameInfo.Name.Buffer);
-        // ¼ì²éÎÄ¼þÃûÊÇ·ñÊÜ±£»¤
-        if (RtlEqualUnicodeString(&fileName, &ProtectedFilePath, TRUE)) {
-            // ¾Ü¾ø´´½¨»ò´ò¿ªÊÜ±£»¤µÄÎÄ¼þ
-            Irp->IoStatus.Status = STATUS_ACCESS_DENIED;
-            Irp->IoStatus.Information = 0;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return STATUS_ACCESS_DENIED;
-        }
-    }*/
-    return g_OriginalNtfsDispatch(DeviceObject, Irp);
-}
-
-NTSTATUS HookNtfsDispatch()
-{
-    UNICODE_STRING ntfsName;
-    PDRIVER_OBJECT ntfsDrvObj = NULL;
-    OBJECT_ATTRIBUTES objAttr;
-    NTSTATUS status;
-
-    RtlInitUnicodeString(&ntfsName, L"\\FileSystem\\Ntfs");
-    InitializeObjectAttributes(&objAttr, &ntfsName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    // »ñÈ¡ntfs.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&ntfsName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &ntfsDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return STATUS_UNSUCCESSFUL;
-    }
-
-    // ±£´æÔ­Ê¼ÅÉÇ²º¯Êý
-    g_OriginalNtfsDispatch = ntfsDrvObj->MajorFunction[IRP_MJ_CREATE];
-
-    // Ìæ»»Îª×Ô¶¨ÒåµÄÅÉÇ²º¯Êý
-    ntfsDrvObj->MajorFunction[IRP_MJ_CREATE] = FakeNtfsCreateDispatch;
-
-    ObDereferenceObject(ntfsDrvObj);
-
-    return STATUS_SUCCESS;
-}
-
-VOID UnhookNtfsDispatch()
-{
-    UNICODE_STRING ntfsName;
-    PDRIVER_OBJECT ntfsDrvObj = NULL;
-    OBJECT_ATTRIBUTES objAttr;
-    NTSTATUS status;
-
-    RtlInitUnicodeString(&ntfsName, L"\\FileSystem\\Ntfs");
-    InitializeObjectAttributes(&objAttr, &ntfsName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    // »ñÈ¡ntfs.sysÇý¶¯¶ÔÏó
-    status = ObReferenceObjectByName(&ntfsName,
-        OBJ_CASE_INSENSITIVE,
-        NULL,
-        0,
-        *IoDriverObjectType,
-        KernelMode,
-        NULL,
-        &ntfsDrvObj);
-
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("ObReferenceObjectByName Failed!NTSTATUS = %X", status);
-        return;
-    }
-
-    // »Ö¸´Ô­Ê¼ÅÉÇ²º¯Êý
-    ntfsDrvObj->MajorFunction[IRP_MJ_CREATE] = g_OriginalNtfsDispatch;
-    ObDereferenceObject(ntfsDrvObj);
 }
 
 VOID RtlGetEmptyUnicodeString(_Out_ PUNICODE_STRING str, _In_ USHORT length) {
@@ -1141,152 +878,15 @@ VOID RtlGetEmptyUnicodeString(_Out_ PUNICODE_STRING str, _In_ USHORT length) {
     }
 }
 
-/*FLT_PREOP_CALLBACK_STATUS PreAntiDelete(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext) {
-    UNREFERENCED_PARAMETER(CompletionContext);
-    PAGED_CODE(); // PreCallbackµÄIRQLÓ¦µ±<= APC_LEVEL
-
-    FLT_PREOP_CALLBACK_STATUS Status = FLT_PREOP_SUCCESS_NO_CALLBACK; // ²»ÔÙµ÷ÓÃpostoperation callback routine
-
-    BOOLEAN IsDirectory; // Ä¿Â¼²Ù×÷Ìø¹ý£¬²»¹Ü
-    NTSTATUS status = FltIsDirectory(FltObjects->FileObject, FltObjects->Instance, &IsDirectory);
-    if (NT_SUCCESS(status)) {
-        if (IsDirectory == TRUE) {
-            return Status;
-        }
-    }
-
-    if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
-        if (!FlagOn(Data->Iopb->Parameters.Create.Options, FILE_DELETE_ON_CLOSE)) {
-            return Status;
-        }
-    }
-
-    if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
-        switch (Data->Iopb->Parameters.SetFileInformation.FileInformationClass) {
-        case FileRenameInformation:
-        case FileRenameInformationEx:
-        case FileDispositionInformation:
-        case FileDispositionInformationEx:
-        case FileRenameInformationBypassAccessCheck:
-        case FileRenameInformationExBypassAccessCheck:
-        case FileShortNameInformation:
-            break;
-        default:
-            return Status;
-        }
-    }
-
-    
-    ZwCreateFileºÍZwSetInformationº¯Êý¶¼ÊÇÔËÐÐÔÚPASSIVE_LEVELµÄ£¬ËùÒÔµ±Ç°µÄÏß³ÌÉÏÏÂÎÄ
-    Ó¦µ±¾ÍÊÇZwCreateFile»òZwSetInformationº¯ÊýµÄµ÷ÓÃÕß½ø³Ì¶ÔÓ¦µÄÏß³ÌµÄÉÏÏÂÎÄContext,
-    ËùÒÔÕâÀï¿ÉÒÔÅÐ¶Ïµ÷ÓÃÕß½ø³ÌÊÇ·ñÔÚ°×Ãûµ¥ÖÐ(Èç¹û´æÔÚ°×Ãûµ¥½ø³ÌµÄ»°)
-    if (IoThreadToProcess(Data->Thread) == WhiteListProcess) {
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-    
-
-    DbgPrint("Enter the callback, Caller:%d,CurrentPID:%d", PsGetProcessId(IoThreadToProcess(Data->Thread)), PsGetCurrentProcessId());
-
-    UNICODE_STRING ProtectedFileName = RTL_CONSTANT_STRING(L"D:\\example.txt");
-
-    PFLT_FILE_NAME_INFORMATION FileNameInfo = NULL;
-    if (FltObjects->FileObject != NULL) {
-        status = FltGetFileNameInformation(Data, FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT, &FileNameInfo);
-        if (NT_SUCCESS(status)) {
-            FltParseFileNameInformation(FileNameInfo);
-            //if (RtlCompareUnicodeString(&FileNameInfo->Name, &Protected, TRUE) == 0) {
-            if (RtlCompareUnicodeString(&FileNameInfo->Extension, &ProtectedFileName, TRUE) == 0) {
-                DbgPrint("Protecting file success!");
-                Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-                Data->IoStatus.Information = 0;
-                Status = FLT_PREOP_COMPLETE;
-            }
-            // Clean up file name information.
-            FltReleaseFileNameInformation(FileNameInfo);
-        }
-    }
-
-    return Status;
-}*/
-
-// ¶¯Ì¬¸½¼Óµ½ËùÓÐ¾í
-/*NTSTATUS FltAttachToAllVolumes(PFLT_FILTER FilterHandle) {
-    FLT_VOLUME_LIST_ENTRY* volumeList = NULL;
-    ULONG numVolumes = 0;
-
-    // »ñÈ¡ÏµÍ³ÖÐËùÓÐ¾íµÄÁÐ±í
-    NTSTATUS status = FltGetVolumeList(FilterHandle, &volumeList, &numVolumes);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    for (ULONG i = 0; i < numVolumes; i++) {
-        status = FltAttachVolume(FilterHandle, volumeList[i].Volume, NULL, NULL);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("Failed to attach to volume: %x\n", status);
-        }
-    }
-
-    // ÊÍ·Å¾íÁÐ±í
-    FltReleaseVolumeList(volumeList);
-    return STATUS_SUCCESS;
-}
-
-// ¶¯Ì¬´ÓËùÓÐ¾í·ÖÀë
-NTSTATUS FltDetachFromAllVolumes(PFLT_FILTER FilterHandle) {
-    FLT_VOLUME_LIST_ENTRY* volumeList = NULL;
-    ULONG numVolumes = 0;
-
-    // »ñÈ¡ÏµÍ³ÖÐËùÓÐ¾íµÄÁÐ±í
-    NTSTATUS status = FltGetVolumeList(FilterHandle, &volumeList, &numVolumes);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    for (ULONG i = 0; i < numVolumes; i++) {
-        status = FltDetachVolume(FilterHandle, volumeList[i].Volume);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("Failed to detach from volume: %x\n", status);
-        }
-    }
-
-    // ÊÍ·Å¾íÁÐ±í
-    FltReleaseVolumeList(volumeList);
-    return STATUS_SUCCESS;
-}*/
-
-/*NTSTATUS RegisterMiniFilter(PDRIVER_OBJECT pDriverObject)
-{
-    NTSTATUS status;
-    status = FltRegisterFilter(pDriverObject, &FilterRegistration, &hFilter);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to register hFilter: <0x%08x>.\n", status);
-        return status;
-    }
-
-    status = FltStartFiltering(hFilter);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to start hFilter: <0x%08x>.\n", status);
-        FltUnregisterFilter(hFilter);
-        hFilterUnregistered = TRUE;
-    }
-    return STATUS_SUCCESS;
-}
-
-VOID UnregisterMiniFilter()
-{
-    if (hFilter != NULL && !hFilterUnregistered) FltUnregisterFilter(hFilter);
-}*/
-
 NTSTATUS GetNtfsFsdCleanup(PVOID* pNtfsFsdCleanup) {
     UNICODE_STRING driverPath;
     PDRIVER_OBJECT ntfsDriverObject = NULL;
     NTSTATUS status;
 
-    // ³õÊ¼»¯NTFSÇý¶¯¶ÔÏóµÄÂ·¾¶£¨\\FileSystem\\Ntfs£©
+    // åˆå§‹åŒ–NTFSé©±åŠ¨å¯¹è±¡çš„è·¯å¾„ï¼ˆ\\FileSystem\\Ntfsï¼‰
     RtlInitUnicodeString(&driverPath, L"\\FileSystem\\Ntfs");
 
-    // »ñÈ¡Çý¶¯¶ÔÏóÖ¸Õë
+    // èŽ·å–é©±åŠ¨å¯¹è±¡æŒ‡é’ˆ
     status = ObReferenceObjectByName(&driverPath,
         OBJ_CASE_INSENSITIVE,
         NULL,
@@ -1298,10 +898,10 @@ NTSTATUS GetNtfsFsdCleanup(PVOID* pNtfsFsdCleanup) {
 
     if (!NT_SUCCESS(status) || !ntfsDriverObject) return status;
 
-    // ´ÓMajorFunctionÊý×é»ñÈ¡IRP_MJ_CLEANUP¶ÔÓ¦µÄÅÉÇ²º¯Êý
+    // ä»ŽMajorFunctionæ•°ç»„èŽ·å–IRP_MJ_CLEANUPå¯¹åº”çš„æ´¾é£å‡½æ•°
     *pNtfsFsdCleanup = (PVOID)ntfsDriverObject->MajorFunction[IRP_MJ_CLEANUP];
 
-    // ¹Ø±Õ¾ä±ú£¨Èô²»ÐèÒª±£Áô£©
+    // å…³é—­å¥æŸ„ï¼ˆè‹¥ä¸éœ€è¦ä¿ç•™ï¼‰
 	ObDereferenceObject(ntfsDriverObject);
     return STATUS_SUCCESS;
 }
@@ -1343,7 +943,7 @@ PVOID GetNtfsDecrementCleanupCounts() {
         return NULL;
     }
 	DbgPrint("result = 0x%p", result);
-    // ¼ÆËãÊµ¼Êº¯ÊýµØÖ·
+    // è®¡ç®—å®žé™…å‡½æ•°åœ°å€
 	LONG offset1 = *(PLONG)((PUCHAR)result + 4);
 	DbgPrint("offset = 0x%X", offset);
     PVOID NtfsDecrementCleanupCountsAddr = NULL;
@@ -1425,7 +1025,7 @@ NTSTATUS DeleteFileByXCBFunction(PUNICODE_STRING ustrFileName)
     return ntStatus;
 }
 
-// ¼ì²éÎÄ¼þÊÇ·ñÕæÕý±»É¾³ý
+// æ£€æŸ¥æ–‡ä»¶æ˜¯å¦çœŸæ­£è¢«åˆ é™¤
 BOOLEAN IsFileReallyDeleted(PUNICODE_STRING FileName) {
     NTSTATUS status;
     HANDLE hFile;
@@ -1433,10 +1033,10 @@ BOOLEAN IsFileReallyDeleted(PUNICODE_STRING FileName) {
     FILE_STANDARD_INFORMATION fsInfo = { 0 };
     OBJECT_ATTRIBUTES oa;
 
-    // ³õÊ¼»¯¶ÔÏóÊôÐÔ£¨ÒÔ²éÑ¯ÎªÄ¿µÄ´ò¿ªÎÄ¼þ£©
+    // åˆå§‹åŒ–å¯¹è±¡å±žæ€§ï¼ˆä»¥æŸ¥è¯¢ä¸ºç›®çš„æ‰“å¼€æ–‡ä»¶ï¼‰
     InitializeObjectAttributes(&oa, FileName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-    // ³¢ÊÔÒÔÖ»¶Á¡¢¹²ÏíËùÓÐÈ¨ÏÞ´ò¿ªÎÄ¼þ£¨²»Êµ¼Ê´ò¿ªÊý¾Ý£¬½ö²éÑ¯ÔªÊý¾Ý£©
+    // å°è¯•ä»¥åªè¯»ã€å…±äº«æ‰€æœ‰æƒé™æ‰“å¼€æ–‡ä»¶ï¼ˆä¸å®žé™…æ‰“å¼€æ•°æ®ï¼Œä»…æŸ¥è¯¢å…ƒæ•°æ®ï¼‰
     status = ZwOpenFile(&hFile,
         GENERIC_READ,
         &oa,
@@ -1446,13 +1046,13 @@ BOOLEAN IsFileReallyDeleted(PUNICODE_STRING FileName) {
 
     if (!NT_SUCCESS(status)) {
         DbgPrint("[IsFileReallyDeleted]ZwOpenFile:status = %X", status);
-        // ×´Ì¬ÂëÎªSTATUS_OBJECT_NAME_NOT_FOUND£ºÎÄ¼þÒÑÕæÕýÉ¾³ý£¨ÔªÊý¾Ý²»´æÔÚ£©
+        // çŠ¶æ€ç ä¸ºSTATUS_OBJECT_NAME_NOT_FOUNDï¼šæ–‡ä»¶å·²çœŸæ­£åˆ é™¤ï¼ˆå…ƒæ•°æ®ä¸å­˜åœ¨ï¼‰
         if (status == STATUS_OBJECT_NAME_NOT_FOUND) return TRUE;
-        // ÆäËû´íÎó£¨ÈçÈ¨ÏÞ²»×ã£©£ºÎÞ·¨ÅÐ¶Ï£¬·µ»ØFALSE
+        // å…¶ä»–é”™è¯¯ï¼ˆå¦‚æƒé™ä¸è¶³ï¼‰ï¼šæ— æ³•åˆ¤æ–­ï¼Œè¿”å›žFALSE
         return FALSE;
     }
 
-    // ²éÑ¯ÎÄ¼þ±ê×¼ÐÅÏ¢
+    // æŸ¥è¯¢æ–‡ä»¶æ ‡å‡†ä¿¡æ¯
     status = ZwQueryInformationFile(hFile,
         &iosb,
         &fsInfo,
@@ -1463,7 +1063,565 @@ BOOLEAN IsFileReallyDeleted(PUNICODE_STRING FileName) {
     DbgPrint("[IsFileReallyDeleted]ZwQueryInformationFile:status = %X", status);
     if (!NT_SUCCESS(status)) return FALSE;
 
-    // ÈôDeletePendingÎªTRUE£ºÎÄ¼þ´¦ÓÚÑÓ³ÙÉ¾³ý×´Ì¬£¨Î´ÕæÕýÉ¾³ý£©
-    // ÈôNumberOfLinksÎª0ÇÒDeletePendingÎªFALSE£ºÀíÂÛÉÏ²»¿ÉÄÜ£¬³ý·ÇÉ¾³ýÂß¼­Òì³£
+    // è‹¥DeletePendingä¸ºTRUEï¼šæ–‡ä»¶å¤„äºŽå»¶è¿Ÿåˆ é™¤çŠ¶æ€ï¼ˆæœªçœŸæ­£åˆ é™¤ï¼‰
+    // è‹¥NumberOfLinksä¸º0ä¸”DeletePendingä¸ºFALSEï¼šç†è®ºä¸Šä¸å¯èƒ½ï¼Œé™¤éžåˆ é™¤é€»è¾‘å¼‚å¸¸
     return (fsInfo.DeletePending == FALSE && fsInfo.NumberOfLinks == 0) ? TRUE : FALSE;
+}
+
+// ============================================================================
+// å‡½æ•°ï¼šConcatPath - å®‰å…¨æ‹¼æŽ¥è·¯å¾„
+// ============================================================================
+NTSTATUS ConcatPath(
+    IN PUNICODE_STRING BasePath,
+    IN PCWSTR SubPath,
+    IN ULONG SubPathLen,  // å­è·¯å¾„é•¿åº¦ï¼ˆå­—èŠ‚ï¼Œæ— NULLç»ˆæ­¢ç¬¦ï¼‰
+    OUT PUNICODE_STRING ResultPath
+)
+{
+    USHORT totalLen = 0;
+    BOOLEAN needsSlash = FALSE;
+    PWCHAR pDest = NULL;
+
+    // å¼ºåŒ–å…¥å‚æ ¡éªŒï¼šè¿‡æ»¤ç©ºè·¯å¾„/ç©ºæ–‡ä»¶å
+    if (!BasePath || !SubPath || !ResultPath) {
+        DbgPrint("[ConcatPath] Null parameter\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (SubPathLen == 0 || (USHORT)SubPathLen > MAXUSHORT - BasePath->Length) {
+        DbgPrint("[ConcatPath] Invalid SubPathLen: %lu\n", SubPathLen);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (BasePath->Length > MAXUSHORT - SubPathLen - sizeof(WCHAR)) {
+        DbgPrint("[ConcatPath] BasePath too long: %hu\n", BasePath->Length);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // åˆå§‹åŒ–è¾“å‡º
+    RtlZeroMemory(ResultPath, sizeof(UNICODE_STRING));
+
+    // åˆ¤æ–­æ˜¯å¦éœ€è¦æ·»åŠ åæ–œæ 
+    if (BasePath->Length > 0) {
+        ULONG baseLastIdx = (BasePath->Length / sizeof(WCHAR)) - 1;
+        // å¤„ç†è·¯å¾„æœ«å°¾çš„ç©ºæ ¼/éžæ³•å­—ç¬¦
+        if (BasePath->Buffer[baseLastIdx] != L'\\' && BasePath->Buffer[baseLastIdx] != L' ') {
+            needsSlash = TRUE;
+        }
+    }
+
+    // è®¡ç®—æ€»é•¿åº¦ï¼ˆæºè·¯å¾„ + åæ–œæ  + å­è·¯å¾„ï¼‰
+    totalLen = BasePath->Length + (needsSlash ? sizeof(WCHAR) : 0) + (USHORT)SubPathLen;
+
+    // åˆ†é…ç¼“å†²åŒºï¼ˆåŒ…å«NULLç»ˆæ­¢ç¬¦ï¼‰
+    ResultPath->Buffer = (PWCH)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        totalLen + sizeof(WCHAR),  // +2å­—èŠ‚ç”¨äºŽNULLç»ˆæ­¢ç¬¦
+        POOL_TAG_PATH
+    );
+    if (!ResultPath->Buffer) {
+        DbgPrint("[ConcatPath] Allocate buffer failed\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    // åˆå§‹åŒ–ç¼“å†²åŒº
+    ResultPath->Length = 0;
+    ResultPath->MaximumLength = totalLen + sizeof(WCHAR);
+    RtlZeroMemory(ResultPath->Buffer, ResultPath->MaximumLength);
+    pDest = ResultPath->Buffer;
+
+    // å¤åˆ¶åŸºç¡€è·¯å¾„ï¼ˆè¿‡æ»¤æœ«å°¾ç©ºæ ¼ï¼‰
+    if (BasePath->Length > 0) {
+        USHORT validBaseLen = BasePath->Length;
+        // ç§»é™¤åŸºç¡€è·¯å¾„æœ«å°¾çš„ç©ºæ ¼
+        while (validBaseLen > 0 && BasePath->Buffer[(validBaseLen / sizeof(WCHAR)) - 1] == L' ') {
+            validBaseLen -= sizeof(WCHAR);
+        }
+        if (validBaseLen > 0) {
+            RtlCopyMemory(pDest, BasePath->Buffer, validBaseLen);
+            pDest += validBaseLen / sizeof(WCHAR);
+            ResultPath->Length += validBaseLen;
+        }
+    }
+
+    // æ·»åŠ åæ–œæ 
+    if (needsSlash) {
+        *pDest++ = L'\\';
+        ResultPath->Length += sizeof(WCHAR);
+    }
+
+    // å¤åˆ¶å­è·¯å¾„ï¼ˆè¿‡æ»¤ç©º/éžæ³•å­—ç¬¦ï¼‰
+    if (SubPathLen > 0) {
+        RtlCopyMemory(pDest, SubPath, SubPathLen);
+        pDest += SubPathLen / sizeof(WCHAR);
+        ResultPath->Length += (USHORT)SubPathLen;
+    }
+
+    // æ·»åŠ NULLç»ˆæ­¢ç¬¦
+    *pDest = L'\0';
+    
+    DbgPrint("[ConcatPath] Success: %wZ\n", ResultPath);
+    return STATUS_SUCCESS;
+}
+
+// ============================================================================
+// å‡½æ•°ï¼šCreateDirectory - å®‰å…¨åˆ›å»ºç›®å½•
+// ============================================================================
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS CreateDirectory(IN PUNICODE_STRING DirPath)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PFILE_OBJECT dirObj = NULL;
+    IO_STATUS_BLOCK iosb = { 0 };
+
+    status = CheckIrqlPassiveLevel();
+    if (!NT_SUCCESS(status)) return status;
+
+    // å°è¯•åˆ›å»º
+    status = IrpCreateFile(&dirObj, GENERIC_READ | GENERIC_WRITE, DirPath, &iosb, NULL,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_CREATE, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+
+    // å¦‚æžœå·²å­˜åœ¨ï¼Œå°è¯•æ‰“å¼€
+    if (status == STATUS_OBJECT_NAME_COLLISION) {
+        status = IrpCreateFile(&dirObj, GENERIC_READ, DirPath, &iosb, NULL,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN, FILE_DIRECTORY_FILE, NULL, 0);
+
+        // âœ… å¿…é¡»å…³é—­ï¼
+        if (NT_SUCCESS(status) && dirObj) {
+            IrpCloseFile(dirObj);
+            return STATUS_SUCCESS; // ç›®å½•å·²å­˜åœ¨ï¼Œè§†ä¸ºæˆåŠŸ
+        }
+    }
+
+    if (NT_SUCCESS(status) && dirObj) {
+        IrpCloseFile(dirObj);
+    }
+
+    return status;
+}
+
+// ============================================================================
+// å‡½æ•°ï¼šForceCopyFile - å®‰å…¨å¤åˆ¶æ–‡ä»¶ï¼ˆæ± åˆ†é… + IRQLæ£€æŸ¥ï¼‰
+// ============================================================================
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS ForceCopyFile(IN PUNICODE_STRING SrcPath, IN PUNICODE_STRING DstPath)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PFILE_OBJECT srcFile = NULL, dstFile = NULL;
+    IO_STATUS_BLOCK srcIosb = { 0 }, dstIosb = { 0 };
+    PUCHAR buffer = NULL;
+    LARGE_INTEGER offset = { 0 };
+    ULONG bytesRead = 0;
+    ULONG bytesWritten = 0;
+    FILE_BASIC_INFORMATION basicInfo = { 0 };
+
+    // IRQLæ£€æŸ¥
+    status = CheckIrqlPassiveLevel();
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // åˆ†é…å¤åˆ¶ç¼“å†²åŒºï¼ˆéžåˆ†é¡µæ± ï¼Œé¿å…æ ˆæº¢å‡ºï¼‰
+    const ULONG BUFFER_SIZE = 64 * 1024;  // 64KBå—å¤§å°
+    buffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, BUFFER_SIZE, POOL_TAG_BUFFER);
+    if (!buffer) {
+        DbgPrint("[ForceCopyFile] Failed to allocate buffer\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    __try {
+        // æ‰“å¼€æºæ–‡ä»¶
+        status = IrpCreateFile(
+            &srcFile,
+            GENERIC_READ,
+            SrcPath,
+            &srcIosb,
+            NULL,
+            FILE_ATTRIBUTE_NORMAL,
+            FILE_SHARE_READ,
+            FILE_OPEN,
+            FILE_SYNCHRONOUS_IO_NONALERT,
+            NULL,
+            0
+        );
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[ForceCopyFile] Failed to open source: 0x%X, Path: %wZ\n", status, SrcPath);
+            __leave;
+        }
+
+        // åˆ›å»ºç›®æ ‡æ–‡ä»¶
+        status = IrpCreateFile(
+            &dstFile,
+            GENERIC_WRITE,
+            DstPath,
+            &dstIosb,
+            NULL,
+            FILE_ATTRIBUTE_NORMAL,
+            0,
+            FILE_CREATE,
+            FILE_SYNCHRONOUS_IO_NONALERT | FILE_OVERWRITE_IF,
+            NULL,
+            0
+        );
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[ForceCopyFile] Failed to create dest: 0x%X, Path: %wZ\n", status, DstPath);
+            __leave;
+        }
+
+        // æµå¼å¤åˆ¶
+        do {
+            RtlZeroMemory(buffer, BUFFER_SIZE);
+
+            // è¯»å–
+            status = IrpReadFile(srcFile, &srcIosb, buffer, BUFFER_SIZE, &offset);
+            if (!NT_SUCCESS(status) && status != STATUS_END_OF_FILE) {
+                DbgPrint("[ForceCopyFile] Read failed: 0x%X\n", status);
+                __leave;
+            }
+
+            bytesRead = (ULONG)srcIosb.Information;
+            if (bytesRead == 0) break;  // EOF
+
+            // å†™å…¥
+            status = IrpWriteFile(dstFile, &dstIosb, buffer, bytesRead, &offset);
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[ForceCopyFile] Write failed: 0x%X\n", status);
+                __leave;
+            }
+
+            bytesWritten = (ULONG)dstIosb.Information;
+            if (bytesRead != bytesWritten) {
+                DbgPrint("[ForceCopyFile] Byte mismatch: read=%d, write=%d\n", bytesRead, bytesWritten);
+                status = STATUS_IO_DEVICE_ERROR;
+                __leave;
+            }
+
+            offset.QuadPart += bytesRead;
+        } while (NT_SUCCESS(status));
+
+        // å¤åˆ¶æ–‡ä»¶å±žæ€§
+        status = IrpQueryInformationFile(srcFile, &srcIosb, &basicInfo, sizeof(basicInfo), FileBasicInformation);
+        if (NT_SUCCESS(status)) {
+            IrpSetInformationFile(dstFile, &dstIosb, &basicInfo, FileBasicInformation, sizeof(basicInfo));
+        }
+        DbgPrint("[ForceCopyFile] Create file: %wZ", DstPath);
+        status = STATUS_SUCCESS;  // å¿½ç•¥EOFé”™è¯¯
+
+    }
+    __finally {
+        // æ¸…ç†èµ„æºï¼ˆæ— è®ºæˆåŠŸæˆ–å¤±è´¥ï¼‰
+        if (srcFile) {
+            IrpCloseFile(srcFile);
+        }
+        if (dstFile) {
+            IrpCloseFile(dstFile);
+        }
+        if (buffer) {
+            ExFreePoolWithTag(buffer, POOL_TAG_BUFFER);
+        }
+    }
+
+    return status;
+}
+
+// ============================================================================
+// å‡½æ•°ï¼šProcessDirectory - å¤„ç†å•ä¸ªç›®å½•å¹¶å¡«å……å·¥ä½œé˜Ÿåˆ—ï¼ˆæ— é€’å½’ï¼‰
+// ============================================================================
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS ProcessDirectory(
+    IN PUNICODE_STRING SrcPath,
+    IN PUNICODE_STRING DstPath,
+    IN OUT PLIST_ENTRY WorkQueue
+) {
+    NTSTATUS status = STATUS_SUCCESS;
+    PFILE_OBJECT srcDir = NULL;
+    IO_STATUS_BLOCK iosb = { 0 };
+    PUCHAR dirBuffer = NULL;
+    ULONG dirBufferSize = 4096;  // å¢žå¤§ç¼“å†²åŒºé¿å…æº¢å‡º
+    BOOLEAN bRestartScan = TRUE; // é¦–æ¬¡æ‰«æï¼šä»Žå¤´å¼€å§‹
+
+    // IRQLæ£€æŸ¥
+    status = CheckIrqlPassiveLevel();
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // è¿‡æ»¤æºè·¯å¾„æœ«å°¾ç©ºæ ¼ï¼ˆå…³é”®ï¼šä¿®å¤æ—¥å¿—ä¸­æºè·¯å¾„çš„ç©ºæ ¼é—®é¢˜ï¼‰
+    UNICODE_STRING cleanSrcPath = { 0 };
+    status = RtlDuplicateUnicodeString(RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE, SrcPath, &cleanSrcPath);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[ProcessDirectory] Duplicate src path failed: 0x%X\n", status);
+        return status;
+    }
+    // ç§»é™¤æœ«å°¾ç©ºæ ¼
+    while (cleanSrcPath.Length > 0 && cleanSrcPath.Buffer[(cleanSrcPath.Length / sizeof(WCHAR)) - 1] == L' ') {
+        cleanSrcPath.Length -= sizeof(WCHAR);
+    }
+    cleanSrcPath.Buffer[cleanSrcPath.Length / sizeof(WCHAR)] = L'\0';
+
+    // åˆ†é…ç›®å½•æŸ¥è¯¢ç¼“å†²åŒº
+    dirBuffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, dirBufferSize, POOL_TAG_BUFFER);
+    if (!dirBuffer) {
+        DbgPrint("[ProcessDirectory] Failed to allocate dirBuffer\n");
+        RtlFreeUnicodeString(&cleanSrcPath);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    __try {
+        // æ‰“å¼€æºç›®å½•ï¼ˆä½¿ç”¨æ¸…ç†åŽçš„è·¯å¾„ï¼‰
+        status = IrpCreateFile(
+            &srcDir,
+            GENERIC_READ,
+            &cleanSrcPath,  // ä¿®å¤ï¼šä½¿ç”¨æ— æœ«å°¾ç©ºæ ¼çš„è·¯å¾„
+            &iosb,
+            NULL,
+            FILE_ATTRIBUTE_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+            NULL,
+            0
+        );
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[ProcessDirectory] Failed to open dir: 0x%X, Path: %wZ\n", status, &cleanSrcPath);
+            __leave;
+        }
+
+        // æžšä¸¾ç›®å½•é¡¹ï¼šç›´åˆ°æ— æ›´å¤šæ–‡ä»¶
+        while (TRUE) {
+            RtlZeroMemory(dirBuffer, dirBufferSize);
+
+            // æŸ¥è¯¢ç›®å½•ï¼ˆæ ¸å¿ƒï¼šé¦–æ¬¡bRestartScan=TRUEï¼ŒåŽç»­=FALSEï¼‰
+            status = IrpQueryDirectoryFile(
+                srcDir,
+                &iosb,
+                dirBuffer,
+                dirBufferSize,
+                FileDirectoryInformation,
+                NULL,
+                bRestartScan
+            );
+
+            // æ— æ›´å¤šæ–‡ä»¶ï¼Œé€€å‡ºå¾ªçŽ¯
+            if (status == STATUS_NO_MORE_FILES) {
+                status = STATUS_SUCCESS;
+                break;
+            }
+            // å…¶ä»–é”™è¯¯ï¼Œé€€å‡º
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[ProcessDirectory] QueryDirectory failed: 0x%X\n", status);
+                __leave;
+            }
+
+            // é¦–æ¬¡æ‰«æåŽï¼ŒåŽç»­ä¸å†é‡å¯
+            bRestartScan = FALSE;
+
+            // éåŽ†å½“å‰æ‰¹æ¬¡çš„ç›®å½•é¡¹ï¼ˆé˜²è¶Šç•Œï¼‰
+            PFILE_DIRECTORY_INFORMATION dirInfo = (PFILE_DIRECTORY_INFORMATION)dirBuffer;
+            PUCHAR bufferEnd = dirBuffer + dirBufferSize; // ç¼“å†²åŒºè¾¹ç•Œ
+            while (TRUE) {
+                // é˜²è¶Šç•Œï¼šæŒ‡é’ˆè¶…å‡ºç¼“å†²åŒºåˆ™é€€å‡º
+                if ((PUCHAR)dirInfo >= bufferEnd || (PUCHAR)dirInfo + sizeof(FILE_DIRECTORY_INFORMATION) > bufferEnd) {
+                    DbgPrint("[ProcessDirectory] DirInfo out of buffer\n");
+                    break;
+                }
+
+                // è¿‡æ»¤ç©ºæ–‡ä»¶åï¼ˆæ ¸å¿ƒä¿®å¤ï¼‰
+                if (dirInfo->FileNameLength == 0 || dirInfo->FileName == NULL) {
+                    DbgPrint("[ProcessDirectory] Skip empty filename\n");
+                    if (dirInfo->NextEntryOffset == 0) break;
+                    dirInfo = (PFILE_DIRECTORY_INFORMATION)((PUCHAR)dirInfo + dirInfo->NextEntryOffset);
+                    continue;
+                }
+
+                // è·³è¿‡ . å’Œ ..
+                if ((dirInfo->FileNameLength == sizeof(WCHAR) && dirInfo->FileName[0] == L'.') ||
+                    (dirInfo->FileNameLength == 2 * sizeof(WCHAR) && dirInfo->FileName[0] == L'.' && dirInfo->FileName[1] == L'.')) {
+                    if (dirInfo->NextEntryOffset == 0) break;
+                    dirInfo = (PFILE_DIRECTORY_INFORMATION)((PUCHAR)dirInfo + dirInfo->NextEntryOffset);
+                    continue;
+                }
+
+                // æ‰“å°è°ƒè¯•ä¿¡æ¯ï¼ˆå®šä½é—®é¢˜ï¼‰
+                DbgPrint("[ProcessDirectory] FileName: %.*ws, Length: %hu\n",
+                    dirInfo->FileNameLength / sizeof(WCHAR), dirInfo->FileName, dirInfo->FileNameLength);
+
+                // æ‹¼æŽ¥è·¯å¾„ï¼ˆä½¿ç”¨æ¸…ç†åŽçš„æºè·¯å¾„ï¼‰
+                UNICODE_STRING currentSrcPath = { 0 };
+                UNICODE_STRING currentDstPath = { 0 };
+
+                status = ConcatPath(&cleanSrcPath, dirInfo->FileName, dirInfo->FileNameLength, &currentSrcPath);
+                if (!NT_SUCCESS(status)) {
+                    DbgPrint("[ProcessDirectory] Concat source path failed: 0x%X, FileName: %.*ws\n",
+                        status, dirInfo->FileNameLength / sizeof(WCHAR), dirInfo->FileName);
+                    __leave;
+                }
+
+                status = ConcatPath(DstPath, dirInfo->FileName, dirInfo->FileNameLength, &currentDstPath);
+                if (!NT_SUCCESS(status)) {
+                    ExFreePoolWithTag(currentSrcPath.Buffer, POOL_TAG_PATH);
+                    DbgPrint("[ProcessDirectory] Concat dest path failed: 0x%X, FileName: %.*ws\n",
+                        status, dirInfo->FileNameLength / sizeof(WCHAR), dirInfo->FileName);
+                    __leave;
+                }
+
+                // åˆ›å»ºå·¥ä½œé¡¹
+                PCOPY_WORK_ITEM workItem = (PCOPY_WORK_ITEM)ExAllocatePool2(
+                    POOL_FLAG_NON_PAGED,
+                    sizeof(COPY_WORK_ITEM),
+                    POOL_TAG_WORKITEM
+                );
+                if (!workItem) {
+                    ExFreePoolWithTag(currentSrcPath.Buffer, POOL_TAG_PATH);
+                    ExFreePoolWithTag(currentDstPath.Buffer, POOL_TAG_PATH);
+                    status = STATUS_INSUFFICIENT_RESOURCES;
+                    __leave;
+                }
+
+                // åˆå§‹åŒ–å·¥ä½œé¡¹
+                InitializeListHead(&workItem->ListEntry);
+                workItem->SourcePath = currentSrcPath;
+                workItem->DestPath = currentDstPath;
+                workItem->IsDirectory = (dirInfo->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? TRUE : FALSE;
+
+                InsertTailList(WorkQueue, &workItem->ListEntry);
+
+                // ä¸‹ä¸€ä¸ªç›®å½•é¡¹ï¼ˆé˜²è¶Šç•Œï¼‰
+                if (dirInfo->NextEntryOffset == 0) break;
+                PUCHAR nextDirInfo = (PUCHAR)dirInfo + dirInfo->NextEntryOffset;
+                if (nextDirInfo >= bufferEnd) {
+                    DbgPrint("[ProcessDirectory] Next entry out of buffer\n");
+                    break;
+                }
+                dirInfo = (PFILE_DIRECTORY_INFORMATION)nextDirInfo;
+            }
+        }
+
+    }
+    __finally {
+        // æ¸…ç†èµ„æº
+        if (srcDir) IrpCloseFile(srcDir);
+        if (dirBuffer) ExFreePoolWithTag(dirBuffer, POOL_TAG_BUFFER);
+        RtlFreeUnicodeString(&cleanSrcPath); // é‡Šæ”¾æ¸…ç†åŽçš„è·¯å¾„
+    }
+
+    return status;
+}
+
+// ============================================================================
+// å‡½æ•°ï¼šForceCopyFolder - è¿­ä»£å®žçŽ°ï¼ˆæ— é€’å½’ï¼‰
+// ============================================================================
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS ForceCopyFolder(IN PUNICODE_STRING SrcFolder, IN PUNICODE_STRING DstFolder)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    LIST_ENTRY workQueue;
+    PCOPY_WORK_ITEM initialItem = NULL;
+
+    // IRQLæ£€æŸ¥
+    status = CheckIrqlPassiveLevel();
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // åˆå§‹åŒ–é˜Ÿåˆ—
+    InitializeListHead(&workQueue);
+
+    __try {
+        // åˆ›å»ºåˆå§‹å·¥ä½œé¡¹ï¼ˆæºç›®å½•ï¼‰
+        initialItem = (PCOPY_WORK_ITEM)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            sizeof(COPY_WORK_ITEM),
+            POOL_TAG_WORKITEM
+        );
+        if (!initialItem) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            __leave;
+        }
+
+        // æ·±æ‹·è´è·¯å¾„ï¼ˆå¿…é¡»ç‹¬ç«‹åˆ†é…ï¼‰
+        status = RtlDuplicateUnicodeString(
+            RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE,
+            SrcFolder,
+            &initialItem->SourcePath
+        );
+        if (!NT_SUCCESS(status)) {
+            __leave;
+        }
+
+        status = RtlDuplicateUnicodeString(
+            RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE,
+            DstFolder,
+            &initialItem->DestPath
+        );
+        if (!NT_SUCCESS(status)) {
+            __leave;
+        }
+
+        initialItem->IsDirectory = TRUE;
+        InsertTailList(&workQueue, &initialItem->ListEntry);
+        initialItem = NULL;  // æ‰€æœ‰æƒè½¬ç§»ç»™é˜Ÿåˆ—
+
+        // å¤„ç†é˜Ÿåˆ—ï¼ˆè¿­ä»£è€Œéžé€’å½’ï¼‰
+        while (!IsListEmpty(&workQueue)) {
+            PLIST_ENTRY listEntry = RemoveHeadList(&workQueue);
+            PCOPY_WORK_ITEM workItem = CONTAINING_RECORD(listEntry, COPY_WORK_ITEM, ListEntry);
+
+            __try {
+                if (workItem->IsDirectory) {
+                    // åˆ›å»ºç›®æ ‡ç›®å½•
+                    status = CreateDirectory(&workItem->DestPath);
+                    if (!NT_SUCCESS(status)) {
+                        DbgPrint("[ForceCopyFolder] CreateDirectory failed: 0x%X, Path: %wZ\n",
+                            status, &workItem->DestPath);
+                        __leave;
+                    }
+					DbgPrint("[ForceCopyFolder] Created directory: %wZ\n", &workItem->DestPath);
+
+                    // æžšä¸¾å¹¶æ·»åŠ å­é¡¹åˆ°é˜Ÿåˆ—
+                    status = ProcessDirectory(
+                        &workItem->SourcePath,
+                        &workItem->DestPath,
+                        &workQueue
+                    );
+                }
+                else {
+                    // å¤åˆ¶æ–‡ä»¶
+                    status = ForceCopyFile(&workItem->SourcePath, &workItem->DestPath);
+                }
+            }
+            __finally {
+                // é‡Šæ”¾å½“å‰å·¥ä½œé¡¹ï¼ˆæ— è®ºæˆåŠŸå¤±è´¥ï¼‰
+                RtlFreeUnicodeString(&workItem->SourcePath);
+                RtlFreeUnicodeString(&workItem->DestPath);
+                ExFreePoolWithTag(workItem, POOL_TAG_WORKITEM);
+            }
+
+            if (!NT_SUCCESS(status)) {
+                break;  // é€€å‡ºä¸»å¾ªçŽ¯
+            }
+        }
+
+    }
+    __finally {
+        // æ¸…ç†æ®‹ç•™é˜Ÿåˆ—ï¼ˆå‡ºé”™æ—¶ï¼‰
+        while (!IsListEmpty(&workQueue)) {
+            PLIST_ENTRY listEntry = RemoveHeadList(&workQueue);
+            PCOPY_WORK_ITEM workItem = CONTAINING_RECORD(listEntry, COPY_WORK_ITEM, ListEntry);
+
+            RtlFreeUnicodeString(&workItem->SourcePath);
+            RtlFreeUnicodeString(&workItem->DestPath);
+            ExFreePoolWithTag(workItem, POOL_TAG_WORKITEM);
+        }
+
+        // æ¸…ç†åˆå§‹é¡¹ï¼ˆå¦‚æžœæœªåŠ å…¥é˜Ÿåˆ—ï¼‰
+        if (initialItem) {
+            if (initialItem->SourcePath.Buffer) {
+                RtlFreeUnicodeString(&initialItem->SourcePath);
+            }
+            ExFreePoolWithTag(initialItem, POOL_TAG_WORKITEM);
+        }
+    }
+
+    return status;
 }

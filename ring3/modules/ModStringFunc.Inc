@@ -220,6 +220,7 @@ Operator SafeStringW_NTS.Let(wszStr As Wstring)
 End Operator
 
 Operator SafeStringW_NTS.Let(szStr As String)
+    'ValidateState "Let(String)"
     If m_refCount AndAlso *m_refCount > 0 Then
         (*m_refCount) -= 1
         If *m_refCount = 0 Then
@@ -239,6 +240,7 @@ Operator SafeStringW_NTS.Let(szStr As String)
     Else
         m_nLength = 0
     End If
+    'ValidateState "Let(String)"
 End Operator
 
 Operator SafeStringW_NTS.Let(ByRef other As SafeStringW_NTS)
@@ -303,13 +305,21 @@ End Function
     m_capacity = 0  ' 重置容量
 End Sub '/
 
-Sub SafeStringW_NTS.Clear()
+/'Sub SafeStringW_NTS.Clear()
     MakeUnique()   ' 必须先确保唯一
+    m_nLength = 0
+    If m_pData Then m_pData[0] = 0
+End Sub '/
+
+Sub SafeStringW_NTS.Clear()
+    If IsEmpty() Then Exit Sub
+    MakeUnique()   ' 确保唯一
     m_nLength = 0
     If m_pData Then m_pData[0] = 0
 End Sub
 
 Operator SafeStringW_NTS.Cast() ByRef As Wstring
+    'ValidateState "Cast ByRef As Wstring"
     Static emptyWStr As WString * 2 = ""  ' 关键：Static 保证生命周期
     If m_pData <> NULL Then
         Return *CPtr(Wstring Ptr, m_pData) ' 返回指针而非解引用

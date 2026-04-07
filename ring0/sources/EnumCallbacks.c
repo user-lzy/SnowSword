@@ -1,5 +1,68 @@
 ﻿#pragma once
 #include "EnumCallbacks.h"
+//#include <ntddk.h>
+//#include <fwpmk.h>
+
+//=============================================================================
+// 1. 内核 CALLOUT_ENTRY 结构 (大小 0x50，从逆向分析得来)
+//=============================================================================
+typedef struct _CALLOUT_ENTRY {
+	UINT32  char0;              // 0x00
+	UINT32  IsUsed;             // 0x04
+	UINT32  field_8;            // 0x08
+	UINT32  field_C;            // 0x0C
+	PVOID   classifyFn;         // 0x10
+	PVOID   notifyFn;           // 0x18
+	PVOID   flowDeleteFn;       // 0x20
+	PVOID   classifyFnFast;     // 0x28
+	UINT32  flags;              // 0x30
+	UINT32  field_34;           // 0x34
+	UINT32  field_38;           // 0x38
+	UINT32  field_3C;           // 0x3C
+	PVOID   deviceObject;       // 0x40
+	UINT8   byte48;             // 0x48
+	UINT8   byte49;             // 0x49
+	UINT16  word4A;             // 0x4A
+	UINT32  dword4C;            // 0x4C
+} CALLOUT_ENTRY, * PCALLOUT_ENTRY;
+
+// 内核全局结构（只取所需字段，偏移硬编码，适用于 Windows 10 19041+）
+typedef struct _WFP_GLOBAL {
+	// ... 大量字段 ...
+	UINT32  MaxCalloutId;       // 偏移 0x190
+	PVOID   CalloutTable;       // 偏移 0x198
+	// ...
+} WFP_GLOBAL, * PWFP_GLOBAL;
+
+//=============================================================================
+// 2. 映射表结构
+//=============================================================================
+#define MAX_CALLOUT_MAP 2048
+
+// 内核映射：calloutId -> 回调
+typedef struct _KERNEL_CALLOUT_MAP {
+	GUID    CalloutGuid;        // ✅ 你需要的 Callout GUID
+	UINT32  CalloutId;          // Callout ID
+	PVOID   ClassifyFn;         // 分类回调
+	PVOID   NotifyFn;           // 通知回调
+	PVOID   FlowDeleteFn;       // 流删除回调
+	WCHAR   Name[256];          // ✅ 你需要的 Callout 名称
+} KERNEL_CALLOUT_MAP, *PKERNEL_CALLOUT_MAP;
+
+// 完整映射：GUID -> (calloutId, 回调)
+typedef struct _FULL_CALLOUT_MAP {
+	GUID    CalloutGuid;
+	ULONG   CalloutId;
+	PVOID   ClassifyFn;
+	PVOID   NotifyFn;
+	PVOID   FlowDeleteFn;
+} FULL_CALLOUT_MAP;
+
+KERNEL_CALLOUT_MAP g_KernelMap[MAX_CALLOUT_MAP];
+ULONG g_KernelMapCount = 0;
+
+FULL_CALLOUT_MAP g_FullMap[MAX_CALLOUT_MAP];
+ULONG g_FullMapCount = 0;
 
 NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 	IN PUNICODE_STRING ObjectName,
@@ -1614,7 +1677,8 @@ NTSTATUS RemoveCreateProcessNotifyRoutine(PVOID CreateProcessNotifyRoutine) {
 }
 
 NTSTATUS RemoveCreateThreadNotifyRoutine(PVOID CreateThreadNotifyRoutine) {
-	return PsRemoveCreateThreadNotifyRoutine((PCREATE_THREAD_NOTIFY_ROUTINE)CreateThreadNotifyRoutine);
+	NTSTATUS status = PsRemoveCreateThreadNotifyRoutine((PCREATE_THREAD_NOTIFY_ROUTINE)CreateThreadNotifyRoutine);
+	return status;
 }
 
 NTSTATUS UnregisterCmpCallback(LARGE_INTEGER Cookie) {
@@ -1627,4 +1691,448 @@ NTSTATUS RemoveLoadImageNotifyRoutine(PVOID LoadImageNotifyRoutine) {
 
 VOID UnregisterObCallback(PVOID ObHandle) {
 	ObUnRegisterCallbacks(ObHandle);
+}
+
+//=============================================================================
+// 3. 辅助函数：从内核 CalloutTable 枚举，填充 g_KernelMap
+//=============================================================================
+/*NTSTATUS BuildKernelCalloutMap()
+{
+	// 获取 netio.sys 导出函数
+	typedef PWFP_GLOBAL(NTAPI* FE_GET_WFP_GLOBAL_PTR)(VOID);
+	FE_GET_WFP_GLOBAL_PTR pFn = (FE_GET_WFP_GLOBAL_PTR)
+		KernelGetProcAddress("netio.sys", "FeGetWfpGlobalPtr");
+	if (!pFn) {
+		DbgPrint("[-] FeGetWfpGlobalPtr not found\n");
+		return STATUS_NOT_FOUND;
+	}
+
+	PWFP_GLOBAL pWfpGlobal = pFn();
+	if (!pWfpGlobal)
+		return STATUS_INVALID_ADDRESS;
+
+	// 使用硬编码偏移（Windows 10 19041 已验证）
+	UINT32 maxId = *(PULONG)((PUCHAR)pWfpGlobal + 0x190);
+	PCALLOUT_ENTRY pCalloutTable = *(PCALLOUT_ENTRY*)((PUCHAR)pWfpGlobal + 0x198);
+
+	if (maxId == 0 || !pCalloutTable || maxId > 0x20000)
+		return STATUS_INVALID_PARAMETER;
+
+	g_KernelMapCount = 0;
+	for (ULONG i = 0; i < maxId && g_KernelMapCount < MAX_CALLOUT_MAP; i++) {
+		PCALLOUT_ENTRY e = &pCalloutTable[i];
+		if (e->IsUsed != 1)
+			continue;
+
+		g_KernelMap[g_KernelMapCount].CalloutId = i;
+		g_KernelMap[g_KernelMapCount].ClassifyFn = e->classifyFn;
+		g_KernelMap[g_KernelMapCount].NotifyFn = e->notifyFn;
+		g_KernelMap[g_KernelMapCount].FlowDeleteFn = e->flowDeleteFn;
+		g_KernelMapCount++;
+
+		DbgPrint("[Kernel] CalloutId=%05lu Classify=%p Notify=%p FlowDelete=%p\n",
+			i, e->classifyFn, e->notifyFn, e->flowDeleteFn);
+	}
+
+	DbgPrint("[+] BuildKernelCalloutMap: %lu entries\n", g_KernelMapCount);
+	return STATUS_SUCCESS;
+}*/
+
+//=============================================================================
+// 4. 根据 calloutId 从内核映射中查找回调
+//=============================================================================
+KERNEL_CALLOUT_MAP* LookupKernelCallout(ULONG calloutId)
+{
+	for (ULONG i = 0; i < g_KernelMapCount; i++) {
+		if (g_KernelMap[i].CalloutId == calloutId)
+			return &g_KernelMap[i];
+	}
+	return NULL;
+}
+
+//=============================================================================
+// 5. 枚举 FWPM_CALLOUT，建立 GUID -> calloutId 映射，并与内核映射合并
+//=============================================================================
+NTSTATUS BuildFullCalloutMap(HANDLE engineHandle)
+{
+	HANDLE enumHandle = NULL;
+	FWPM_CALLOUT0** ppCallouts = NULL;
+	UINT32 calloutCount = 0;
+	NTSTATUS status;
+
+	// 创建枚举句柄
+	status = FwpmCalloutCreateEnumHandle0(engineHandle, NULL, &enumHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutCreateEnumHandle0 failed: %08X\n", status);
+		return status;
+	}
+
+	// 枚举所有 FWPM_CALLOUT 对象
+	status = FwpmCalloutEnum0(engineHandle, enumHandle, 0xFFFF, &ppCallouts, &calloutCount);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutEnum0 failed: %08X\n", status);
+		FwpmCalloutDestroyEnumHandle0(engineHandle, enumHandle);
+		return status;
+	}
+
+	DbgPrint("[+] FwpmCalloutEnum0: %u callouts\n", calloutCount);
+
+	g_FullMapCount = 0;
+	for (UINT32 i = 0; i < calloutCount && g_FullMapCount < MAX_CALLOUT_MAP; i++) {
+		FWPM_CALLOUT0* c = ppCallouts[i];
+
+		// 记录 GUID 和 calloutId
+		g_FullMap[g_FullMapCount].CalloutGuid = c->calloutKey;
+		g_FullMap[g_FullMapCount].CalloutId = c->calloutId;
+
+		// 从内核映射中查找回调地址
+		KERNEL_CALLOUT_MAP* k = LookupKernelCallout(c->calloutId);
+		if (k) {
+			g_FullMap[g_FullMapCount].ClassifyFn = k->ClassifyFn;
+			g_FullMap[g_FullMapCount].NotifyFn = k->NotifyFn;
+			g_FullMap[g_FullMapCount].FlowDeleteFn = k->FlowDeleteFn;
+		}
+		else {
+			g_FullMap[g_FullMapCount].ClassifyFn = NULL;
+			g_FullMap[g_FullMapCount].NotifyFn = NULL;
+			g_FullMap[g_FullMapCount].FlowDeleteFn = NULL;
+		}
+
+		DbgPrint("[FWPM] Callout: %08lX-%04hX-%04hX... Id=%lu Classify=%p\n",
+			c->calloutKey.Data1, c->calloutKey.Data2, c->calloutKey.Data3,
+			c->calloutId, g_FullMap[g_FullMapCount].ClassifyFn);
+
+		g_FullMapCount++;
+	}
+
+	// 清理
+	FwpmFreeMemory0((VOID**)&ppCallouts);
+	FwpmCalloutDestroyEnumHandle0(engineHandle, enumHandle);
+
+	DbgPrint("[+] BuildFullCalloutMap: %lu entries\n", g_FullMapCount);
+	return STATUS_SUCCESS;
+}
+
+//=============================================================================
+// 6. 通过 GUID 查找完整映射
+//=============================================================================
+FULL_CALLOUT_MAP* LookupFullCallout(const GUID* pGuid)
+{
+	for (ULONG i = 0; i < g_FullMapCount; i++) {
+		if (IsEqualGUID(&g_FullMap[i].CalloutGuid, pGuid))
+			return &g_FullMap[i];
+	}
+	return NULL;
+}
+
+//=============================================================================
+// 3. 辅助函数：从内核 CalloutTable 枚举，填充 g_KernelMap
+//=============================================================================
+NTSTATUS BuildKernelCalloutMap()
+{
+	// 获取 netio.sys 导出函数
+	typedef PWFP_GLOBAL(NTAPI* FE_GET_WFP_GLOBAL_PTR)(VOID);
+	FE_GET_WFP_GLOBAL_PTR pFn = (FE_GET_WFP_GLOBAL_PTR)
+		KernelGetProcAddress("netio.sys", "FeGetWfpGlobalPtr");
+	if (!pFn) {
+		DbgPrint("[-] FeGetWfpGlobalPtr not found\n");
+		return STATUS_NOT_FOUND;
+	}
+
+	PWFP_GLOBAL pWfpGlobal = pFn();
+	if (!pWfpGlobal)
+		return STATUS_INVALID_ADDRESS;
+
+	// 使用硬编码偏移（Windows 10 19041 已验证）
+	UINT32 maxId = *(PULONG)((PUCHAR)pWfpGlobal + 0x190);
+	PCALLOUT_ENTRY pCalloutTable = *(PCALLOUT_ENTRY*)((PUCHAR)pWfpGlobal + 0x198);
+
+	if (maxId == 0 || !pCalloutTable || maxId > 0x20000)
+		return STATUS_INVALID_PARAMETER;
+
+	g_KernelMapCount = 0;
+	for (ULONG i = 0; i < maxId && g_KernelMapCount < MAX_CALLOUT_MAP; i++) {
+		PCALLOUT_ENTRY e = &pCalloutTable[i];
+		if (e->IsUsed != 1)
+			continue;
+
+		g_KernelMap[g_KernelMapCount].CalloutId = i;
+		g_KernelMap[g_KernelMapCount].ClassifyFn = e->classifyFn;
+		g_KernelMap[g_KernelMapCount].NotifyFn = e->notifyFn;
+		g_KernelMap[g_KernelMapCount].FlowDeleteFn = e->flowDeleteFn;
+		g_KernelMapCount++;
+
+		DbgPrint("[Kernel] CalloutId=%05lu Classify=%p Notify=%p FlowDelete=%p\n",
+			i, e->classifyFn, e->notifyFn, e->flowDeleteFn);
+	}
+
+	DbgPrint("[+] BuildKernelCalloutMap: %lu entries\n", g_KernelMapCount);
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS EnumWfpCallouts(
+	__out PWFP_CALLOUT_INFO* ppCalloutArray,
+	__out ULONG* pCount
+)
+{
+#define ARRAY_SIZE(arr)  (sizeof(arr) / sizeof((arr)[0]))
+	NTSTATUS status;
+	HANDLE engineHandle = NULL;
+	PWFP_CALLOUT_INFO pArray = NULL;
+	ULONG calloutCount = 0;
+	ULONG i;
+
+	// 1. 从内核 CalloutTable 获取回调地址
+	status = BuildKernelCalloutMap();
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] BuildKernelCalloutMap failed: %08X\n", status);
+		return status;
+	}
+
+	// 2. 打开 WFP 引擎，使用动态会话标志
+	FWPM_SESSION0 session = { 0 };
+	session.flags = FWPM_SESSION_FLAG_DYNAMIC;  // 允许引擎动态分配资源
+	status = FwpmEngineOpen0(NULL, RPC_C_AUTHN_DEFAULT, NULL, &session, &engineHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmEngineOpen0 failed: %08X\n", status);
+		return status;
+	}
+
+	// 3. 枚举 FWPM_CALLOUT
+	HANDLE enumHandle = NULL;
+	FWPM_CALLOUT0** ppCallouts = NULL;
+	UINT32 numCallouts = 0;
+
+	status = FwpmCalloutCreateEnumHandle0(engineHandle, NULL, &enumHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutCreateEnumHandle0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	status = FwpmCalloutEnum0(engineHandle, enumHandle, 0xFFFF, &ppCallouts, &numCallouts);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutEnum0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	// 4. 统计需要保留的 Callout（有内核回调）
+	calloutCount = 0;
+	for (i = 0; i < numCallouts; i++) {
+		KERNEL_CALLOUT_MAP* k = LookupKernelCallout(ppCallouts[i]->calloutId);
+		if (k) calloutCount++;
+	}
+
+	DbgPrint("calloutCount:%d", calloutCount);
+	if (calloutCount > 0) {
+		pArray = (PWFP_CALLOUT_INFO)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			calloutCount * sizeof(WFP_CALLOUT_INFO),
+			'WfpE');
+		if (!pArray) {
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			goto Cleanup;
+		}
+		RtlZeroMemory(pArray, calloutCount * sizeof(WFP_CALLOUT_INFO));
+	}
+
+	// 5. 填充数组
+	ULONG idx = 0;
+	for (i = 0; i < numCallouts; i++) {
+		FWPM_CALLOUT0* c = ppCallouts[i];
+		KERNEL_CALLOUT_MAP* k = LookupKernelCallout(c->calloutId);
+		if (!k) continue;
+
+		WFP_CALLOUT_INFO* entry = &pArray[idx++];
+		entry->CalloutGuid = c->calloutKey;
+		entry->CalloutId = c->calloutId;
+		entry->ClassifyFn = k->ClassifyFn;
+		entry->NotifyFn = k->NotifyFn;
+		entry->FlowDeleteFn = k->FlowDeleteFn;
+
+		if (c->displayData.name) {
+			wcsncpy_s(entry->Name, ARRAY_SIZE(entry->Name),
+				c->displayData.name, _TRUNCATE);
+		}
+		else {
+			entry->Name[0] = L'\0';
+		}
+	}
+
+	*ppCalloutArray = pArray;
+	*pCount = calloutCount;
+	status = STATUS_SUCCESS;
+
+Cleanup:
+	if (ppCallouts) FwpmFreeMemory0((VOID**)&ppCallouts);
+	if (enumHandle) FwpmCalloutDestroyEnumHandle0(engineHandle, enumHandle);
+	if (engineHandle) FwpmEngineClose0(engineHandle);
+	return status;
+}
+
+NTSTATUS EnumWfpFilters(
+	__out PWFP_FILTER_INFO* ppFilterArray,
+	__out ULONG* pCount
+)
+{
+#define ARRAY_SIZE(arr)  (sizeof(arr) / sizeof((arr)[0]))
+#define MAX_TEMP_MAP 2048
+
+	NTSTATUS status;
+	// 🔥 核心修复：所有指针/句柄 初始化为 NULL（解决 C4703 错误）
+	HANDLE engineHandle = NULL;
+	HANDLE enumHandle = NULL;
+	FWPM_CALLOUT0** ppCallouts = NULL;
+	HANDLE filterEnumHandle = NULL;
+	FWPM_FILTER0** ppFilters = NULL;
+	PWFP_FILTER_INFO pArray = NULL;
+	ULONG i;
+
+	// 堆分配临时映射表指针（初始化为NULL）
+	typedef struct _TEMP_MAP {
+		GUID Guid;
+		UINT32 CalloutId;
+	} TEMP_MAP, * PTEMP_MAP;
+	PTEMP_MAP tempMap = NULL;
+	UINT32 tempMapCount = 0;
+	UINT32 numCallouts = 0;
+	UINT32 filterCount = 0;
+
+	// 初始化输出参数
+	*ppFilterArray = NULL;
+	*pCount = 0;
+
+	// 正确打开 WFP 引擎
+	FWPM_SESSION0 session = { 0 };
+	session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+	status = FwpmEngineOpen0(NULL, RPC_C_AUTHN_DEFAULT, NULL, &session, &engineHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmEngineOpen0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	// 枚举 FWPM_CALLOUT
+	status = FwpmCalloutCreateEnumHandle0(engineHandle, NULL, &enumHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutCreateEnumHandle0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	status = FwpmCalloutEnum0(engineHandle, enumHandle, 0xFFFF, &ppCallouts, &numCallouts);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmCalloutEnum0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	// 堆分配临时映射表（修复栈溢出）
+	tempMap = (PTEMP_MAP)ExAllocatePool2(
+		POOL_FLAG_NON_PAGED,
+		MAX_TEMP_MAP * sizeof(TEMP_MAP),
+		'WfpT'
+	);
+	if (!tempMap) {
+		status = STATUS_INSUFFICIENT_RESOURCES;
+		goto Cleanup;
+	}
+
+	// 填充映射表
+	tempMapCount = 0;
+	for (UINT32 j = 0; j < numCallouts && tempMapCount < MAX_TEMP_MAP; j++) {
+		tempMap[tempMapCount].Guid = ppCallouts[j]->calloutKey;
+		tempMap[tempMapCount].CalloutId = ppCallouts[j]->calloutId;
+		tempMapCount++;
+	}
+
+	// 枚举 Filter
+	status = FwpmFilterCreateEnumHandle0(engineHandle, NULL, &filterEnumHandle);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmFilterCreateEnumHandle0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	status = FwpmFilterEnum0(engineHandle, filterEnumHandle, (UINT32)0xFFFF, &ppFilters, &filterCount);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("[-] FwpmFilterEnum0 failed: %08X\n", status);
+		goto Cleanup;
+	}
+
+	// 统计有效 Filter
+	ULONG validCount = 0;
+	for (i = 0; i < filterCount; i++) {
+		FWPM_FILTER0* f = ppFilters[i];
+		if (f->action.type == FWP_ACTION_CALLOUT_TERMINATING ||
+			f->action.type == FWP_ACTION_CALLOUT_UNKNOWN ||
+			f->action.type == FWP_ACTION_CALLOUT_INSPECTION) {
+			validCount++;
+		}
+	}
+
+	// 分配结果内存
+	if (validCount > 0) {
+		pArray = (PWFP_FILTER_INFO)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			validCount * sizeof(WFP_FILTER_INFO),
+			'WfpE');
+		if (!pArray) {
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			goto Cleanup;
+		}
+		RtlZeroMemory(pArray, validCount * sizeof(WFP_FILTER_INFO));
+	}
+
+	// 填充 Filter 数据
+	ULONG idx = 0;
+	for (i = 0; i < filterCount && validCount > 0; i++) {
+		FWPM_FILTER0* f = ppFilters[i];
+		if (f->action.type != FWP_ACTION_CALLOUT_TERMINATING &&
+			f->action.type != FWP_ACTION_CALLOUT_UNKNOWN &&
+			f->action.type != FWP_ACTION_CALLOUT_INSPECTION) {
+			continue;
+		}
+
+		WFP_FILTER_INFO* entry = &pArray[idx++];
+		entry->FilterKey = f->filterKey;
+		entry->FilterId = f->filterId;
+		entry->ActionType = f->action.type;
+		entry->CalloutGuid = f->action.calloutKey;
+		entry->CalloutId = 0;
+
+		// 匹配 CalloutId
+		for (UINT32 j = 0; j < tempMapCount; j++) {
+			if (IsEqualGUID(&tempMap[j].Guid, &entry->CalloutGuid)) {
+				entry->CalloutId = tempMap[j].CalloutId;
+				break;
+			}
+		}
+
+		// 复制名称
+		if (f->displayData.name) {
+			wcsncpy_s(entry->Name, ARRAY_SIZE(entry->Name), f->displayData.name, _TRUNCATE);
+		}
+		else {
+			entry->Name[0] = L'\0';
+		}
+	}
+
+	// 输出结果
+	*ppFilterArray = pArray;
+	*pCount = validCount;
+	status = STATUS_SUCCESS;
+
+Cleanup:
+	// 安全释放所有资源（全部初始化为NULL，无野指针）
+	if (tempMap) ExFreePoolWithTag(tempMap, 'WfpT');
+	if (ppFilters) FwpmFreeMemory0((VOID**)&ppFilters);
+	if (filterEnumHandle) FwpmFilterDestroyEnumHandle0(engineHandle, filterEnumHandle);
+	if (ppCallouts) FwpmFreeMemory0((VOID**)&ppCallouts);
+	if (enumHandle) FwpmCalloutDestroyEnumHandle0(engineHandle, enumHandle);
+	if (engineHandle) FwpmEngineClose0(engineHandle);
+
+	// 失败时清理内存
+	if (!NT_SUCCESS(status) && pArray) {
+		ExFreePoolWithTag(pArray, 'WfpE');
+		*ppFilterArray = NULL;
+		*pCount = 0;
+	}
+
+	return status;
 }

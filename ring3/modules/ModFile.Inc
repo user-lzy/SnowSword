@@ -1,5 +1,6 @@
 ﻿#include "win/winerror.bi"
 #include "win/shlobj.bi"
+#include Once "win/strsafe.bi"
 
 Type WINTRUST_CATALOG_INFO_EX Field = 8
     cbStruct As DWORD
@@ -58,6 +59,12 @@ Type CATALOG_INFO
     wszCatalogFile As Wstring * 260 'MAX_PATH
 End Type
 
+Type COPY_PATH
+    SourcePath As Wstring * MAX_PATH
+    TargetPath As Wstring * MAX_PATH
+    IsDirectory As Boolean
+End Type
+
 Declare Function ZwDeleteFile Lib "ntdll.dll" Alias "ZwDeleteFile"(ByVal ObjectAttributes As OBJECT_ATTRIBUTES Ptr) As NTSTATUS
 'Declare Function WinVerifyTrust Lib "wintrust.dll" Alias "WinVerifyTrust"(ByVal hWnd As hWnd, ByVal pgActionID As GUID Ptr, ByVal pWVTData As LPVOID) As Long
 
@@ -99,7 +106,6 @@ CONST WTD_REVOCATION_CHECK_NONE = &H00000010
 CONST WTD_STATEACTION_IGNORE = &H00000000
 CONST WTD_SAFER_FLAG = &H00000100
 
-
 Public Sub GetDriveList(treFolder As Class_TreeView)
     treFolder.DeleteAllItems
     Dim i As Integer,CurrentNode As HTREEITEM,DiskName As StringW
@@ -129,18 +135,20 @@ Private Function GetNode(ByVal szPath As LPWSTR,treFolder As Class_TreeView) As 
     Return NULL
 End Function
 
-Public Sub GetFilePathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
+Public Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
     Dim CurrentNode As HTREEITEM = Node, PathLen As Integer = 256
     Dim i As Integer
     Do While True
         FilePath = treFolder.Text(CurrentNode) & "\" & FilePath
+        'Print "CurrentNode:" & treFolder.Text(CurrentNode) & " FilePath:" & FilePath
         If (treFolder.GetParent(CurrentNode) = NULL) Then Exit Do
         CurrentNode = treFolder.GetParent(CurrentNode)
     Loop
+    'Print "FilePath:" & FilePath
     Dim pos1 As Integer, pos2 As Integer
     pos1 = InStrRevW(FilePath, "(")
     pos2 = InStrRevW(FilePath, ")")
-    FilePath = MidW(FilePath, pos1 + 1, pos2 - pos1 - 1) & RightW(FilePath, Len(FilePath) - pos2)
+    If pos1 <> 0 AndAlso pos2 <> 0 Then FilePath = MidW(FilePath, pos1 + 1, pos2 - pos1 - 1) & RightW(FilePath, Len(FilePath) - pos2)
 End Sub
 
 'Private Function PrintFileSize(ByVal FileSize As QWORD) As LPWSTR
@@ -155,7 +163,7 @@ End Sub
 '        End If
 '    End If
 'End Function
-'Replace
+
 Public Function ReplaceW(ByVal MainString As LPWSTR,ByVal SearchString As LPWSTR,ByVal ReplaceString As LPWSTR) As LPWSTR
     Dim MidString As LPWSTR,i As Integer,SearchLen As Integer,MainLen As Integer,RetString As LPWSTR
     MainLen = Len(*MainString)
@@ -169,30 +177,88 @@ Public Function ReplaceW(ByVal MainString As LPWSTR,ByVal SearchString As LPWSTR
     Return RetString
 End Function
 
-Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lvwFile As Class_ListView, ByVal IsEnumFolder As Boolean, IsEnumFile As Boolean = True)
-    Dim szPath As StringW = ""
+Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lvwFile As Class_ListView, ByVal IsEnumFolder As Boolean, IsEnumFile As Boolean = True, ByVal IsPhysicalAnalyze As Boolean)
+    Dim szPath As StringW = "", IsBeAccess As Boolean = True
     
     If IsEnumFolder Then DeleteChildItem treFolder, CurrentNode
-    lvwFile.DeleteAllItems
+    InitListViewData lvwFile
     
-    GetFilePathByNodeW CurrentNode, treFolder, szPath
-    szPath = szPath & "*.*"
-    Dim fData As WIN32_FIND_DATAW
-    Dim hFind As HANDLE = FindFirstFileW(szPath,@fData)'不能使用@szPath,否则报"找不到文件"
+    GetPathByNodeW CurrentNode, treFolder, szPath
+    'szPath = szPath & "*.*"
+    ' 方法一
+    Dim fData() As WIN32_FIND_DATAW, i As ULong
+    ReDim fData(10) As WIN32_FIND_DATAW
+    Dim hFind As HANDLE = FindFirstFileW(szPath & "*.*",@fData(i))'不能使用@szPath,否则报"找不到文件"
     If hFind = INVALID_HANDLE_VALUE Then
-        Print WinErrorMsg(GetLastError)
-        Exit Sub
+        If IsPhysicalAnalyze Then
+            IsBeAccess = False
+        Else
+            Print "[GetFileList]FindFirstFileW" & WinErrorMsg(GetLastError)
+            Exit Sub
+        End If
     End If
     Do
-        If (fData.cFileName = "." OrElse fData.cFileName = "..") Then Continue Do
+        /'If (fData.cFileName = "." OrElse fData.cFileName = "..") Then Continue Do
         If fData.dwFileAttributes And fbDirectory Then
             If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fData.cFileName
         ElseIf IsEnumFile Then
             lvwFile.AddItem fData.cFileName
             lvwFile.SetItemText lvwFile.ItemCount - 1, 1, WStr(fData.nFileSizeHigh * (2 ^ 32) + fData.nFileSizeLow)
-        End If
-    Loop While FindNextFileW(hFind,@fData) <> 0
+        End If '/
+        i += 1
+        If i >= UBound(fData) Then ReDim Preserve fData(UBound(fData) + 50) As WIN32_FIND_DATAW
+    Loop While FindNextFileW(hFind,@fData(i)) <> 0
     FindClose hFind
+    
+    If Not IsPhysicalAnalyze Then
+        For j As Integer = 0 To i - 1
+            If (fData(j).cFileName = "." OrElse fData(j).cFileName = "..") Then Continue For
+            If fData(j).dwFileAttributes And fbDirectory Then
+                If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fData(j).cFileName
+            ElseIf IsEnumFile Then
+                AddItemColListEx lvwFile, 3,,, WStr(fData(j).cFileName), WStr(""), WStr(fData(j).nFileSizeHigh * (2 ^ 32) + fData(j).nFileSizeLow)
+            End If
+        Next
+    Else
+        'InitListViewData lvwFile
+        ' 方法二
+        Dim fileInfo() As WIN32_FILE_DATAEX2W, listCount As Long
+        listCount = GetDirList(szPath, fileInfo())
+        If listCount < 0 Then Exit Sub
+        For j As Integer = 0 To listCount - 1
+            'Print "cFileName:" & fileInfo(j).cFileName & " dwFileSizeLow:" & fileInfo(j).dwFileSizeLow & " dwFileAttributes:" & fileInfo(j).dwFileAttributes
+            'Print "bDirectory:" & fileInfo(j).bDirectory
+            If fileInfo(j).bDirectory Then
+                If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fileInfo(j).cFileName
+            ElseIf IsEnumFile Then
+                Dim ItemIndex As Long = AddItemColListEx(lvwFile,3,,, WStr(fileInfo(j).cFileName), WStr(""), WStr(fileInfo(j).dwFileSizeHigh * (2 ^ 32) + fileInfo(j).dwFileSizeLow))
+                If IsBeAccess Then
+                    For k As Integer = 0 To i - 1
+                        If fData(k).cFileName = fileInfo(j).cFileName Then Continue For, For ' 找到则进入下一次循环
+                    Next
+                End If
+                
+                ' 找不到则标红
+                Dim ForeColor As COLORREF, BackColor As COLORREF, pos1 As Integer, szPath1 As StringW
+                pos1 = InStrW(szPath, ":")
+                szPath1 = RightW(szPath, LenW(szPath) - pos1)
+                'Print "szPath:" & szPath & " szPath1:" & szPath1
+                ' OrElse (LeftW(szPath1, 9) = "\$Extend\")
+                If (fileInfo(j).mftRecordNumber >= 0 AndAlso fileInfo(j).mftRecordNumber <= 16) Then ' 是元文件(如$MFT,$Extend\$ObjId)
+                    SetItemTextEx lvwFile, ItemIndex, 1, "Metafile"
+                    SetItemColor lvwFile, ItemIndex, FB_LightPinkRed, FB_White
+                /'ElseIf fileInfo(j).bStreamFile Then ' 是ADS流文件
+                    SetItemTextEx lvwFile, ItemIndex, 0, fileInfo(j).cFileName & ":" & 
+                    SetItemTextEx lvwFile, ItemIndex, 1, "Stream"
+                    SetItemColor lvwFile, ItemIndex, FB_LightRed, FB_White'/
+                Else ' 是隐藏文件!
+                    SetItemTextEx lvwFile, ItemIndex, 1, "Hidden"
+                    SetItemColor lvwFile, ItemIndex, FB_Red, FB_White
+                End If
+            End If
+        Next
+    End If
+    CommitListViewView lvwFile
 End Sub
 
 Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
@@ -231,7 +297,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
                 hRootNode = hCurrentNode
                 'Print sDriveLetter
                 If iNumParts > 1 Then
-                    GetFileList hCurrentNode, treFolder, lvwFile, True, False
+                    GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
                     treFolder.ExpandEx hCurrentNode, TVE_EXPAND
                     'hCurrentNode = treFolder.GetChild(hCurrentNode)
                 Else
@@ -284,7 +350,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
                 If i < iNumParts - 1 Then
                     ' 如果节点未展开，则展开
                     If Not treFolder.Expand(hCurrentNode) Then
-                        GetFileList hCurrentNode, treFolder, lvwFile, True, False
+                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
                         treFolder.ExpandEx hCurrentNode, TVE_EXPAND
                         Exit While
                     End If
@@ -669,7 +735,7 @@ Function GetFileCompany(FileName As StringW) As StringW
     ' 获取文件版本信息的大小
     dwSize = GetFileVersionInfoSizeW(FileName, @dwDummy)
     If dwSize = 0 Then
-        Print "GetFileVersionInfoSizeW 失败, 错误代码: " & GetLastError
+        'Print "GetFileVersionInfoSizeW 失败, 错误代码: " & GetLastError
         Return ""
     End If
 
@@ -708,7 +774,7 @@ Function GetFileCompany(FileName As StringW) As StringW
             Print "VerQueryValueW (Translation) 失败, 错误代码: " & GetLastError
         End If
     Else
-        Print "GetFileVersionInfoW 失败, 错误代码: " & GetLastError
+        'Print "GetFileVersionInfoW 失败, 错误代码: " & GetLastError
     End If
 
     ' 释放缓冲区
@@ -728,7 +794,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
     
     Dim catalogInfo As CATALOG_INFO
     
-    Dim pszMemberTag As WString Ptr = NULL
+    Dim szMemberTag As WString * MAX_PATH
     
     Dim RevocationChecks As Long = WTD_REVOKE_NONE ' , WTD_REVOKE_WHOLECHAIN}
     'Dim StateAction(3) As Long = {WTD_STATEACTION_IGNORE, WTD_STATEACTION_VERIFY, WTD_STATEACTION_AUTO_CACHE, WTD_STATEACTION_AUTO_CACHE_FLUSH}
@@ -763,7 +829,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
     For dw As DWORD = 0 To cbHash - 1
         Mid(buffer, dw * 2 + 1, 2) = Hex(rgbHash(dw), 2)
     Next
-    *pszMemberTag = WStr(buffer)  ' 一次性转换为宽字符串
+    szMemberTag = WStr(buffer)  ' 一次性转换为宽字符串
     
     CloseHandle(hFile)
     hFile = INVALID_HANDLE_VALUE
@@ -795,7 +861,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
             SizeOf(WINTRUST_CATALOG_INFO), _ ' cbStruct
             0, _                              ' dwCatalogVersion
             @catalogInfo.wszCatalogFile, _ ' pcwszCatalogFilePath
-            pszMemberTag, _                   ' pcwszMemberTag
+            @szMemberTag, _                   ' pcwszMemberTag
             pwszFilePath, _                   ' pcwszMemberFilePath
             NULL, _                           ' hMemberFile
             @rgbHash(0), _                    ' pbCalculatedFileHash
@@ -868,9 +934,21 @@ cleanup:
     If hFile <> INVALID_HANDLE_VALUE Then
         CloseHandle(hFile)
     End If
-    If pszMemberTag <> NULL Then
-        Deallocate pszMemberTag
-    End If
     
     Return fVerified
+End Function
+
+Function ForceCopyFolder(SourcePath As StringW, TargetPath As StringW) As Boolean
+    Dim pCopyPath As COPY_PATH Ptr = Allocate(SizeOf(COPY_PATH))
+    StringCbCopyW @pCopyPath->SourcePath, MAX_PATH, SourcePath.WstrPtr
+    StringCbCopyW @pCopyPath->TargetPath, MAX_PATH, TargetPath.WstrPtr
+    pCopyPath->IsDirectory = True
+    If IoControl(hDrv, IOCTL_CopyFolder, pCopyPath, SizeOf(COPY_PATH)) = 0 Then
+        AfxMsg "强制复制失败![ForceCopyFolder]" & WinErrorMsg(GetLastError) & GetLastError
+        Function = False
+    Else
+        AfxMsg "强制复制成功!"
+        Function = True
+    End If
+    Deallocate pCopyPath
 End Function

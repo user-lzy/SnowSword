@@ -11,10 +11,16 @@ Enum Interface
     WebConnect
     Hook
     Privilege
+    MsgHook
+    EventHook
+    Hotkey
+    
     KernelModule
     KernelThread
     File
     Callbacks
+    WfpCallout
+    WfpFilter
     UnlockTheFile
     Registry
     Service
@@ -34,20 +40,6 @@ Enum Interface
     HalPrivateDispatch
     ObjectHook
 End Enum
-
-Type ListViewItemInfo
-    ForeColor As COLORREF
-    BackColor As COLORREF
-End Type
-
-Type ListViewDataNode
-    hListView As hWnd 'ListView句柄,用于区分不同ListView
-    strFilter As StringW '筛选字符串
-    DataArray(Any, Any) As StringW '存储ListView原始数据
-    ItemColor(Any) As ListViewItemInfo ' 存储ListView每一行的背景色和前景色
-    Filter_ItemColor(Any) As ListViewItemInfo
-    NextNode As ListViewDataNode Ptr ' 指向下一个节点的指针
-End Type
 
 Type CurrentDriverInfo
     DriverBase As UInteger
@@ -70,40 +62,52 @@ Type CURRENT_INFORMATION
     CurrentDriver As CurrentDriverInfo
 End Type
 
+Type LVRow
+    ColCount As Long
+    Cols As Wstring Ptr Ptr   ' 指向 Wstring* 数组
+    Fore As COLORREF
+    Back As COLORREF
+End Type
+
+Type ListViewSnapshot
+    Rows(Any) As LVRow Ptr
+    RowCount As Long
+End Type
+
+Type TempTextNode
+    Buf As WCHAR Ptr
+End Type
+
+Type ListViewContext
+    hLV As HWND
+
+    Snap As ListViewSnapshot Ptr
+
+    VisibleIndex(Any) As Long
+    VisibleCount As Long
+
+    Filter As Wstring Ptr
+End Type
+
 Const FB_Red As COLORREF = BGR(255, 0, 0)
 Const FB_LightPinkRed As COLORREF = BGR(240, 210, 210)
 Const FB_LightRed As COLORREF = BGR(250, 225, 225)
 Const FB_GoldenYellow As COLORREF = BGR(255, 240, 128)
 Const FB_White As COLORREF = BGR(255, 255, 255)
 Const FB_Black As COLORREF = BGR(0, 0, 0)
+Const FB_LightGreen As COLORREF = BGR(50, 200, 50)
 
-Dim Shared ListViewDataList As ListViewDataNode Ptr ' 链表头指针
-Dim Shared ListViewDataListEnd As ListViewDataNode Ptr ' 链表尾指针
 Dim Shared CurrentInformationArray() As CURRENT_INFORMATION
 Dim Shared pOldWindowProc As PVOID
 
-/'Sub DeleteItemExWithColor(ListView As Class_ListView, ByVal ItemIndex As Long)
-    DeleteItemEx ListView, ItemIndex
-    If ItemIndex < ListView.ItemCount - 1 Then
-        For i As Long = ItemIndex To ListView.ItemCount - 1
-            memcpy @CurrentListViewItem(i), @CurrentListViewItem(i + 1), SizeOf(ListViewItemInfo)
-        Next
-    End If
-    If ItemIndex <= ListView.ItemCount - 1 Then ReDim Preserve CurrentListViewItem(ListView.ItemCount - 2) As ListViewItemInfo
-End Sub '/
-
 Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList As Class_mCtrlTreeList, ByVal TreeView As Class_TreeView)
     ListView.DeleteAllColumn
-    ListView.DeleteAllItems
+    ListView.DeleteAllItems ' 此处是否有问题
     TreeView.DeleteAllItems
     TreeList.DeleteItem MC_TLI_ROOT
     For i As Integer = TreeList.GetColumnCount - 1 To 1 Step -1
         TreeList.DeleteColumn i
     Next
-    'DeleteAllMenu mnuMenu
-    'Print "OriginalType:" & OriginalType & __FUNCTION__
-    'OriginalType = IIf(CurrentType = -1, InterfaceType, CurrentType)
-    'CurrentInformation.intType = InterfaceType
     'Print "CurrentType:" & CurrentType & __FUNCTION__
     With ListView
         Select Case CurrentInformation.intType
@@ -141,6 +145,32 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "状态",, 200
                 .AddColumn "描述",, 400
                 .AddColumn "属性",, 100
+            Case MsgHook
+                .AddColumn "hHook",, 100
+                .AddColumn "类型",, 150
+                .AddColumn "作用域",, 200
+                .AddColumn "回调函数",, 300
+                .AddColumn "所属模块",, 350
+                .AddColumn "PID",, 100
+                .AddColumn "TID",, 100
+            Case EventHook
+                .AddColumn "hHook",, 100
+                .AddColumn "作用域",, 200
+                .AddColumn "Flags",, 200
+                .AddColumn "回调函数",, 300
+                .AddColumn "所属模块",, 350
+                .AddColumn "PID",, 100
+                .AddColumn "TID",, 100
+                .AddColumn "目标PID",, 100
+                .AddColumn "目标TID",, 100
+            Case Hotkey
+                .AddColumn "hHotkey",, 100
+                .AddColumn "热键id",, 200
+                .AddColumn "热键组合",, 300
+                .AddColumn "所属窗口",, 100
+                .AddColumn "PID",, 100
+                .AddColumn "TID",, 100
+                .AddColumn "备注",, 300
             Case KernelModule
                 .AddColumn "序号",, 100
                 .AddColumn "名称",, 200
@@ -217,8 +247,24 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 End If
                 TreeList.AddColumn "驱动对象地址", 250
                 TreeList.AddColumn "路径", 500
-            Case File
+                TreeList.AddColumn "设备名称", 250
+                TreeList.AddColumn "设备对象地址", 250
+            Case WfpFilter
+                .AddColumn "FilterId",, 200
+                .AddColumn "CalloutId",, 80
                 .AddColumn "名称",, 200
+                .AddColumn "Action",, 100
+                .AddColumn "Callout GUID",, 200
+            Case WfpCallout
+                .AddColumn "GUID",, 200
+                .AddColumn "CalloutId",, 80
+                .AddColumn "Classify",, 300
+                .AddColumn "Notify",, 300
+                .AddColumn "FlowDelete",, 300
+                .AddColumn "名称",, 300
+            Case File
+                .AddColumn "名称",, 250
+                .ADdColumn "类型",, 200
                 .AddColumn "大小",, 100
             Case UnlockTheFile
                 .AddColumn "进程名",, 200
@@ -241,8 +287,9 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "TID",, 100
                 .AddColumn "所属模块",, 400
             Case WindowTimer
-                .AddColumn "TID",, 100
-                .AddColumn "周期",, 150
+                .AddColumn "定时器ID",, 150
+                .AddColumn "所属TID",, 100
+                .AddColumn "超时时间",, 150
                 .AddColumn "回调地址",, 250
             Case Handles
                 .AddColumn "类型",, 200
@@ -274,7 +321,11 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
             Case Service
                 .AddColumn "服务名",, 250
                 .AddColumn "状态",, 140
-                .AddColumn "类型",, 160
+                .AddColumn "服务类型",, 160
+                .AddColumn "启动类型",, 160
+                .AddColumn "PID",, 150
+                .AddColumn "进程路径",, 300
+                .AddColumn "服务模块",, 300
                 .AddColumn "描述",, 300
             Case KernelTimer
                 .AddColumn "定时器类型",, 150
@@ -325,372 +376,355 @@ Function GetIndexByListViewHwnd(ByVal hListView As HWND) As Integer
     Return -1
 End Function
 
-Function FindListViewHwnd(ListView As Class_ListView) As ListViewDataNode Ptr '用于寻找ListView对应的节点指针(如果ListView的数据未被存储过则会返回NULL)
-    Dim CurrentNode As ListViewDataNode Ptr = ListViewDataList
-    Do While CurrentNode <> NULL
-        If CurrentNode->hListView = ListView.hWnd Then Return CurrentNode '符合条件则返回这个节点指针
-        CurrentNode = CurrentNode->NextNode '接收下一个节点指针
-    Loop
-    Return NULL
+Private Function DupWStr(ByVal src As WCHAR Ptr) As WCHAR Ptr
+    If src = 0 Then Return 0
+
+    Dim nLen As Long = lstrlenW(src)
+    Dim dst As WCHAR Ptr = Callocate(nLen + 1, SizeOf(WCHAR))
+    memcpy(dst, src, (nLen + 1) * SizeOf(WCHAR))
+    Return dst
 End Function
 
-Private Function FindTrueRow(ListView As Class_ListView, RowIndex As Integer) As Integer '寻找被筛选过的ListView某行在原始数据中对应的行
-    Dim CurrentNode As ListViewDataNode Ptr = ListViewDataList
-    Do While CurrentNode <> NULL
-        If CurrentNode->hListView = ListView.hWnd Then Exit Do 
-        CurrentNode = CurrentNode->NextNode
-    Loop
-    If CurrentNode = NULL Then Return -1 '未找到则返回-1
-    '遍历二维数组中对应ListView的每一个数据
-    For i As Integer = 0 To UBound(CurrentNode->DataArray, 1)
-        For j As Integer = 0 To UBound(CurrentNode->DataArray, 2)
-            If CurrentNode->DataArray(i, j) <> ListView.GetItemText(i, j) Then Exit For '不相等则搜索下一行
-        Next
-        Return i '找到则返回对应索引
-    Next
-    Return -1  '找不到则返回-1
+Private Function DupFromStringW(ByRef s As StringW) As WCHAR Ptr
+    Dim src As WCHAR Ptr = StrPtrW(s)      ' StringW 内部 UTF-16
+    If src = 0 Then Return 0
+
+    Dim nLen As Long = lstrlenW(src)
+    Dim buf As WCHAR Ptr = Callocate(nLen + 1, SizeOf(WCHAR))
+    memcpy(buf, src, (nLen + 1) * SizeOf(WCHAR))
+    Return buf
 End Function
 
-Function InitDataNode(ListView As Class_ListView) As ListViewDataNode Ptr
-    Dim Node As ListViewDataNode Ptr = New ListViewDataNode
-    Node->hListView = ListView.hWnd
-    Node->NextNode = NULL
-    ReDim Node->ItemColor(250) As ListViewItemInfo ' 数组开小了就会出bug
-    ReDim Node->Filter_ItemColor(250) As ListViewItemInfo ' 数组开小了就会出bug
-    For i As Integer = 0 To 250
-        Node->ItemColor(i).BackColor = FB_White
-        Node->ItemColor(i).ForeColor = FB_Black
-        Node->Filter_ItemColor(i).BackColor = FB_White
-        Node->Filter_ItemColor(i).ForeColor = FB_Black
-    Next
-    'Print "5:" & Node->ItemColor(1).BackColor
-    If ListViewDataList = NULL Then
-        '如果头节点不存在则对其初始化
-        ListViewDataList = Node
-        ListViewDataListEnd = Node
-    Else
-        '否则在尾节点后添加一个新节点
-        ListViewDataListEnd->NextNode = Node
-        ListViewDataListEnd = Node
+Private Function GetCtx(ListView As Class_ListView) As ListViewContext Ptr
+    Return Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+End Function
+
+Sub InitListViewData(ListView As Class_ListView)
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+    If ctx <> NULL Then
+        ' 已有上下文，清理旧数据而不是重新创建
+        DeleteAllItemsEx(ListView)  ' ← 内部会检查ctx有效性
+        Return  ' 不再重复初始化
     End If
-    Return Node
-End Function
+    ctx = CAllocate(1, SizeOf(ListViewContext))
+    
+    ctx->hLV = ListView.hWnd
 
-Sub SetListViewData(ListView As Class_ListView) '将ListView原始数据存储至ListViewDataTable中
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView) '寻找对应节点指针
-    If Node = NULL Then Node = InitDataNode(ListView) '如果未找到对应的节点，添加一个新的节点并初始化数据
-    'Print "6:" & Node->ItemColor(1).BackColor
-    '重新调整DataArray的边界使其适应ListView的行与列
-    ReDim Node->DataArray(ListView.ItemCount - 1, ListView.ColumnCount - 1) As StringW
-    For i As Integer = 0 To ListView.ItemCount - 1
-        For j As Integer = 0 To ListView.ColumnCount - 1
-            Node->DataArray(i, j) = ListView.GetItemText(i, j) '遍历二维数组每个元素并填充数据
-        Next
-    Next
-    Dim ItemUbound As Integer = UBound(Node->ItemColor)
-    ReDim Preserve Node->ItemColor(ListView.ItemCount - 1) As ListViewItemInfo
-    ReDim Preserve Node->Filter_ItemColor(ListView.ItemCount - 1) As ListViewItemInfo
-    For i As Integer = ItemUbound + 1 To ListView.ItemCount - 1
-        Node->ItemColor(i).BackColor = FB_White
-        Node->ItemColor(i).ForeColor = FB_Black
-        Node->Filter_ItemColor(i).BackColor = FB_White
-        Node->Filter_ItemColor(i).ForeColor = FB_Black
-    Next
-    'Print "1:" & Node->ItemColor(11).BackColor
+    ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
+    ctx->Snap->RowCount = 0
+    ReDim ctx->Snap->Rows(-1)
+
+    ReDim ctx->VisibleIndex(-1)
+    ctx->VisibleCount = 0
+    ctx->Filter = 0
+
+    SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
+
+    ' 必须
+    ListView.DeleteAllItems
+    ListView_SetUnicodeFormat(ListView.hWnd, True)
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
 End Sub
 
-/'Sub ClearListViewData(ListView As Class_ListView) '将ListView原始数据存储至ListViewDataTable中
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView) '寻找对应节点指针
-    If Node = NULL Then Node = InitDataNode(ListView) '如果未找到对应的节点，添加一个新的节点并初始化数据
-    
-    '重新调整DataArray的边界使其适应ListView的行与列
-    ReDim Node->DataArray(ListView.ItemCount - 1, ListView.ColumnCount - 1) As String
-    For i As Integer = 0 To ListView.ItemCount - 1
-        For j As Integer = 0 To ListView.ColumnCount - 1
-            Node->DataArray(i, j) = ListView.GetItemText(i, j) '遍历二维数组每个元素并填充数据
-        Next
-    Next
-End Sub'/
+Private Sub FreeLVRow(row As LVRow Ptr)
+    If row = 0 Then Exit Sub
 
-Function SetFilter(ListView As Class_ListView, ByVal SubStr As String) As Boolean '设置ListView的筛选字符串
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView) '寻找对应节点指针
-    If Node = NULL Then Return FALSE
-    Node->strFilter = SubStr '设置筛选字符串
-    Return TRUE
+    For i As Long = 0 To row->ColCount - 1
+        If row->Cols[i] <> 0 Then
+            Deallocate(row->Cols[i])
+        End If
+    Next
+
+    Deallocate(row->Cols)
+    Deallocate(row)
+End Sub
+
+Private Function CreateLVRow( _
+    ColCount As Long, _
+    Cols As StringW Ptr, _
+    Fore As COLORREF, _
+    Back As COLORREF _
+) As LVRow Ptr
+
+    Dim r As LVRow Ptr = New LVRow
+    r->ColCount = ColCount
+    r->Cols = Callocate(ColCount, SizeOf(StringW))
+    r->Fore = Fore
+    r->Back = Back
+
+    For i As Long = 0 To ColCount - 1
+        r->Cols[i] = Cols[i]
+    Next
+
+    Return r
 End Function
 
-Function FilterAllItem(ListView As Class_ListView) As Integer '开始筛选指定ListView
-    Dim ItemCount As Integer = 0
-    Dim NewIndex As Integer
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView) '寻找对应节点指针
-    If Node = NULL Then Return 0
-    Dim SubStr As StringW = Node->strFilter
+Function AddItemEx( _
+    ListView As Class_ListView, _
+    Text0 As StringW, _
+    Fore As COLORREF = FB_Black, _
+    Back As COLORREF = FB_White _
+) As Long
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    ' 新增：ctx空指针校验
+    If ctx = NULL Or ctx->Snap = NULL Then Return -1
+    
+    Dim row As LVRow Ptr = Callocate(1, SizeOf(LVRow))
+    ' 新增：row分配失败校验
+    If row = NULL Then Return -1
+    
+    row->ColCount = 1
+    row->Fore = Fore
+    row->Back = Back
+    ' 核心修复：固定分配1个WCHAR Ptr（单列），与ColCount保持一致
+    row->Cols = CAllocate(1, SizeOf(WCHAR Ptr))
+    ' 新增：Cols分配失败校验
+    If row->Cols = NULL Then
+        Deallocate(row)
+        Return -1
+    End If
+    
+    row->Cols[0] = DupWStr(StrPtrW(Text0))
+    ' 新增：DupWStr失败校验（避免写入NULL）
+    If row->Cols[0] = NULL Then
+        Deallocate(row->Cols)
+        Deallocate(row)
+        Return -1
+    End If
+    
+    Dim idx As Long = ctx->Snap->RowCount
+    ctx->Snap->RowCount += 1
+    ReDim Preserve ctx->Snap->Rows(idx)
+    ctx->Snap->Rows(idx) = row
+    Return idx
+End Function
 
-    ListView.ReDraw = FALSE ' 关闭重绘
-    ListView.DeleteAllItems
+Function AddItemColListEx CDecl ( _
+    ListView As Class_ListView, _
+    colCnt As Long, _
+    Fore   As COLORREF = FB_Black, _
+    Back   As COLORREF = FB_White, _
+    ... _
+) As Long
 
-    If SubStr = "" Then
-        ' 如果没有过滤字符串，直接重新添加所有项
-        'Print UBound(Node->DataArray, 1)
-        'Print UBound(Node->DataArray, 2)
-        For i As Integer = 0 To UBound(Node->DataArray, 1)
-            ' 恢复颜色映射关系
-            Node->Filter_ItemColor(i).BackColor = Node->ItemColor(i).BackColor
-            Node->Filter_ItemColor(i).ForeColor = Node->ItemColor(i).ForeColor
-            
-            ListView.AddItem Node->DataArray(i, 0)
-            'Print Node->DataArray(i, 0) & " " & "Row:" & NewIndex
-            For j As Integer = 1 To UBound(Node->DataArray, 2)
-                'Print Node->DataArray(i, j) & " " & "Col:" & j
-                ListView.SetItemText i, j, Node->DataArray(i, j)
-            Next
-            ItemCount += 1
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+        
+    'If colCnt > ctx->Snap->RowCount Then Return -1
+    Dim row As LVRow Ptr = Callocate(1, SizeOf(LVRow))
+    row->ColCount = colCnt
+    row->Fore = Fore
+    row->Back = Back
+    row->Cols = Callocate(colCnt, SizeOf(WCHAR Ptr))
+
+    Dim ap As Any Ptr
+    ap = va_first()
+
+    For i As Long = 0 To colCnt - 1
+        Dim src As WCHAR Ptr = va_arg(ap, WCHAR Ptr)
+        ap = va_next(ap, WCHAR Ptr)
+        row->Cols[i] = DupWStr(src)
+    Next
+
+    Dim idx As Long = ctx->Snap->RowCount
+    ctx->Snap->RowCount += 1
+    ReDim Preserve ctx->Snap->Rows(idx)
+    ctx->Snap->Rows(idx) = row
+
+    Return idx
+End Function
+
+Sub SetItemTextEx(ListView As Class_ListView, Row As Long, Col As Long, Text As StringW)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+
+    If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
+    Dim r As LVRow Ptr = ctx->Snap->Rows(Row)
+    If r = NULL Then Exit Sub
+
+    ' 如果列索引超出当前列数，需要扩展
+    If Col >= r->ColCount Then
+        ' 分配新的列指针数组，并复制原内容
+        Dim newColCount As Long = Col + 1
+        Dim newCols As WCHAR Ptr Ptr = Callocate(newColCount, SizeOf(WCHAR Ptr))
+        If newCols = NULL Then Exit Sub
+        
+        ' 复制原有列指针
+        For i As Long = 0 To r->ColCount - 1
+            newCols[i] = r->Cols[i]
         Next
-    Else
-        ' 根据过滤字符串添加匹配的项
-        For i As Integer = 0 To UBound(Node->DataArray, 1)
-            For j As Integer = 0 To UBound(Node->DataArray, 2)
-                If InStrW(LCaseW(Node->DataArray(i, j)), LCaseW(SubStr)) > 0 Then
-                    ' 如果找到一个包含指定字符串的项，则添加一整行
-                    'Print "找到" & i & " " & j
-                    Node->Filter_ItemColor(ItemCount).BackColor = Node->ItemColor(i).BackColor
-                    Node->Filter_ItemColor(ItemCount).ForeColor = Node->ItemColor(i).ForeColor
-                    
-                    NewIndex = ListView.AddItem(Node->DataArray(i, 0))
-                    For k As Integer = 1 To UBound(Node->DataArray, 2)
-                        ListView.SetItemText NewIndex, k, Node->DataArray(i, k)
-                    Next
-                    '统计符合筛选条件的项数
-                    ItemCount += 1
-                    Exit For ' 只要有一个项匹配就不必检查这一行后面的项
+        ' 新增列初始化为 NULL
+        For i As Long = r->ColCount To newColCount - 1
+            newCols[i] = NULL
+        Next
+        
+        ' 释放原列数组指针（注意不要释放列内容，已复制）
+        Deallocate(r->Cols)
+        r->Cols = newCols
+        r->ColCount = newColCount
+    End If
+
+    ' 释放该列原有文本（防止内存泄漏）
+    If r->Cols[Col] <> NULL Then
+        Deallocate(r->Cols[Col])
+    End If
+    
+    ' 设置新文本
+    r->Cols[Col] = DupWStr(StrPtrW(Text))
+End Sub
+
+Sub SetListViewFilter(ListView As Class_ListView, s As StringW)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+
+    If ctx->Filter <> 0 Then
+        Deallocate(ctx->Filter)
+        ctx->Filter = 0
+    End If
+
+    If Len(s) > 0 Then
+        ctx->Filter = DupWStr(StrPtrW(s))
+    End If
+End Sub
+
+Sub SetItemColor(ListView As Class_ListView, Row As Long, Fore As COLORREF, Back As COLORREF)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    ctx->Snap->Rows(Row)->Fore = Fore
+    ctx->Snap->Rows(Row)->Back = Back
+End Sub
+
+Sub GetItemColor(ListView As Class_ListView, Row As Long, ByRef Fore As COLORREF, ByRef Back As COLORREF)
+    Dim r As LVRow Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))->Snap->Rows(Row)
+    Fore = r->Fore
+    Back = r->Back
+End Sub
+
+Sub CommitListViewView(ListView As Class_ListView)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+
+    ReDim ctx->VisibleIndex(-1)
+    ctx->VisibleCount = 0
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim r As LVRow Ptr = ctx->Snap->Rows(i)
+        Dim hit As Boolean = (ctx->Filter = 0)
+
+        If Not hit Then
+            For c As Long = 0 To r->ColCount - 1
+                If r->Cols[c] <> 0 Then
+                    If wcsstr(r->Cols[c], ctx->Filter) <> 0 Then
+                        hit = TRUE
+                        Exit For
+                    End If
                 End If
             Next
-        Next
-    End If
-    ListView.ReDraw = True ' 开启重绘
-    Return ItemCount
-End Function
-
-Sub DeleteListViewData(ListView As Class_ListView) '在不需要筛选ListView时释放空间,但在这之前,如果有需要,请通过将筛选字符串置为空来恢复ListView至原始状态
-    Dim CurrentNode As ListViewDataNode Ptr = ListViewDataList
-    Dim PreviousNode As ListViewDataNode Ptr = NULL
-    Do While CurrentNode <> NULL
-        If CurrentNode->hListView = ListView.hWnd Then
-            If PreviousNode = NULL Then
-                ' 删除头节点
-                ListViewDataList = CurrentNode->NextNode
-                If ListViewDataList = NULL Then ListViewDataListEnd = NULL
-            Else
-                ' 删除中间节点或尾节点(使当前节点的上一个节点的NextNode指向当前节点的下一个节点)
-                PreviousNode->NextNode = CurrentNode->NextNode
-                If CurrentNode = ListViewDataListEnd Then ListViewDataListEnd = PreviousNode
-            End If
-            ' 释放当前节点内存
-            Dim TempNode As ListViewDataNode Ptr = CurrentNode
-            'CurrentNode = CurrentNode->NextNode
-            Erase TempNode->DataArray
-            Delete TempNode
-            Exit Sub
-        Else
-            PreviousNode = CurrentNode
-            CurrentNode = CurrentNode->NextNode '接收下一个节点
         End If
-    Loop
+
+        If hit Then
+            ctx->VisibleCount += 1
+            ReDim Preserve ctx->VisibleIndex(ctx->VisibleCount - 1)
+            ctx->VisibleIndex(ctx->VisibleCount - 1) = i
+        End If
+    Next
+
+    SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, ctx->VisibleCount, 0)
+    InvalidateRect(ListView.hWnd, NULL, True)
 End Sub
 
-Function AddItemEx(ListView As Class_ListView, RowIndex As Integer = -1, ColText As StringW, ByVal BackColor As COLORREF = FB_White, ByVal ForeColor As COLORREF = FB_Black) As Integer '添加(插入)一行(只有满足筛选条件才被显示,但一定会被添加到ListViewDataTable中)
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then
-        '如果未找到对应的节点，添加一个新的节点并初始化数据
-        Node = InitDataNode(ListView)
-        '重新调整DataArray的边界使其适应ListView的行与列
-        'ReDim Node->DataArray(0, ListView.ColumnCount - 1) As String
-    End If
+Sub DeleteItemEx(ListView As Class_ListView, VisibleRow As Long, ByVal bCommit As Boolean = True)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
     
-    Dim SubStr As StringW = Node->strFilter
-    If RowIndex = -1 Then RowIndex = ListView.ItemCount
-    If RowIndex < 0 Or RowIndex > ListView.ItemCount Then Return -1
-    ' 插入新行
-    ReDim Preserve Node->DataArray(ListView.ItemCount, ListView.ColumnCount - 1) As StringW
-    ReDim Preserve Node->ItemColor(ListView.ItemCount) As ListViewItemInfo
-    For i As Integer = RowIndex + 1 To ListView.ItemCount
-        For j As Integer = 0 To ListView.ColumnCount - 1
-            If i > UBound(Node->ItemColor) Then ReDim Preserve Node->ItemColor(i + 10) As ListViewItemInfo
-            Node->DataArray(i, j) = Node->DataArray(i - 1, j)
-            Node->ItemColor(i).BackColor = BackColor
-            Node->ItemColor(i).ForeColor = ForeColor
-            Node->Filter_ItemColor(i).BackColor = BackColor
-            Node->Filter_ItemColor(i).ForeColor = ForeColor
-        Next
+    If ctx = NULL Or ctx->Snap = NULL Then Exit Sub
+    If VisibleRow < 0 Or VisibleRow >= ctx->VisibleCount Then Exit Sub
+
+    Dim real As Long = ctx->VisibleIndex(VisibleRow)
+    If real < 0 Or real >= ctx->Snap->RowCount Then Exit Sub
+    
+    Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+    If r = NULL Then Exit Sub
+
+    ' 正确释放：先释放每列的字符串，再释放列数组
+    For i As Long = 0 To r->ColCount - 1
+        If r->Cols[i] <> NULL Then
+            Deallocate(r->Cols[i])
+        End If
     Next
-    Node->DataArray(RowIndex, 0) = ColText
-    'CurrentListViewItem.BackColor = BackColor
-    'CurrentListViewItem.ForeColor = ForeColor
-    If InStr(LCase(ColText), LCase(SubStr)) > 0 Or SubStr = "" Then Function = ListView.InsertItem(RowIndex, ColText)
-    'Print "ItemCount:" & ListView.ItemCount
-    'Print "AddItemEx,RowIndex = " & RowIndex & " " & Node->DataArray(RowIndex, 0)    Return True
-End Function
+    Deallocate r->Cols
+    Delete r
 
-Function SetItemTextEx(ListView As Class_ListView, RowIndex As Integer, ColumnIndex As Integer, ColText As StringW) As Boolean '设置某一行的数据(只有满足筛选条件才被显示,但一定会被添加到ListViewDataTable中)
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then Return FALSE
-    Dim SubStr As StringW = Node->strFilter
-    If RowIndex < 0 Or RowIndex > ListView.ItemCount Then Return False
-    
-    '拓展新列
-    If ListView.ColumnCount - 1 < ColumnIndex Then ReDim Preserve Node->DataArray(RowIndex, ColumnIndex) As String
-    Node->DataArray(RowIndex, ColumnIndex) = ColText
-    'CurrentListViewItem.BackColor = Node->ItemColor(RowIndex).BackColor
-    'CurrentListViewItem.ForeColor = Node->ItemColor(RowIndex).ForeColor
-    If InStr(LCase(ColText), LCase(SubStr)) > 0 Or SubStr = "" Then ListView.SetItemText RowIndex, ColumnIndex, ColText
-    'Print "SetItemTextEx,RowIndex = " & RowIndex & " " & "ColumnIndex = " & ColumnIndex - 1 & " " & Node->DataArray(RowIndex, ColumnIndex)
-    Return TRUE
-End Function
-
-Function SetItemColor(ListView As Class_ListView, ByVal RowIndex As Integer, ByVal ForeColor As COLORREF = FB_Black, ByVal BackColor As COLORREF = FB_White) As Boolean '设置某一行的颜色
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then Return False
-    If RowIndex < 0 Or RowIndex > ListView.ItemCount Then Return False
-    'If UBound(Node->ItemColor) > 10 Then Print "2:" & Node->ItemColor(11).BackColor
-    ' 检查是否需要扩展数组
-    If RowIndex > UBound(Node->ItemColor) Then
-        ' 创建临时数组保存现有数据
-        Dim OldUpper As Integer = UBound(Node->ItemColor)
-        Dim Filter_OldUpper As Integer = UBound(Node->Filter_ItemColor)
-        Dim TempArray(OldUpper) As ListViewItemInfo
-        Dim Filter_TempArray(Filter_OldUpper) As ListViewItemInfo
-        
-        ' 备份现有数据
-        For i As Integer = 0 To OldUpper
-            TempArray(i).BackColor = Node->ItemColor(i).BackColor
-            TempArray(i).ForeColor = Node->ItemColor(i).ForeColor
-        Next
-        For i As Integer = 0 To Filter_OldUpper
-            Filter_TempArray(i).BackColor = Node->Filter_ItemColor(i).BackColor
-            Filter_TempArray(i).ForeColor = Node->Filter_ItemColor(i).ForeColor
-        Next
-        
-        ' 重新分配数组
-        ReDim Node->ItemColor(RowIndex + 10) As ListViewItemInfo
-        ReDim Node->Filter_ItemColor(RowIndex + 10) As ListViewItemInfo
-        
-        ' 恢复备份的数据
-        For i As Integer = 0 To OldUpper
-            Node->ItemColor(i).BackColor = TempArray(i).BackColor
-            Node->ItemColor(i).ForeColor = TempArray(i).ForeColor
-        Next
-        For i As Integer = 0 To Filter_OldUpper
-            Node->Filter_ItemColor(i).BackColor = Filter_TempArray(i).BackColor
-            Node->Filter_ItemColor(i).ForeColor = Filter_TempArray(i).ForeColor
-        Next
-        
-        ' 初始化新分配的部分
-        For i As Integer = OldUpper + 1 To UBound(Node->ItemColor)
-            Node->ItemColor(i).BackColor = FB_White
-            Node->ItemColor(i).ForeColor = FB_Black
-        Next
-        For i As Integer = Filter_OldUpper + 1 To UBound(Node->Filter_ItemColor)
-            Node->Filter_ItemColor(i).BackColor = FB_White
-            Node->Filter_ItemColor(i).ForeColor = FB_Black
-        Next
-        
-        Print "数组扩展: 从 " & OldUpper & " 到 " & UBound(Node->ItemColor)
-        
-    End If
-    'If UBound(Node->ItemColor) > 10 Then Print "3:" & Node->ItemColor(11).BackColor
-    Node->ItemColor(RowIndex).ForeColor = ForeColor
-    Node->ItemColor(RowIndex).BackColor = BackColor
-    Node->Filter_ItemColor(RowIndex).ForeColor = ForeColor
-    Node->Filter_ItemColor(RowIndex).BackColor = BackColor
-    'If UBound(Node->ItemColor) > 10 Then Print "4:" & Node->ItemColor(1).BackColor
-    Return True
-End Function
-
-Function GetItemColor(ListView As Class_ListView, ByVal RowIndex As Integer, ForeColor As COLORREF, BackColor As COLORREF) As Boolean '获取某一行的颜色
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then Return False
-    If RowIndex < 0 Or RowIndex > ListView.ItemCount Then Return False
-    
-    ForeColor = Node->ItemColor(RowIndex).ForeColor
-    BackColor = Node->ItemColor(RowIndex).BackColor
-    Return True
-End Function
-
-/'Function AddItemColListEx(ListView As Class_ListView, RowIndex As Integer = -1, ColText1 As StringW = "", ColText2 As StringW = "", ColText3 As StringW = "", ColText4 As StringW = "", ColText5 As StringW = "", ColText6 As StringW = "", ColText7 As StringW = "", ColText8 As StringW = "", ColText9 As StringW = "", ColText10 As StringW = "") As Boolean '添加(插入)完整的一行(只有满足筛选条件才被显示,但一定会被添加到ListViewDataTable中)
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then
-        '如果未找到对应的节点，添加一个新的节点并初始化数据
-        Node = InitDataNode(ListView)
-        '重新调整DataArray的边界使其适应ListView的行与列
-        'ReDim Node->DataArray(0, ListView.ColumnCount - 1) As String
-    End If
-    
-    Dim SubStr As StringW = Node->strFilter
-    If RowIndex = -1 Then RowIndex = ListView.ItemCount
-    If RowIndex < 0 Or RowIndex > ListView.ItemCount Then Return FALSE
-    ' 插入新行
-    ReDim Preserve Node->DataArray(ListView.ItemCount, ListView.ColumnCount - 1) As String
-    For i As Integer = RowIndex + 1 To ListView.ItemCount
-        For j As Integer = 0 To ListView.ColumnCount - 1
-            Node->DataArray(i, j) = Node->DataArray(i - 1, j)
-        Next
+    ' 移动后续行
+    For i As Long = real To ctx->Snap->RowCount - 2
+        ctx->Snap->Rows(i) = ctx->Snap->Rows(i + 1)
     Next
-    Node->DataArray(RowIndex, 0) = ColText1
-    Node->DataArray(RowIndex, 1) = ColText2
-    Node->DataArray(RowIndex, 2) = ColText3
-    Node->DataArray(RowIndex, 3) = ColText4
-    Node->DataArray(RowIndex, 4) = ColText5
-    Node->DataArray(RowIndex, 5) = ColText6
-    Node->DataArray(RowIndex, 6) = ColText7
-    Node->DataArray(RowIndex, 7) = ColText8
-    Node->DataArray(RowIndex, 8) = ColText9
-    Node->DataArray(RowIndex, 9) = ColText10
-    If InStr(LCase(ColText1 & ColText2 & ColText3 & ColText4 & ColText5 & ColText6 & ColText7 & ColText8 & ColText9 & ColText10), LCase(SubStr)) > 0 Or SubStr = "" Then
-        Dim NewIndex As Integer = ListView.InsertItem(RowIndex, ColText1)
-        ListView.SetItemText NewIndex, 1, ColText1
-        ListView.SetItemText NewIndex, 2, ColText2
-        ListView.SetItemText NewIndex, 3, ColText3
-        ListView.SetItemText NewIndex, 4, ColText4
-        ListView.SetItemText NewIndex, 5, ColText5
-        ListView.SetItemText NewIndex, 6, ColText6
-        ListView.SetItemText NewIndex, 7, ColText7
-        ListView.SetItemText NewIndex, 8, ColText8
-        ListView.SetItemText NewIndex, 9, ColText9
-        ListView.SetItemText NewIndex, 10, ColText10
-    End If
-    'Print "SetItemTextEx,RowIndex = " & RowIndex & " " & "ColumnIndex = " & ColumnIndex - 1 & " " & Node->DataArray(RowIndex, ColumnIndex)
-    Return TRUE
-End Function'/
 
-Function DeleteItemEx(ListView As Class_ListView, ByVal RowIndex As Integer) As Boolean '删除一行(以筛选后的ListView项索引为基准)
-    Dim Node As ListViewDataNode Ptr = FindListViewHwnd(ListView)
-    If Node = NULL Then Return FALSE
-    Dim TrueRow As Integer = RowIndex
-    If Node->strFilter <> "" Then
-        TrueRow = FindTrueRow(ListView, RowIndex)
-        If TrueRow = -1 Then Return False
-    End If
-    If TrueRow < 0 Or TrueRow > ListView.ItemCount - 1 Then Return False
-    If ListView.ItemCount = 1 Then ' 不能删除最后一行,你删光得了 
-        DeleteListViewData ListView 'Return FALSE
-        ListView.DeleteItem 0
-    End If
-    ' 删除指定行
-    For i As Integer = TrueRow To ListView.ItemCount - 2
-        For j As Integer = 0 To ListView.ColumnCount - 1
-            Node->DataArray(i, j) = Node->DataArray(i + 1, j)
-            If UBound(Node->ItemColor) > 0 Then
-                Node->ItemColor(i).BackColor = Node->ItemColor(i + 1).BackColor
-                Node->ItemColor(i).ForeColor = Node->ItemColor(i + 1).ForeColor
-            End If
-        Next
+    ctx->Snap->RowCount -= 1
+    ReDim Preserve ctx->Snap->Rows(ctx->Snap->RowCount - 1)
+    
+    ' 需要重新计算可见索引
+    If bCommit Then CommitListViewView(ListView)
+End Sub
+
+Sub DeleteAllItemsEx(ListView As Class_ListView)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    
+    If ctx = NULL Or ctx->Snap = NULL Then Exit Sub
+    
+    ' 释放所有行数据
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim r As LVRow Ptr = ctx->Snap->Rows(i)
+        If r <> NULL Then
+            ' 释放每列的字符串内存
+            For c As Long = 0 To r->ColCount - 1
+                If r->Cols[c] <> NULL Then
+                    Deallocate(r->Cols[c])
+                End If
+            Next
+            ' 释放列指针数组
+            Deallocate(r->Cols)
+            ' 释放行结构
+            Delete r
+        End If
     Next
-    '最后再调整大小
-    ReDim Preserve Node->DataArray(ListView.ItemCount - 2, ListView.ColumnCount - 1) As StringW
-    If UBound(Node->ItemColor) >0 Then ReDim Preserve Node->ItemColor(ListView.ItemCount - 2) As ListViewItemInfo
-    ListView.DeleteItem RowIndex
-    Return TRUE
-End Function
+    
+    ' 清空行指针数组
+    ReDim ctx->Snap->Rows(-1)
+    ctx->Snap->RowCount = 0
+    
+    ' 清空可见行索引
+    ReDim ctx->VisibleIndex(-1)
+    ctx->VisibleCount = 0
+    
+    ' 重置过滤器
+    /'If ctx->Filter <> NULL Then
+        Deallocate(ctx->Filter)
+        ctx->Filter = NULL
+    End If'/
+End Sub
+
+Sub UninitListViewData(ListView As Class_ListView)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+
+    If ctx = 0 Then Exit Sub
+
+    If ctx->Snap <> 0 Then
+        For i As Long = 0 To ctx->Snap->RowCount - 1
+            FreeLVRow(ctx->Snap->Rows(i))
+        Next
+        Deallocate(ctx->Snap)
+    End If
+
+    If ctx->Filter <> 0 Then Deallocate(ctx->Filter)
+
+    SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, 0)
+    Deallocate(ctx)
+End Sub
 
 Sub SetListViewItemBackColor(ListView As Class_ListView, ByVal ItemIndex As Integer, ByVal ItemColor As COLORREF)
     '设置背景色
@@ -706,14 +740,14 @@ Function GetMenuCheckState(Menu As Class_Menu, ByVal iditem As Long) As BOOLEAN
     Return (state And MF_CHECKED)
 End Function
 
-Sub SetMenuCheckState(Menu As Class_Menu, ByVal iditem As Long, ByVal state As BOOLEAN)
+Sub SetMenuCheckState(Menu As Class_Menu, ByVal iditem As Long, ByVal state As Boolean)
     CheckMenuItem Menu.HMENU, iditem, MF_BYCOMMAND Or IIf(state, MF_CHECKED, MF_UNCHECKED)
 End Sub
 
 Function GetMenuText(Menu As Class_Menu, ByVal iditem As Long) As String
     Dim pBuffer As LPSTR = Allocate(MAX_PATH)
     GetMenuStringA Menu.HMENU, iditem, pBuffer, MAX_PATH, MF_BYCOMMAND
-    'Print WinErrorMsg(GetLastError) ' 这里GetLastError会是"句柄无效",但我们不用管它,反正已经拿到了pBuffer
+    Print WinErrorMsg(GetLastError) ' 这里GetLastError会是"句柄无效",但我们不用管它,反正已经拿到了pBuffer
     Return *pBuffer
 End Function
 
@@ -737,32 +771,6 @@ Sub SetMenuText(Menu As Class_Menu, ByVal iditem As Long, ByVal newText As Strin
     ' 刷新菜单显示
     DrawMenuBar Cast(hWnd, Menu.HMENU)
 End Sub
-
-/'Function FrmMain_WndProc(hwnd As HWND, uMsg As UINT, wParam As WPARAM, lParam As LPARAM) As LRESULT
-    Select Case uMsg
-        Case WM_NOTIFY
-            ' 解析 NMHDR 结构体（lParam 指向它）
-            Dim As LPNMHDR pNMHDR = Cast(LPNMHDR, lParam)
-            ' 判断：是否来自目标 ListView，且是 NM_CUSTOMDRAW 通知
-            If pNMHDR->hwndFrom = FrmMain.ListView1.hwnd AndAlso pNMHDR->code = NM_CUSTOMDRAW Then
-                Dim As LPNMLVCUSTOMDRAW pLVCD = Cast(LPNMLVCUSTOMDRAW, lParam)
-                Dim As LRESULT result = CDRF_DODEFAULT
-                Select Case pLVCD->nmcd.dwDrawStage
-                    Case CDDS_PREPAINT
-                        result = CDRF_NOTIFYITEMDRAW ' 通知项绘制
-                    Case CDDS_ITEMPREPAINT
-                        ' 第3项设置红色背景
-                        pLVCD->clrTextBk = CurrentListViewItem(pLVCD->nmcd.dwItemSpec).BackColor
-                        pLVCD->clrText = CurrentListViewItem(pLVCD->nmcd.dwItemSpec).ForeColor
-                        result = CDRF_DODEFAULT
-                End Select
-                Function = result
-            End If
-        Case Else
-        ' 其他消息交给默认窗口过程处理
-        Function = DefWindowProc(hwnd, uMsg, wParam, lParam)
-    End Select
-End Function'/
 
 ' 启用/禁用OwnerDraw的优化设置
 Sub OptimizeListViewForOwnerDraw(hWndControl As HWND)

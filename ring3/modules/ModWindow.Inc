@@ -36,6 +36,10 @@ Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
     Dim szClass As WString * 260
     Dim windowStyle As Long
     
+    'lvwForegroundWindow.DeleteAllItems
+    
+    InitListViewData lvwForegroundWindow
+    
     Do While (hWindow <> 0)
         ' 检查窗口是否可见并且没有所有者窗口
         If ((GetWindow(hWindow, GW_OWNER) = NULL) And (IsWindowVisible(hWindow))) Then
@@ -68,12 +72,10 @@ Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
                     wText = ProcessName & " [" & Hex(hWindow) & "]"
                 End If
                 
-                lvwForegroundWindow.AddItem wText
                 GetWindowThreadProcessId hWindow, @dwProcessId
                 ProcessPath = GetProcessPath(dwProcessId)
                 ProcessName = RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
-                lvwForegroundWindow.SetItemText i, 1, ProcessName
-                lvwForegroundWindow.SetItemText i, 2, IIf(IsHungAppWindow(hWindow), "未响应", "正在运行")
+                AddItemColListEx lvwForegroundWindow, 3,,, WStr(wText), WStr(ProcessName), WStr(IIf(IsHungAppWindow(hWindow), "未响应", "正在运行"))
                 
                 ' 可选：在第三列显示窗口类名，便于调试
                 'lvwForegroundWindow.SetItemText i, 3, szClass
@@ -83,6 +85,7 @@ Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
         End If
         hWindow = GetWindow(hWindow, GW_HWNDNEXT)
     Loop
+    CommitListViewView lvwForegroundWindow
 End Sub
 
 ' 回调函数
@@ -123,8 +126,11 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
     
     memset @hWindows(0), 0, SizeOf(hWnd) * (UBound(hWindows) + 1)
     EnumWindows @EnumProc, Cast(lParam, ProcessId)
-    lvwWindow.DeleteAllItems
+    'lvwWindow.DeleteAllItems
     WindowCount = 0
+    
+    InitListViewData lvwWindow
+    
     For i As Integer = 0 To UBound(hWindows)
         If hWindows(i) = 0 Then Continue For
         ' 获取窗口标题
@@ -150,7 +156,7 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
         'GetModuleByAddress dwProcessId, ThreadStartAddress, @strModulePath
         'GetWindowModuleFileName hWindows(i), @strModulePath, MAX_PATH
         
-        lvwWindow.AddItemColList,, "0x" & WHex(hWindows(i)), window_Title, window_Class, WStr(dwThreadId), strModulePath
+        AddItemColListEx lvwWindow, 5,,, WStr("0x" & WHex(hWindows(i))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         
         ChildWindowCount = 0
         memset @hChildWindows(0), 0, SizeOf(hWnd) * (UBound(hChildWindows) + 1)
@@ -180,9 +186,10 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
             strModulePath = GetProcessPath(dwProcessId)
             'GetWindowModuleFileName hChildWindows(j), @strModulePath, MAX_PATH
             
-            lvwWindow.AddItemColList,, "0x" & WHex(hChildWindows(j)), window_Title, window_Class, WStr(dwThreadId), strModulePath
+            AddItemColListEx lvwWindow, 5,,, WStr("0x" & WHex(hChildWindows(j))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         Next
     Next
+    CommitListViewView lvwWindow
 End Sub
 
 Function MyCloseWindow(ByVal hWnd As HWND) As WINBOOL

@@ -15,55 +15,6 @@ typedef struct _DRIVER_INFO {
 	PVOID MajorFunctionAddr[IRP_MJ_MAXIMUM_FUNCTION + 1];
 }DRIVER_INFO, * PDRIVER_INFO;
 
-typedef struct _AttachDeviceTable {
-	LIST_ENTRY* AttachDevieList;
-	PVOID AttachDevice;
-}AttachDeviceTable, *PAttachDeviceTable;
-
-typedef struct _ATTACHED_DEVICE_NODE {
-    PDEVICE_OBJECT DeviceObject;
-    PDRIVER_OBJECT DriverObject;
-    WCHAR DriverName[260];
-	WCHAR DriverPath[512];
-    //struct _ATTACHED_DEVICE_NODE* NextAttached; // 指向下一个Attached设备
-} ATTACHED_DEVICE_NODE, * PATTACHED_DEVICE_NODE;
-
-typedef struct _ATTACH_DEVICE_INFO {
-    //ATTACHED_DEVICE_NODE DeviceChain;  // 设备链头节点
-	WCHAR DriverName[260];               // 驱动名称
-	ATTACHED_DEVICE_NODE Devices[10];    // 假设最多10个设备
-    ULONG TotalDevices;                  // 总设备数
-} ATTACH_DEVICE_INFO, * PATTACH_DEVICE_INFO;
-
-typedef struct _LDR_DATA_TABLE_ENTRY {
-    LIST_ENTRY InLoadOrderLinks;
-    LIST_ENTRY InMemoryOrderLinks;
-    LIST_ENTRY InInitializationOrderLinks;
-    PVOID DllBase;
-    PVOID EntryPoint;
-    ULONG SizeOfImage;
-    UNICODE_STRING FullDllName;
-    UNICODE_STRING BaseDllName;
-    ULONG Flags;
-    USHORT LoadCount;
-    USHORT TlsIndex;
-    union {
-        LIST_ENTRY HashLinks;
-        struct {
-            PVOID SectionPointer;
-            ULONG CheckSum;
-        };
-    };
-    union {
-        struct {
-            ULONG TimeDateStamp;
-        };
-        struct {
-            PVOID LoadedImports;
-        };
-    };
-} LDR_DATA_TABLE_ENTRY, * PLDR_DATA_TABLE_ENTRY;
-
 //_OBJECT_HEADER 内两个成员的偏移
 enum _OBJECT_HEADER_Offset {
     _OBJECT_HEADER_Body_Offset = 0x30,
@@ -130,14 +81,7 @@ NTSTATUS NTKERNELAPI ZwQueryDirectoryObject(
 );
 
 VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo);
-NTSTATUS EnumAttachDevices(
-    _In_ PDRIVER_OBJECT DriverObject,
-    _Out_ PATTACH_DEVICE_INFO AttachInfo
-);
-BOOLEAN IsDeviceAttachedToDriver(
-    _In_ PDEVICE_OBJECT Device,
-    _In_ PDRIVER_OBJECT TargetDriver
-);
+
 NTSTATUS OpenDirectoryObject(PCWSTR DirPath, POBJECT_DIRECTORY* OutDirObj);
 PDRIVER_OBJECT GetDirectoryDrivers(POBJECT_DIRECTORY DirObj, PVOID BaseAddress);
 PVOID GetDriverObjectByBaseAddress(PVOID BaseAddress);
@@ -155,15 +99,60 @@ POBJECT_TYPE GetObjectType(_In_ PVOID Object);
     PVOID* Object
 );*/
 
-// 设备链信息结构
-typedef struct _FILTER_CHAIN_INFO {
-    UNICODE_STRING DriverName;      // 驱动名称
-    UNICODE_STRING DeviceName;      // 设备名称
-    PDEVICE_OBJECT AttachedDevice;  // 附加设备指针
-    ULONG ChainDepth;               // 链中深度
-} FILTER_CHAIN_INFO, * PFILTER_CHAIN_INFO;
+#define MAP_POOL_TAG                'paMG'  // GMap
+#define ATTACH_INFO_POOL_TAG        'iaGA'  // AGia
+#define MAX_FILTER_DEPTH            32
+#define MAX_DRIVER_NAME_LEN         260
+#define MAX_DEVICE_NAME_LEN         260
+#define MAX_PATH_LEN                260
+#define MAX_TARGET_DEVICES 10
 
-NTSTATUS EnumFilterChains(
-    _In_ PDRIVER_OBJECT TargetDriver,
-    _Out_ PATTACH_DEVICE_INFO AttachInfo
-);
+// 单个设备节点信息（扁平化存储，无指针）
+typedef struct _ATTACHED_DEVICE_NODE {
+    BOOLEAN IsOriginalDevice;           // 是否为原始设备
+    PDEVICE_OBJECT DeviceObject;        // 设备对象地址（R3需要转换）
+    PDRIVER_OBJECT DriverObject;        // 驱动对象地址（R3需要转换）
+    WCHAR DriverName[MAX_DRIVER_NAME_LEN];   // 驱动名称
+    WCHAR DriverPath[MAX_PATH_LEN];          // 驱动完整路径
+    WCHAR DeviceName[MAX_DEVICE_NAME_LEN];   // 设备名称
+    ULONG Level;                        // 层级
+    PDEVICE_OBJECT ParentDeviceObject;         // 父设备对象地址（0 表示根）
+} ATTACHED_DEVICE_NODE, * PATTACHED_DEVICE_NODE;
+
+// 驱动信息头（全局返回数据）
+typedef struct _GLOBAL_ATTACH_INFO {
+    ULONG   DriverCount;         // 驱动总数
+    ULONG   TotalSize;           // 总数据大小（包括头部、所有驱动信息块及设备节点数组）
+} GLOBAL_ATTACH_INFO, * PGLOBAL_ATTACH_INFO;
+
+// 单个驱动信息
+typedef struct _DRIVER_ATTACH_INFO {
+    WCHAR   DriverName[260];     // 驱动名称
+    UINT64  DriverObject;        // 驱动对象地址（64位）
+    ULONG   DeviceCount;         // 该驱动拥有的设备节点数
+    // 之后紧跟 DeviceCount 个 ATTACHED_DEVICE_NODE 结构
+} DRIVER_ATTACH_INFO, * PDRIVER_ATTACH_INFO;
+
+// 内部映射条目（链表）
+typedef struct _DEVICE_ATTACHMENT_ENTRY {
+    PDEVICE_OBJECT AttachedToDevice;      // 被附加的底层设备
+    PDEVICE_OBJECT ParentDeviceObject;    // 父节点
+    PDEVICE_OBJECT AttacherDevice;        // 附加者设备
+    PDRIVER_OBJECT AttacherDriver;        // 附加者驱动
+    WCHAR AttacherDriverName[MAX_DRIVER_NAME_LEN];
+    WCHAR DeviceObjectName[MAX_DEVICE_NAME_LEN];
+    ULONG Level;                          // 计算出的层级
+    struct _DEVICE_ATTACHMENT_ENTRY* Next;
+} DEVICE_ATTACHMENT_ENTRY, * PDEVICE_ATTACHMENT_ENTRY;
+
+// 全局状态
+static BOOLEAN g_MapInitialized = FALSE;
+static KSPIN_LOCK g_AttachmentMapLock;
+static PDEVICE_ATTACHMENT_ENTRY g_AttachmentMap = NULL;
+static BOOLEAN g_GlobalMapBuilt = FALSE;  // 标记是否已构建全局映射
+
+NTSTATUS BuildGlobalDeviceAttachmentMap();
+VOID FreeGlobalDeviceAttachmentMap();
+NTSTATUS CalculateGlobalDataSize(OUT PULONG pTotalSize);
+ULONG CalculateDeviceLevel(PDEVICE_OBJECT StackTop, PDEVICE_OBJECT TargetDev);
+NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pBytesWritten);

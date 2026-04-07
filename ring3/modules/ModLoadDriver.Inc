@@ -14,6 +14,7 @@ End Function
 
 Function IoControl(ByVal hDrvHandle As HANDLE, ByVal dwIoControlCode As DWORD, ByVal lpInBuffer As LPVOID = NULL, ByVal nInBufferSize As DWORD = 0, ByVal lpOutBuffer As LPVOID = NULL, ByVal nOutBufferSize As DWORD = 0, ByVal lpBytesReturned As LPDWORD = NULL) As WINBOOL
     Dim lDrvRetSize As DWORD, ret As WINBOOL
+    SetLastError 0 ' 先清零错误码,免得被误导
     ret = DeviceIoControl(hDrvHandle, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, @lDrvRetSize, 0)
     If lpBytesReturned <> NULL Then *lpBytesReturned = lDrvRetSize
     Return ret
@@ -68,13 +69,13 @@ End Sub'/
 
 Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As Boolean
     Function = True
-    If Not IsAdmin Then
+    /'If Not IsAdmin Then
         If AfxMsg("需要管理员权限,是否重启进程以获取?", "提示", MB_YESNO) = IDYES Then
             RestartasAdmin True
         Else
             Return False
         End If
-    End If
+    End If'/
     Dim hNtdll As HMODULE = DyLibLoad("ntdll.dll")
     If (hNtdll = NULL) Then
         Print "DyLibLoad(NTDLL.DLL) Error: " & GetLastError

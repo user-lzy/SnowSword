@@ -5,6 +5,7 @@
 '#include Once "win/wintrust.bi"
 #include Once "win/winver.bi"
 '#include "win/ddk/winddk.bi"
+#include Once "win/strsafe.bi"
 
 Private Const MAX_PATH As Integer = 260
 Dim Shared hThread As Any Ptr
@@ -31,29 +32,32 @@ End Type
 
 Type PLIST_ENTRY As LIST_ENTRY Ptr
 
-Type PEB64_LDR_DATA
-    Reserved1(7) As Byte
-    Reserved2(2) As PVOID
+Type PEB_LDR_DATA64
+    Length As ULong
+    Initialized As UByte
+    SsHandle As ULONG_PTR
+    InLoadOrderModuleList As LIST_ENTRY
     InMemoryOrderModuleList As LIST_ENTRY
+    InInitializationOrderModuleList As LIST_ENTRY
 End Type
-Type PPEB64_LDR_DATA As PEB64_LDR_DATA Ptr
+Type PPEB_LDR_DATA64 As PEB_LDR_DATA64 Ptr
 
-Type LDR_DATA_TABLE_ENTRY
-    Reserved1(1) As PVOID
+Type LDR_DATA_TABLE_ENTRY64
+    InLoadOrderLinks As LIST_ENTRY
     InMemoryOrderLinks As LIST_ENTRY
-    Reserved2(1) As PVOID
-    DllBase As PVOID
-    Reserved3(1) As PVOID
+    InInitializationOrderLinks As LIST_ENTRY
+    DllBase As ULONG64
+    EntryPoint As ULONG64
+    SizeOfImage As ULong
     FullDllName As UNICODE_STRING
-    Reserved4(7) As Byte
-    Reserved5(2) As PVOID
-    Union DUMMYUNIONNAME
-        CheckSum As ULong
-        Reserved6 As PVOID
-    End Union
+    BaseDllName As UNICODE_STRING
+    FLAGS As ULong
+    LoadCount As UShort
+    TlsIndex As UShort
+    HashLinks As LIST_ENTRY
     TimeDateStamp As ULong
 End Type
-Type PLDR_DATA_TABLE_ENTRY As LDR_DATA_TABLE_ENTRY Ptr
+Type PLDR_DATA_TABLE_ENTRY64 As LDR_DATA_TABLE_ENTRY64 Ptr
 
 Type RTL_USER_PROCESS_PARAMETERS
     Reserved1(15) As Byte
@@ -68,7 +72,7 @@ Type PEB64
     BeingDebugged As Byte
     Reserved2 As Byte
     Reserved3(1) As PVOID
-    Ldr As PPEB64_LDR_DATA
+    Ldr As PPEB_LDR_DATA64
     ProcessParameters As PRTL_USER_PROCESS_PARAMETERS
     Reserved4(2) As PVOID
     AtlThunkSListPtr As PVOID
@@ -110,15 +114,11 @@ Type SYSTEM_THREAD_INFORMATION
     WaitTime As ULong
     StartAddress As PVOID
     ClientID As CLIENT_ID
-    Priority As Integer 'KPRIORITY
+    Priority As Long 'KPRIORITY
     BasePriority As Long ' KPRIORITY
     ContextSwitchCount As ULong
-    ThreadState As ULong
+    ThreadState As ULong ' THREAD_STATE
     WaitReason As ULong ' KWAIT_REASON
-    '#ifdef _WIN64
-    Reserved As ULong'Add
-    '#else
-    '#endif
 End Type
 
 Type VM_COUNTERS
@@ -156,9 +156,11 @@ Type SYSTEM_PROCESS_INFORMATION
 End Type
 
 Type PROCESS_TIMER
-    ThreadId As HANDLE
-    Period As ULong
-    Func As ULONG64
+    pfn As ULONG64 ' 回调函数地址
+    nTimeout As ULong ' 超时时间(ms)
+    nIDEvent As ULONG64 ' 定时器ID
+    ThreadId As ULONG64 ' 线程ID
+    param As ULONG_PTR ' 线程参数
 End Type
 
 Public Enum PROCESSINFOCLASS
@@ -212,10 +214,12 @@ Declare Function ZwResumeProcess Lib "ntdll.dll" Alias "ZwResumeProcess"(ByVal h
 Declare Function ZwOpenProcess Lib "ntdll.dll" Alias "ZwOpenProcess"(ByVal ProcessHandle As PHANDLE, ByVal DesiredAccess As ACCESS_MASK, ByVal ObjectAttributes As POBJECT_ATTRIBUTES, ByVal ClientId As PCLIENT_ID) As NTSTATUS
 Declare Function ZwTerminateProcess Lib "ntdll.dll" Alias "ZwTerminateProcess"(ByVal ProcessHandle As HANDLE, ByVal ExitStatus As NTSTATUS) As NTSTATUS
 Declare Function ZwClose Lib "ntdll.dll" Alias "ZwClose"(ByVal HANDLE As HANDLE) As NTSTATUS
-Declare Function ZwQuerySystemInformation1 Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
+Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
 Declare Function ZwQueryInformationProcess Lib "ntdll.dll" Alias "ZwQueryInformationProcess"(ByVal ProcessHandle As HANDLE,ByVal ProcessInformationClass As PROCESSINFOCLASS,_
 ByVal ProcessInformation As LPVOID, ByVal ProcessInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS
-Declare Function _IsProcessCritical Lib "kernel32" Alias "IsProcessCritical"(ByVal hProcess As HANDLE, ByVal Critical As PBOOLEAN) As BOOLEAN
+Declare Function _IsProcessCritical Lib "kernel32" Alias "IsProcessCritical"(ByVal hProcess As HANDLE, ByVal Critical As PBOOLEAN) As Boolean
+Declare Function GetProcessIdOfThread Lib "kernel32" Alias "GetProcessIdOfThread"(ByVal Thread As HANDLE) As DWORD
+
 'End Extern
 CONST OBJ_KERNEL_HANDLE = &h00000200
 #define SYSTEM_CALL_OPENPROCESS &H26
@@ -312,12 +316,49 @@ Function MyOpenProcess(ByVal dwDesiredAccess As DWORD = PROCESS_ALL_ACCESS, ByVa
 
     '调用 ZwOpenProcess 打开进程
     Dim st As NTSTATUS = MyZwOpenProcess(@ProcessHandle, dwDesiredAccess, @ObjectAttributes, @ClientId)
-    'Print Hex(st)
+    Print Hex(st)
     If (Not NT_SUCCESS(st)) Then
         Print "MyZwOpenProcess Failed!(" & Hex(st) & ")"
         Return NULL
     End If
     Return ProcessHandle
+End Function
+
+Function LzOpenProcess(PID As DWORD) As HANDLE
+    Dim st As NTSTATUS
+    
+    Dim bufferSize As ULong = &H1000
+    Dim buffer As PVOID = Allocate(bufferSize)
+    Do
+        bufferSize *= 2
+        'ReDim buffer(bufferSize - 1) As Byte
+        buffer = Reallocate(buffer, bufferSize)
+        st = ZwQuerySystemInformation(16, buffer, bufferSize, NULL)
+        'Print bufferSize & " " & Hex(st)
+    Loop While st = STATUS_INFO_LENGTH_MISMATCH
+    
+    Dim pHandleEntry As SYSTEM_HANDLE_INFORMATION Ptr = CPtr(SYSTEM_HANDLE_INFORMATION Ptr, buffer)
+    Dim j As Integer
+    'ReDim PIDs(100) As DWORD
+    For i As Integer = 0 To pHandleEntry->NumberOfHandles - 1
+        Dim MyHandle As HANDLE = NULL, ProcessId As DWORD, ThreadId As DWORD
+        Dim hProcess As HANDLE = OpenProcess(PROCESS_DUP_HANDLE, False, pHandleEntry->Handles(i).UniqueProcessId)
+        If hProcess = NULL Then Continue For
+        
+        If DuplicateHandle(hProcess, Cast(HANDLE, Cast(ULONG_PTR, pHandleEntry->Handles(i).HandleValue)), GetCurrentProcess, @MyHandle, 0, False, DUPLICATE_SAME_ACCESS) = 0 Then Continue For
+        
+        ProcessId = GetProcessId(MyHandle)
+        If ProcessId = PID Then '找到目标句柄
+            Deallocate buffer
+            Return MyHandle
+        Else
+            CloseHandle MyHandle
+        End If
+
+        'FF_DoEvents
+    Next
+    Deallocate buffer
+    Return NULL
 End Function
 
 Function SnowSword_OpenProcess(ByVal ProcessId As DWORD) As HANDLE
@@ -342,15 +383,15 @@ Function ForceKillProcess(ByVal dwProcessId As DWORD) As Boolean
 
     '调用 ZwOpenProcess 打开进程
     Dim st As NTSTATUS = MyZwOpenProcess(@ProcessHandle, PROCESS_TERMINATE, @ObjectAttributes, @ClientId)
-    'Print Hex(st)
+    Print Hex(st)
     If (Not NT_SUCCESS(st)) Then
         Print "ZwOpenProcess Failed!(" & Hex(st) & ")"
         Return False
     End If
-    'Print ProcessHandle
+    Print ProcessHandle
     '调用 ZwTerminateProcess 结束进程
     st = MyZwTerminateProcess(ProcessHandle, 0)
-    'Print Hex(st)
+    Print Hex(st)
     If (Not NT_SUCCESS(st)) Then
         Print "ZwTerminateProcess Failed!(" & Hex(st) & ")"
         ZwClose ProcessHandle
@@ -387,8 +428,88 @@ Function IsProcessCritical(ByVal dwProcessId As DWORD, ByVal IsCritical As PBOOL
     Function = _IsProcessCritical(hProcess, IsCritical)
     Print *IsCritical
 End Function
+
+' 获取系统原生架构（核心验证函数）
+Private Function GetSystemNativeArch() As UShort
+    Dim sysinfo As SYSTEM_INFO
+    GetNativeSystemInfo(@sysinfo) ' 关键：GetNativeSystemInfo获取硬件原生架构，而非兼容层架构
+    Return sysinfo.wProcessorArchitecture
+End Function
+
+Function IsProcessWow64_Ex(ByVal hProcess As HANDLE) As Boolean
+    Type IsWow64Process2_Func As Function stdcall( _
+        ByVal hProcess        As HANDLE, _
+        ByVal pProcessMachine As UShort Ptr, _
+        ByVal pNativeMachine  As UShort Ptr _
+        ) As BOOL
+        
+    Const PROCESSOR_ARCHITECTURE_ARM64 As UShort = 12
     
-Private Function GetPEB(ByVal dwProcessId As DWORD) As Any Ptr
+    Dim bResult As Boolean = False
+    Dim pIsWow64Process2 As IsWow64Process2_Func = 0
+    Dim hKernel32 As HMODULE
+    Dim bApiSuccess As BOOL
+    Dim sysArch As UShort
+    Dim uProcessMachine As UShort = IMAGE_FILE_MACHINE_UNKNOWN
+    Dim uNativeMachine As UShort = IMAGE_FILE_MACHINE_UNKNOWN
+    Dim bWow64 As BOOL = 0 
+    
+    ' 1. 获取 kernel32.dll 句柄
+    hKernel32 = GetModuleHandle("kernel32.dll")
+    If hKernel32 = 0 Then
+        Print "错误：获取 kernel32.dll 句柄失败"
+        Goto UseFallBack ' 降级到 IsWow64Process
+    End If
+    
+    ' 2. 获取 IsWow64Process2 函数地址
+    pIsWow64Process2 = Cast(IsWow64Process2_Func, GetProcAddress(hKernel32, "IsWow64Process2"))
+    If pIsWow64Process2 = 0 Then
+        Print "提示：系统不支持 IsWow64Process2，使用降级方案"
+        GoTo UseFallBack
+    End If
+    
+    ' 3. 调用 IsWow64Process2（输出参数为 IMAGE_FILE_MACHINE_*）
+    bApiSuccess = pIsWow64Process2(hProcess, @uProcessMachine, @uNativeMachine)
+    
+    If bApiSuccess <> 0 Then
+        ' 打印文档规范的调试信息
+        /'Print "【符合微软文档 - IsWow64Process2 输出】"
+        Print "  进程PE机器类型：" & ImageMachineToName(uProcessMachine)
+        Print "  系统原生机器类型：" & ImageMachineToName(uNativeMachine)
+        Print "  系统原生架构：" & IIf(GetSystemNativeArch()=PROCESSOR_ARCHITECTURE_AMD64, "x64", "未知")'/
+        
+        ' 4. 核心判断逻辑（WOW64 本质：进程是32位，系统是64位）
+        sysArch = GetSystemNativeArch()
+        Select Case sysArch
+            Case PROCESSOR_ARCHITECTURE_AMD64 ' x64 系统
+                ' x64系统下，进程是 x86(0x014C) 即为 WOW64
+                bResult = (uProcessMachine = IMAGE_FILE_MACHINE_I386)
+            Case PROCESSOR_ARCHITECTURE_ARM64 ' ARM64 系统
+                ' ARM64系统下，进程是 x86/ARM32 即为 WOW64
+                bResult = (uProcessMachine = IMAGE_FILE_MACHINE_I386) Or (uProcessMachine = IMAGE_FILE_MACHINE_ARM)
+            Case Else ' 32位系统
+                bResult = False
+        End Select
+        
+        Print "  是否为 WOW64 进程：" & IIf(bResult, "是", "否")
+        Return bResult
+    Else
+        Print "错误：调用 IsWow64Process2 失败，错误码：" & GetLastError()
+        GoTo UseFallBack
+    End If
+
+UseFallBack:
+    ' 降级方案：使用 IsWow64Process
+    If IsWow64Process(hProcess, @bWow64) <> 0 Then
+        bResult = (bWow64 <> 0)
+        Print "【降级方案 - IsWow64Process 输出】是否 WOW64：" & IIf(bResult, "是", "否")
+    Else
+        Print "错误：降级方案调用失败，错误码：" & GetLastError()
+    End If
+    Return bResult
+End Function
+    
+Function GetPEB(ByVal dwProcessId As DWORD) As Any Ptr
     Dim pbi As PROCESS_BASIC_INFORMATION
     Dim hProcess As HANDLE
     If IsDriverLoaded Then
@@ -414,6 +535,55 @@ Private Function GetEProcess(ByVal ProcessId As DWORD) As ULONG64
     If ProcessId = 1892 Then Print "The EPROCESS Of Process 1852:" & Hex(pEProcess)
     Return pEProcess
 End Function
+
+Private Sub GetPIDList1(PIDs() As DWORD)
+    Dim st As NTSTATUS
+    
+    Dim bufferSize As ULong = &H1000
+    Dim buffer As PVOID = Allocate(bufferSize)
+    Do
+        bufferSize *= 2
+        'ReDim buffer(bufferSize - 1) As Byte
+        buffer = Reallocate(buffer, bufferSize)
+        st = ZwQuerySystemInformation(16, buffer, bufferSize, NULL)
+        Print bufferSize & " " & Hex(st)
+    Loop While st = STATUS_INFO_LENGTH_MISMATCH
+    
+    Dim pHandleEntry As SYSTEM_HANDLE_INFORMATION Ptr = CPtr(SYSTEM_HANDLE_INFORMATION Ptr, buffer)
+    Dim j As Integer
+    ReDim PIDs(100) As DWORD
+    For i As Integer = 0 To pHandleEntry->NumberOfHandles - 1
+        Dim MyHandle As HANDLE = NULL, ProcessId As DWORD, ThreadId As DWORD
+        Dim hProcess As HANDLE = OpenProcess(PROCESS_DUP_HANDLE, False, pHandleEntry->Handles(i).UniqueProcessId)
+        If hProcess = NULL Then Continue For
+        
+        If DuplicateHandle(hProcess, Cast(HANDLE, Cast(ULONG_PTR, pHandleEntry->Handles(i).HandleValue)), GetCurrentProcess, @MyHandle, 0, False, DUPLICATE_SAME_ACCESS) = 0 Then Continue For
+        
+        ProcessId = GetProcessId(MyHandle)
+        If (Not IsDWORDInArray(ProcessId, PIDs())) AndAlso ProcessId <> 0 Then
+            'Print "找到PID:" & ProcessId & " EPROCESS:" & WHex(pHandleEntry->Handles(i).pObject)
+            If j > UBound(PIDs) Then ReDim Preserve PIDs(UBound(PIDs) + 50)
+            PIDs(j) = ProcessId
+            j += 1
+            Continue For
+        End If
+        
+        'ThreadId = GetThreadId(MyHandle)
+        ProcessId = GetProcessIdOfThread(MyHandle)
+        If (Not IsDWORDInArray(ProcessId, PIDs())) AndAlso ProcessId <> 0 Then
+            'Print "找到PID:" & ProcessId & " EPROCESS:" & WHex(pHandleEntry->Handles(i).pObject)
+            If j > UBound(PIDs) Then ReDim Preserve PIDs(UBound(PIDs) + 50)
+            PIDs(j) = ProcessId
+            j += 1
+            Continue For
+        End If
+
+        'FF_DoEvents
+    Next
+    Print "共从句柄表中找到" & j + 1 & "个进程:"
+    'QuickSortWrapper PIDs()
+    'PrintArray PIDs()
+End Sub
 
 Private Function GetPIDList2(PID() As DWORD) As Integer
     Dim hProcess As HANDLE, j As Integer, k As Integer = 100
@@ -444,7 +614,7 @@ Private Function GetPIDList3(PID() As DWORD) As Integer
             ReDim Preserve PID(k)
         End If
         If pEProcess <> 0 Then
-            'Print i & " 0x" & Hex(pEProcess)
+            Print i & " 0x" & Hex(pEProcess)
             PID(j) = i
             j += 1
         End If
@@ -454,12 +624,26 @@ Private Function GetPIDList3(PID() As DWORD) As Integer
 End Function
 
 Function GetNameByPath(ByVal ProcessPath As StringW) As StringW
-    If ProcessPath = "" Then
-        Return ""
-    ElseIf InStr(ProcessPath, ":") = 0 Then
-        Return ProcessPath
+    ' 临时变量存储处理后的路径
+    Dim tempPath As StringW = ProcessPath
+    ' 空路径直接返回空
+    If tempPath = "" Then Return ""
+    
+    ' 第一步：移除路径末尾的反斜杠（处理边界情况：如 \\Server\Share\ 或 C:\Test\）
+    /'While RightW(tempPath, 1) = "\"
+        tempPath = LeftW(tempPath, LenW(tempPath) - 1)
+    Wend'/
+    
+    ' 第二步：查找最后一个反斜杠的位置（统一适配本地路径和UNC路径）
+    Dim lastBackslashPos As Integer = InStrRevW(tempPath, "\")
+    
+    ' 第三步：提取文件名
+    If lastBackslashPos > 0 Then
+        ' 存在反斜杠，取最后一个反斜杠右侧的部分（文件名）
+        Return RightW(tempPath, LenW(tempPath) - lastBackslashPos)
     Else
-        Return RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
+        ' 无反斜杠（仅文件名，无路径），返回原路径
+        Return tempPath
     End If
 End Function
 
@@ -471,29 +655,23 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
         Case 4
             Return "System"
     End Select
-    '设置要打开的进程的客户端 ID
-    ClientId.UniqueProcess = Cast(HANDLE, Cast(Integer, ProcessId))
-    ClientId.UniqueThread = NULL
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(ProcessId)
+    Else
+        '设置要打开的进程的客户端 ID
+        ClientId.UniqueProcess = Cast(HANDLE, Cast(Integer, ProcessId))
+        ClientId.UniqueThread = NULL
 
-    '初始化 OBJECT_ATTRIBUTES 结构
-    InitializeObjectAttributes(@ObjectAttributes, NULL, OBJ_KERNEL_HANDLE)
+        '初始化 OBJECT_ATTRIBUTES 结构
+        InitializeObjectAttributes(@ObjectAttributes, NULL, OBJ_KERNEL_HANDLE)
 
-    '调用 ZwOpenProcess 打开进程
-    Dim st As NTSTATUS = ZwOpenProcess(@hProcess, PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, @ObjectAttributes, @ClientId)
-    If (Not NT_SUCCESS(st)) Then
-        'Print "ZwOpenProcess Failed!(" & Hex(st) & ")"
-        If IsDriverLoaded Then
-            hProcess = SnowSword_OpenProcess(ProcessId)
-            If hProcess <= 0 Then Return ""
-        Else
+        '调用 ZwOpenProcess 打开进程
+        Dim st As NTSTATUS = ZwOpenProcess(@hProcess, PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, @ObjectAttributes, @ClientId)
+        If (Not NT_SUCCESS(st)) Then
+            Print "ZwOpenProcess Failed!(" & Hex(st) & ")"
             Return ""
         End If
     End If
-    /'If hProcess Then
-        Dim FilePath As WString * MAX_PATH
-        GetModuleFileNameExW(hProcess, NULL, @FilePath, MAX_PATH)
-        Return FilePath
-    End If'/
     
     If hProcess Then
         Dim pathBuffer As WString * MAX_PATH
@@ -507,39 +685,10 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
         NtPathToDosPathW @pathBuffer, @ProcessPath
         Return ProcessPath
     End If
-    
-    /'If hProcess Then
-        Dim retLength As ULong
-        Dim st As NTSTATUS
-        Dim imageName As UNICODE_STRING
-        Dim pathBuffer As WString * MAX_PATH
-        Dim nameLength As UShort
-
-        st = ZwQueryInformationProcess(hProcess, ProcessImageFileName, @imageName, SizeOf(UNICODE_STRING), retLength)
-        If st <> 0 Then
-            Print "Failed to get process image name."
-            Return ""
-        End If
-
-        If imageName.Buffer = 0 Then
-            Print "Image name buffer is null."
-            Return ""
-        End If
-
-        nameLength = imageName.Length
-        If nameLength = 0 Then
-            Print "Image name is empty."
-            Return ""
-        End If
-
-        CopyMemory(@pathBuffer, imageName.Buffer, nameLength)
-        pathBuffer[nameLength / 2] = 0
-        Return pathBuffer
-    End If'/
     Return ""
 End Function
 
-Function GetParentProcessId(ByVal PID As DWORD, ByRef ParentPID As DWORD) As BOOLEAN
+Function GetParentProcessId(ByVal PID As DWORD, ByRef ParentPID As DWORD) As Boolean
     Dim pbi As PROCESS_BASIC_INFORMATION, st As NTSTATUS, ret As DWORD, hProcess As HANDLE
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(PID)
@@ -547,7 +696,7 @@ Function GetParentProcessId(ByVal PID As DWORD, ByRef ParentPID As DWORD) As BOO
         hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, PID)
     End If
     If (hProcess <= 0) Then
-        'Print "[GetParentProcessId]OpenProcess:" & WinErrorMsg(GetLastError)
+        Print "[GetParentProcessId]OpenProcess:" & WinErrorMsg(GetLastError)
         Return False
     End If
     st = ZwQueryInformationProcess(hProcess, BasicInformation, @pbi, SizeOf(pbi), ret)
@@ -560,14 +709,14 @@ Function GetParentProcessId(ByVal PID As DWORD, ByRef ParentPID As DWORD) As BOO
 End Function
 
 ' 枚举进程及其线程
-Sub EnumThread(ByVal dwProcessId As DWORD)
+Sub EnumThread1(ByVal dwProcessId As DWORD)
     Dim As Long status
     Dim As ULong bufferSize = 0, returnLength = 0
     Dim As Any Ptr buffer = NULL
     Dim As SYSTEM_PROCESS_INFORMATION Ptr procInfo
     
     ' 第一次调用：获取所需缓冲区大小
-    status = ZwQuerySystemInformation1(SystemProcessesAndThreadsInformation, 0, 0, @returnLength)
+    status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, 0, 0, @returnLength)
     If status <> STATUS_INFO_LENGTH_MISMATCH Then  ' 表示需要更大缓冲区
         Print "获取缓冲区大小失败，错误码: " & Hex(status)
         Return
@@ -580,9 +729,9 @@ Sub EnumThread(ByVal dwProcessId As DWORD)
         Print "内存分配失败"
         Return
     End If
-    Print returnLength
+    Print returnLength & " " & returnLength / SizeOf(SYSTEM_PROCESS_INFORMATION)
     ' 第二次调用：获取进程信息
-    status = ZwQuerySystemInformation1(SystemProcessesAndThreadsInformation, buffer, bufferSize, @returnLength)
+    status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, buffer, bufferSize, @returnLength)
     If status <> 0 Then  ' 0表示STATUS_SUCCESS
         Print "获取进程信息失败，错误码: " & Hex(status)
         Deallocate buffer
@@ -590,42 +739,67 @@ Sub EnumThread(ByVal dwProcessId As DWORD)
     End If
     
     ' 遍历进程信息链表
-    /'procInfo = CPtr(SYSTEM_PROCESS_INFORMATION Ptr, buffer)
-    For j As ULong = 0 To returnLength / SizeOf(SYSTEM_PROCESS_INFORMATION)
-        'If procInfo[j].ProcessId <> dwProcessId Then Continue For
-        Print "PID:" & procInfo[j].ProcessId
-        ' 遍历当前进程的线程
-        For i As ULong = 0 To procInfo[j].ThreadCount - 1
-            Print "线程ID: " & procInfo[j].Threads(i).ClientID.UniqueThread & ", 切换次数: " & procInfo[j].Threads(i).ContextSwitchCount
-        Next
-        If procInfo[j].NextEntryDelta = NULL Then Exit For
-    Next'/
-' 遍历进程信息链表
     procInfo = buffer
-    Do
+    Do While True
         ' 解析进程信息
         'Dim As LPWSTR processName = Allocate(SizeOf(WString) * procInfo->ProcessName.Length)
         '*processName = *(procInfo->ImageName.buffer)
         Print "0x" & Hex(procInfo)
-        Print "进程ID: " & procInfo->ProcessId' & ", 名称: " & IIf(processName = "", "(未知)", processName)
+        Dim processName As WString * MAX_PATH
+        StringCbCopyNW @processName, MAX_PATH, procInfo->processName.buffer, procInfo->processName.Length
+        Print "进程ID: " & procInfo->ProcessId & ", 名称: " & processName
         Print "  线程数: " & procInfo->ThreadCount
-        'AfxMsg "1"
+        Dim threadInfo As SYSTEM_THREAD_INFORMATION Ptr = @procInfo->Threads(0)' = Cast(SYSTEM_THREAD_INFORMATION Ptr, Cast(ULONG_PTR, procInfo) + SizeOf(SYSTEM_PROCESS_INFORMATION))
         ' 遍历当前进程的线程
-        'For i As ULong = 0 To procInfo->ThreadCount - 1
-        '    Print "线程ID: " & procInfo->Threads(i).ClientID.UniqueProcess' & ", 切换次数: " & procInfo->Threads(i).ContextSwitchCount
-        'Next
+        If procInfo->ProcessId = dwProcessId Then
+            For i As ULong = 0 To procInfo->ThreadCount - 1
+                Print "线程ID: " & threadInfo->ClientID.UniqueThread & ", 切换次数: " & threadInfo->ContextSwitchCount & ", 起始地址:0x" & WHex(threadInfo->StartAddress)
+                threadInfo += 1
+            Next
+        End If
         
         ' 移动到下一个进程（偏移量为0表示结束）
         If procInfo->NextEntryDelta = 0 Then Exit Do
         procInfo = Cast(SYSTEM_PROCESS_INFORMATION Ptr, Cast(Byte Ptr, procInfo) + procInfo->NextEntryDelta)
-    Loop While True
+    Loop
     
     Deallocate buffer
 End Sub
 
-Public Sub GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) ' As Integer
+' 核心函数：判断指定PID的进程是否存活
+Function IsProcessAlive(ByVal dwProcessId As DWORD) As Boolean
+    Dim hProcess As HANDLE
+    Dim dwExitCode As DWORD
+    Dim bAlive As Boolean = False
+    
+    ' 1. 打开进程，获取进程句柄
+    ' PROCESS_QUERY_LIMITED_INFORMATION：Windows Vista+ 推荐的低权限查询权限
+    ' PROCESS_QUERY_INFORMATION：兼容旧系统（XP/2003）
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, dwProcessId)
+    End If
+    
+    If hProcess <> NULL Then
+        ' 2. 查询进程的退出码
+        If GetExitCodeProcess(hProcess, @dwExitCode) Then
+            ' 3. 判断：退出码为STILL_ACTIVE（259）表示进程仍在运行
+            If dwExitCode = STILL_ACTIVE Then bAlive = True
+        End If
+        
+        ' 4. 关闭进程句柄（必须释放，避免资源泄漏）
+        CloseHandle hProcess
+    End If
+    
+    Return bAlive
+End Function
+
+Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
     Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
+    Dim ProcessCount As Integer = 0
     Dim dwPID As DWORD
+    Dim strPID As StringW
     Dim strEProcess As StringW
     Dim dwParentPID As DWORD
     Dim strParentPID As StringW
@@ -637,91 +811,69 @@ Public Sub GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess
     Dim errCode As Long
     
     'lvwProcess.ReDraw = False
-    lvwProcess.DeleteAllItems
-    InitDataNode lvwProcess
+    
+    InitListViewData lvwProcess
+    
     GetAllPID ProcessPath(), PID1(), 0
     
     If IsCheckHideProcess Then
-        If IsDriverLoaded Then GetPIDList3 PID2() Else GetPIDList2 PID2()
+        If IsDriverLoaded Then GetPIDList3 PID2() Else GetPIDList1 PID2()' GetPIDList2 PID2()
         For i As Integer = 0 To UBound(PID1) - 1
             Dim ForeColor As COLORREF = FB_Black
             Dim BackColor As COLORREF = FB_White
+            
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            
             dwPID = PID1(i + 1)
-            If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
-            strEProcess = "0x" & WHex(GetEProcess(dwPID))
+            strPID = WStr(dwPID)
+            If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
+            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
             strPath = ProcessPath(i + 1)
-            If InStr(strPath, ":") = 0 Then
-                strPath = GetProcessPath(dwPID)
-                If InStr(strPath, ":") = 0Then
-                    strName = ProcessPath(i + 1)
-                Else
-                    strName = GetNameByPath(strPath)
-                End If
-            Else
-                strPath = GetProcessPath(dwPID)
-                strName = GetNameByPath(strPath)
-                strCompany = GetFileCompany(strPath)
-            End If
-            'Print strPath
-            If (strCompany <> "Microsoft Corporation") AndAlso (dwPID <> 0) OrElse _
-            (strCompany <> "") AndAlso (Not VerifyFileSign(strPath)) Then SetItemColor lvwProcess, i, ForeColor, FB_GoldenYellow
-            lvwProcess.AddItem WStr(dwPID)
-            lvwProcess.SetItemText i, 1, WStr(dwParentPID)
-            lvwProcess.SetItemText i, 2, strEProcess
-            lvwProcess.SetItemText i, 3, strName
-            lvwProcess.SetItemText i, 4, strPath
-            lvwProcess.SetItemText i, 5, strCompany
-            strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            If InStr(strPath, ":") = 0 Then strPath = GetProcessPath(dwPID)
+            strName = GetNameByPath(strPath)
+            strCompany = GetFileCompany(strPath)
+
+            AddItemColListEx lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(""), WStr(strCompany)
+            ProcessCount += 1
         Next
+        
         For i As Integer = 0 To UBound(PID2)
             For j As Integer = 1 To UBound(PID1)
                 If PID2(i) = PID1(j) Then Continue For, For ' 如果找到了证明不是隐藏进程
             Next
+            
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            
             dwPID = PID2(i)
+            If Not IsProcessAlive(dwPID) Then Continue For
+            Print "隐藏进程:" & dwPID
             If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
             If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
             strPath = GetProcessPath(dwPID)
             If InStr(strPath, ":") = 0 Then
-                strPath = GetProcessPath(dwPID)
-                If InStr(strPath, ":") = 0 Then
-                    strName = ProcessPath(i + 1)
-                Else
-                    strName = GetNameByPath(strPath)
-                End If
+                strName = ProcessPath(i + 1)
             Else
                 strName = GetNameByPath(strPath)
                 strCompany = GetFileCompany(strPath)
             End If
             'strCommandLine = GetComman
-            'CurrentListViewItem.BackColor = BGR(0, 255, 0) ' 绿色
-            SetItemColor lvwProcess, lvwProcess.ItemCount - 1, FB_Red, FB_White
-            lvwProcess.AddItem WStr(dwPID)
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 1, WStr(dwParentPID)
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 2, strEProcess
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 3, strName
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 4, strPath
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 6, strCompany
-            'CurrentListViewItem.BackColor = FB_White
-            strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            ' lvwProcess.ItemCount - 1
+            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath),WStr(""), WStr(strCompany))
+            SetItemColor lvwProcess, ItemIndex, FB_Red, FB_White
+            ProcessCount += 1
         Next
     Else
-        'ReDim CurrentListViewItem(UBound(PID1) - 1) As ListViewItemInfo
-        'For i As Long = 0 To UBound(CurrentListViewItem)
-            'CurrentListViewItem(i).BackColor = FB_White
-            'If i Mod 2 = 0 Then CurrentListViewItem(i).BackColor = FB_GoldenYellow
-        'Next
-        Dim ItemIndex As Integer
-        lvwProcess.AddItemCount UBound(PID1)
         For i As Integer = 0 To UBound(PID1) - 1
             Dim ForeColor As COLORREF = FB_Black
             Dim BackColor As COLORREF = FB_White
+            
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            
             dwPID = PID1(i + 1)
-            If PID1(i + 1) = 1004 Then Print GetProcessPath(dwPID) & " " & ProcessPath(i + 1)
             If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
             If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
             strPath = ProcessPath(i + 1)
             strPath1 = GetProcessPath(dwPID)
-            'Print strPath & " " & strPath1
             If InStr(strPath, ":") = 0 Then
                 If InStr(strPath1, ":") = 0 Then
                     strName = ProcessPath(i + 1)
@@ -737,65 +889,16 @@ Public Sub GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess
             strName = GetNameByPath(strPath)
             strCompany = GetFileCompany(strPath)
             
-            'If ItemIndex = 1 Then SetItemColor lvwProcess, ItemIndex, ForeColor, FB_GoldenYellow
-            /'Dim Node As ListViewDataNode Ptr = FindListViewHwnd(lvwProcess)
-            If Node <> NULL Then Node->ItemColor(1).BackColor = FB_GoldenYellow'/
-            
-            lvwProcess.AddItemColList(,, WStr(dwPID), WStr(dwParentPID), strEProcess, strName, strPath,, strCompany)
+            AddItemColListEx lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(""), WStr(strCompany) ' 可以在第一次调用GetProcessList时直接AddItemColList
             'InvalidateRect lvwProcess.hWnd, NULL, True
-            strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
-            ItemIndex += 1
-            FF_DoEvents
+            ProcessCount += 1
+            'FF_DoEvents
         Next
     End If
     'lvwProcess.ReDraw = True
-End Sub
-        /'If IsCheckHideProcess Then GetPIDList2 PID2()
-        For i As Integer = 0 To UBound(PID1) - 1
-            dwPID = WStr(PID1(i + 1))
-            If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
-            'strEProcess = "0x" & WHex(GetEProcess(dwPID))
-            strPath = ProcessPath(i + 1)
-            If InStr(strPath, ":") = 0 Then
-                strName = strPath
-            Else
-                strName = Right(strPath, Len(strPath) - InStrRev(strPath, "\"))
-                strCompany = GetFileCompany(strPath)
-            End If
-            'If (strCompany <> "") AndAlso (Not VerifyPeSignature(strPath, errCode)) Then CurrentListViewItem.BackColor = BGR(255, 0, 0) ' 可疑进程
-            If (strPath <> "") AndAlso (Not VerifyPeSignature(strPath, errCode)) Then CurrentListViewItem.BackColor = FB_Red ' 可疑进程
-            lvwProcess.AddItem WStr(dwPID)
-            lvwProcess.SetItemText i, 1, WStr(ParentPID)
-            lvwProcess.SetItemText i, 2, strEProcess
-            lvwProcess.SetItemText i, 3, strName
-            lvwProcess.SetItemText i, 4, strPath
-            lvwProcess.SetItemText i, 5, strCompany
-            CurrentListViewItem.BackColor = FB_White
-        Next
-        If (Not IsCheckHideProcess) Then Exit 
-        For i As Integer = 0 To UBound(PID2)
-            For j As Integer = 1 To UBound(PID1)
-                If PID2(i) = PID1(j) Then Continue For, For ' 如果找到了证明不是隐藏进程
-            Next
-            dwPID = PID2(i)
-            If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
-            'strEProcess = "0x" & WHex(GetEProcess(dwPID))
-            strPath = GetProcessPath(dwPID)
-            If InStr(strPath, ":") = 0 Then
-                strName = strPath
-            Else
-                strName = Right(strPath, Len(strPath) - InStrRev(strPath, "\"))
-                strCompany = GetFileCompany(strPath)
-            End If
-            CurrentListViewItem.BackColor = BGR(0, 255, 0) ' 绿色
-            lvwProcess.AddItem WStr(dwPID)
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 1, WStr(dwParentPID)
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 2, strEProcess
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 3, strName
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 4, strPath
-            lvwProcess.SetItemText lvwProcess.ItemCount - 1, 5, strCompany
-            CurrentListViewItem.BackColor = FB_White
-        Next'/
+    CommitListViewView lvwProcess
+    Return ProcessCount
+End Function
 
 Public Function SuspendProcess(ByVal dwProcessId As DWORD) As Boolean
     Dim hProcess As HANDLE = NULL
@@ -951,18 +1054,47 @@ Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_List
             Exit Sub
         End If
     End If
-    Dim SomeThing As DO_SOMETHING, ProcessTimer() As PROCESS_TIMER, lpRet As DWORD
-    SomeThing.ProcessId = dwProcessId
-    IoControl hDrv, IOCTL_EnumProcessTimers, @SomeThing, SizeOf(DO_SOMETHING), NULL, 0, @lpRet
+
+    ' ############################## 核心修复2：变量定义 ##############################
+    Dim lpRet As DWORD                    ' IOCTL返回字节数
+    Dim ProcessTimer() As PROCESS_TIMER   ' 定时器数组
+    Dim TargetPid As ULONG64 = dwProcessId ' 内核需要8字节PID，强制转换
+
+    ' ############################## 核心修复3：第一次IOCTL - 获取数据长度 ##############################
+    ' 输入：TargetPid(8字节) | 输出：NULL，获取需要的总字节数
+    SetLastError 0
+    IoControl hDrv, IOCTL_EnumProcessTimers, @TargetPid, SizeOf(ULONG64), NULL, 0, @lpRet
+    If (lpRet = 0) Then
+        Print "[GetProcessTimerList]无定时器数据"
+        Exit Sub
+    End If
     If (GetLastError <> 0) Then
         Print "[GetProcessTimerList]第一次IoControl失败:" & WinErrorMsg(GetLastError) & GetLastError
         Exit Sub
     End If
-    Print lpRet & " " & SizeOf(PROCESS_TIMER)
-    'ReDim ProcessTimer(lpRet / SizeOf(PROCESS_TIMER) - 1) As PROCESS_TIMER
-    'IoControl hDrv, IOCTL_EnumProcessTimers,,,@ProcessTimer(0), (UBound(ProcessTimer) + 1) * SizeOf(PROCESS_TIMER), @lpRet
-    'For i As DWORD = 0 To UBound(ProcessTimer)
-        'lvwWindowTimer.AddItemColList ,,WStr(ProcessTimer(i).ThreadId), WStr(ProcessTimer(i).Period), "0x" & WHex(ProcessTimer(i).Func)
-    'Next
+
+    ' ############################## 核心修复4：计算数组大小 ##############################
+    Print "需要总字节数:" & lpRet & " | 单个结构体大小:" & SizeOf(PROCESS_TIMER)
+    ReDim ProcessTimer((lpRet / SizeOf(PROCESS_TIMER)) - 1) As PROCESS_TIMER
+
+    ' ############################## 核心修复5：第二次IOCTL - 获取定时器数据 ##############################
+    IoControl hDrv, IOCTL_EnumProcessTimers, @TargetPid, SizeOf(ULONG64), _
+    @ProcessTimer(0), UBound(ProcessTimer) * SizeOf(PROCESS_TIMER) + SizeOf(PROCESS_TIMER), @lpRet
+
+    ' ############################## 填充列表框 ##############################
+    InitListViewData lvwWindowTimer
+    
+    For i As DWORD = 0 To UBound(ProcessTimer)
+        Print "[GetProcessTimerList]nIDEvent:" & ProcessTimer(i).nIDEvent & " pfn:" & "0x" & WHex(ProcessTimer(i).pfn)
+        AddItemColListEx lvwWindowTimer, 4,,, _
+        WStr(ProcessTimer(i).nIDEvent), _       ' 定时器ID
+        WStr(ProcessTimer(i).ThreadId), _        ' 线程ID
+        WStr(ProcessTimer(i).nTimeout), _          ' 超时时间
+        "0x" & WHex(ProcessTimer(i).pfn)        ' 回调函数地址
+    Next
+
+    ' 释放内存
     Erase ProcessTimer
+    
+    CommitListViewView lvwWindowTimer
 End Sub

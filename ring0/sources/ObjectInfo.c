@@ -196,7 +196,7 @@ NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
 	HandleInfo->Object = NULL;
 
 	// 获取句柄对应的对象
-	status = ObReferenceObjectByHandle(hTargetHandle, 0, NULL, KernelMode, &HandleInfo->Object, NULL);
+	status = ObReferenceObjectByHandle(hTargetHandle, 0, NULL, UserMode, &HandleInfo->Object, NULL);
 	if (!NT_SUCCESS(status)) {
 		DbgPrint("ObReferenceObjectByHandle failed for Handle 0x%p, PID:%lld, status: %X\n", HandleInfo->Handle, (ULONG_PTR)HandleInfo->dwProcessId, status);
 	}

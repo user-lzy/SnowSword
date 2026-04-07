@@ -3,28 +3,7 @@
 #include <intrin.h>
 #include <ntimage.h>
 #include "EnumDriverInfo.h"
-
-typedef struct _KLDR_DATA_TABLE_ENTRY
-{
-	LIST_ENTRY64 InLoadOrderLinks;
-	ULONG64 __Undefined1;
-	ULONG64 __Undefined2;
-	ULONG64 __Undefined3;
-	ULONG64 NonPagedDebugInfo;
-	ULONG64 DllBase;
-	ULONG64 EntryPoint;
-	ULONG SizeOfImage;
-	UNICODE_STRING FullDllName;
-	UNICODE_STRING BaseDllName;
-	ULONG   Flags;
-	USHORT  LoadCount;
-	USHORT  __Undefined5;
-	ULONG64 __Undefined6;
-	ULONG   CheckSum;
-	ULONG   __padding1;
-	ULONG   TimeDateStamp;
-	ULONG   __padding2;
-} KLDR_DATA_TABLE_ENTRY, * PKLDR_DATA_TABLE_ENTRY;
+#include "global.h"
 
 typedef struct _INJECT_INFO {
 	HANDLE ProcessId;
@@ -63,6 +42,7 @@ NTSTATUS InjectDllByApc(
 NTSTATUS DumpKernelModule(
 	PVOID ModuleBase,
 	PVOID pOutputBuffer,
+	SIZE_T BufferSize,          // 传入目标缓冲区大小（原 stMemory.Size）
 	PSIZE_T pBytesWritten
 );
 

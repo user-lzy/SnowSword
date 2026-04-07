@@ -170,16 +170,23 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
 End Sub
 
 ' 示例：枚举当前进程特权
-Sub GetProcessPrivilegeList(ByVal dwPID As DWORD, lvwPrivilege As Class_ListView)
+Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_ListView)
     Dim privileges() As PRIVILEGE_INFO
     Dim langID As DWORD
     Dim i As Integer
     Dim count As Integer
     
-    Dim hProcess As HANDLE = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwPID)
-    If hProcess = NULL Then
-        hProcess = SnowSword_OpenProcess(dwPID)
-        If hProcess = NULL Then Exit Sub
+    InitListViewData lvwPrivilege
+    
+    Dim hProcess As HANDLE = NULL
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(ProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, ProcessId)
+    End If
+    If (hProcess <= 0) Then
+        Print "OpenProcess " & ProcessId & " Failed!"
+        Exit Sub
     End If
     
     ' 获取当前进程特权
@@ -191,9 +198,10 @@ Sub GetProcessPrivilegeList(ByVal dwPID As DWORD, lvwPrivilege As Class_ListView
     End If
     
     For i = 0 To UBound(privileges)
-        lvwPrivilege.AddItemColList,, WHex(privileges(i).lValue), privileges(i).sName, privileges(i).sStatus, privileges(i).sDisplay, "0x" & WHex(privileges(i).Attributes), 
+        AddItemColListEx lvwPrivilege, 5,,, WHex(privileges(i).lValue), privileges(i).sName, privileges(i).sStatus, privileges(i).sDisplay, "0x" & WHex(privileges(i).Attributes), 
     Next
     
     ' 释放内存
     Erase privileges
+    CommitListViewView lvwPrivilege
 End Sub

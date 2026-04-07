@@ -73,8 +73,9 @@ Function GetIPAddress(dwAddr As DWORD) As String
     Return *strIP
 End Function
 
-Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, ByVal IsFilter As BOOLEAN)
-    lvwInternet.DeleteAllItems
+Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, ByVal IsFilter As Boolean)
+    InitListViewData lvwInternet
+    
     'Print lvwInternet.ColumnText(2)
     If IsFilter And lvwInternet.ColumnText(1) = "PID" Then
         lvwInternet.DeleteColumn 7
@@ -91,11 +92,11 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
     For i As Integer = 0 To pTcpTable->dwNumEntries - 1
         'If TcpTable.dwRemoteAddr <> 0 Or GetPort(TcpTable.dwRemotePort) <> 0 Or GetPort(TcpTable.dwLocalPort) <> 0 Then
         If Not IsFilter Then
-            lvwInternet.AddItemColList ,, "TCP", WStr(pTcpTable->table(i).dwOwningPid), IPStateToString(pTcpTable->table(i).dwState), GetIPAddress(pTcpTable->table(i).dwLocalAddr), GetIPAddress(pTcpTable->table(i).dwRemoteAddr), _
-            WStr(htons(pTcpTable->table(i).dwLocalPort)), WStr(htons(pTcpTable->table(i).dwRemotePort)), GetProcessPath(pTcpTable->table(i).dwOwningPid)
+            AddItemColListEx lvwInternet, 8,,, "TCP", WStr(pTcpTable->table(i).dwOwningPid), IPStateToString(pTcpTable->table(i).dwState), GetIPAddress(pTcpTable->table(i).dwLocalAddr), GetIPAddress(pTcpTable->table(i).dwRemoteAddr), _
+            WStr(htons(pTcpTable->table(i).dwLocalPort)), WStr(htons(pTcpTable->table(i).dwRemotePort)), WStr(GetProcessPath(pTcpTable->table(i).dwOwningPid))
         Else
             If pTcpTable->table(i).dwOwningPid <> PID Then Continue For
-            lvwInternet.AddItemColList ,, "TCP", IPStateToString(pTcpTable->table(i).dwState), GetIPAddress(pTcpTable->table(i).dwLocalAddr), GetIPAddress(pTcpTable->table(i).dwRemoteAddr), _
+            AddItemColListEx lvwInternet, 6,,, "TCP", IPStateToString(pTcpTable->table(i).dwState), GetIPAddress(pTcpTable->table(i).dwLocalAddr), GetIPAddress(pTcpTable->table(i).dwRemoteAddr), _
             WStr(htons(pTcpTable->table(i).dwLocalPort)), WStr(htons(pTcpTable->table(i).dwRemotePort))
         End If
         FF_DoEvents
@@ -113,15 +114,15 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
                 lvwInternet.InsertColumn 1, "PID"
                 lvwInternet.AddColumn "路径"
             End If'/
-            lvwInternet.AddItemColList ,, "TCP6", WStr(pTcp6Table->table(i).dwOwningPid), IPStateToString(pTcp6Table->table(i).dwState), GetIPv6Address(pTcp6Table->table(i).ucLocalAddr()), GetIPv6Address(pTcp6Table->table(i).ucRemoteAddr()), _
-            WStr(htons(pTcp6Table->table(i).dwLocalPort)), WStr(htons(pTcp6Table->table(i).dwRemotePort)), GetProcessPath(pTcp6Table->table(i).dwOwningPid)
+            AddItemColListEx lvwInternet, 8,,, "TCP6", WStr(pTcp6Table->table(i).dwOwningPid), IPStateToString(pTcp6Table->table(i).dwState), GetIPv6Address(pTcp6Table->table(i).ucLocalAddr()), GetIPv6Address(pTcp6Table->table(i).ucRemoteAddr()), _
+            WStr(htons(pTcp6Table->table(i).dwLocalPort)), WStr(htons(pTcp6Table->table(i).dwRemotePort)), WStr(GetProcessPath(pTcp6Table->table(i).dwOwningPid))
         Else
             /'/If lvwInternet.ColumnText(1) = "PID" Then
                 lvwInternet.DeleteColumn 8
                 lvwInternet.DeleteColumn 1
             End If'/
             If pTcp6Table->table(i).dwOwningPid <> PID Then Continue For
-            lvwInternet.AddItemColList ,, "TCP6", IPStateToString(pTcp6Table->table(i).dwState), GetIPv6Address(pTcp6Table->table(i).ucLocalAddr()), GetIPv6Address(pTcp6Table->table(i).ucRemoteAddr()), _
+            AddItemColListEx lvwInternet, 6,,, "TCP6", IPStateToString(pTcp6Table->table(i).dwState), GetIPv6Address(pTcp6Table->table(i).ucLocalAddr()), GetIPv6Address(pTcp6Table->table(i).ucRemoteAddr()), _
             WStr(htons(pTcp6Table->table(i).dwLocalPort)), WStr(htons(pTcp6Table->table(i).dwRemotePort))
         End If
         FF_DoEvents
@@ -139,15 +140,15 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
                 lvwInternet.InsertColumn 1, "PID"
                 lvwInternet.AddColumn "路径"
             End If'/
-            lvwInternet.AddItemColList ,, "UDP", WStr(pUdpTable->table(i).dwOwningPid),, GetIPAddress(pUdpTable->table(i).dwLocalAddr),, _
-            WStr(htons(pUdpTable->table(i).dwLocalPort)),, GetProcessPath(pUdpTable->table(i).dwOwningPid)
+            AddItemColListEx lvwInternet, 8,,, "UDP", WStr(pUdpTable->table(i).dwOwningPid), WStr(""), GetIPAddress(pUdpTable->table(i).dwLocalAddr), WStr(""), _
+            WStr(htons(pUdpTable->table(i).dwLocalPort)), WStr(""), WStr(GetProcessPath(pUdpTable->table(i).dwOwningPid))
         Else
             /'If lvwInternet.ColumnText(1) = "PID" Then
                 lvwInternet.DeleteColumn 8
                 lvwInternet.DeleteColumn 1
             End If'/
             If pUdpTable->table(i).dwOwningPid <> PID Then Continue For
-            lvwInternet.AddItemColList ,, "UDP",, GetIPAddress(pUdpTable->table(i).dwLocalAddr),, _
+            AddItemColListEx lvwInternet, 5,,, "UDP", WStr(""), GetIPAddress(pUdpTable->table(i).dwLocalAddr), WStr(""), _
             WStr(htons(pUdpTable->table(i).dwLocalPort))
         End If
         FF_DoEvents
@@ -165,18 +166,19 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
                 lvwInternet.InsertColumn 1, "PID"
                 lvwInternet.AddColumn "路径"
             End If'/
-            lvwInternet.AddItemColList ,, "UDP6", WStr(pUdp6Table->table(i).dwOwningPid),, GetIPv6Address(pUdp6Table->table(i).ucLocalAddr()),, _
-            WStr(htons(pUdp6Table->table(i).dwLocalPort)),, GetProcessPath(pUdp6Table->table(i).dwOwningPid)
+            AddItemColListEx lvwInternet, 8,,, "UDP6", WStr(pUdp6Table->table(i).dwOwningPid), WStr(""), GetIPv6Address(pUdp6Table->table(i).ucLocalAddr()), WStr(""), _
+            WStr(htons(pUdp6Table->table(i).dwLocalPort)), WStr(""), WStr(GetProcessPath(pUdp6Table->table(i).dwOwningPid))
         Else
             /'If lvwInternet.ColumnText(1) = "PID" Then
                 lvwInternet.DeleteColumn 8
                 lvwInternet.DeleteColumn 1
             End If'/
             If pUdp6Table->table(i).dwOwningPid <> PID Then Continue For
-            lvwInternet.AddItemColList ,, "UDP6",, GetIPv6Address(pUdp6Table->table(i).ucLocalAddr()),, _
+            AddItemColListEx lvwInternet, 5,,, "UDP6", WStr(""), GetIPv6Address(pUdp6Table->table(i).ucLocalAddr()), WStr(""), _
             WStr(htons(pUdp6Table->table(i).dwLocalPort))
         End If
         FF_DoEvents
     Next
     Deallocate pUdp6Table
+    CommitListViewView lvwInternet
 End Sub

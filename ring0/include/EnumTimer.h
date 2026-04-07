@@ -37,46 +37,6 @@ typedef struct _KTIMER_TABLE
     KTIMER_TABLE_ENTRY  TimerEntries[256];
 }KTIMER_TABLE, * PKTIMER_TABLE;
 
-typedef struct _WIN32THREAD {
-    PVOID pEThread; //该指针用以获得进程ID和线程ID
-    ULONG RefCount;
-    ULONG ptlW32;
-    ULONG pgdiDcattr;
-    ULONG pgdiBrushAttr;
-    ULONG pUMPDObjs;
-    ULONG pUMPDHeap;
-    ULONG dwEngAcquireCount;
-    ULONG pSemTable;
-    ULONG pUMPDObj;
-    PVOID ptl;
-    PVOID ppi; //该指针用以获得模块基址
-}WIN32THREAD;
-
-typedef struct _threadInfo {
-    WIN32THREAD w32thread;
-    CHAR UNK; // 不确定类型
-}threadInfo;
-
-typedef struct _HEAD {
-    void* unk[3];
-    void* threadInfo;
-}HEAD;
-
-typedef struct _timer_t {
-    HEAD head;//0
-    void* pfn;//20
-    DWORD32 elapse;//28
-    DWORD32 flags;//2c
-    DWORD32 unkFlags;//30
-    DWORD32 elapse1;//34
-    char padding[0x10];//38
-    LIST_ENTRY list1;//链接的是gtmrListHead //48
-    void* spwnd;//58
-    UINT64 id;//60
-    void* threadObject;//68
-    LIST_ENTRY list2;//Hash链接gTimerHashTable
-}timer_t, *ptimer_t;
-
 typedef struct _PROCESS_TIMER {
     HANDLE ThreadId;
     ULONG Period;
@@ -91,8 +51,6 @@ typedef struct _PROCESS_TIMER_INFO {
 PVOID FindIopTimerQueueHead();
 
 void EnumIoTimers(PSYSTEM_TIMER SystemTimers);
-
-ULONG EnumProcessTimers(HANDLE ProcessId, PPROCESS_TIMER Array);
 
 PVOID FindKeSetTimerEx();
 

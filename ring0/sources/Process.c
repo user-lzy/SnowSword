@@ -546,7 +546,7 @@ PEPROCESS GetEProcess(HANDLE ProcessId)
         return NULL;
     }
 	ObDereferenceObject(pEProcess);
-	DbgPrint("EPROCESS of Process %Iu:0x%p", (ULONG_PTR)ProcessId, pEProcess);
+	//DbgPrint("EPROCESS of Process %Iu:0x%p", (ULONG_PTR)ProcessId, pEProcess);
 	return pEProcess;
 }
 

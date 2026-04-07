@@ -88,7 +88,7 @@ Enum SYSTEM_INFORMATION_CLASS
     SystemSessionProcessesInformation    ' 53 Y N
 End Enum
 
-Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
+'Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
 Declare Sub RtlInitUnicodeString Lib "ntdll.dll" Alias "RtlInitUnicodeString"(ByVal DestinationString As UNICODE_STRING Ptr,ByVal SourceString As PCWSTR)
 
 Private Type SYSTEM_MODULE
@@ -290,17 +290,20 @@ End Function
 
 Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverObject As Integer)
     Dim pDriverObject As Integer = DriverObject, DriverInfo As DRIVER_INFO
+    InitListViewData lvwIOFunction
+    
     If pDriverObject <> 0 Then
         IoControl hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)
-        lvwIOFunction.AddItemColList,, "DriverInit", "0x" & WHex(DriverInfo.DriverInitAddr), GetDriverPathByAddr(DriverInfo.DriverInitAddr)
-        lvwIOFunction.AddItemColList,, "DriverStartIo", "0x" & WHex(DriverInfo.DriverStartIoAddr), GetDriverPathByAddr(DriverInfo.DriverStartIoAddr)
-        lvwIOFunction.AddItemColList,, "FastIoDispatch", "0x" & WHex(DriverInfo.FastIoDispatchAddr), GetDriverPathByAddr(DriverInfo.FastIoDispatchAddr)
-        lvwIOFunction.AddItemColList,, "DriverUnload", "0x" & WHex(DriverInfo.DriverUnloadAddr), GetDriverPathByAddr(DriverInfo.DriverUnloadAddr)
+        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr))
+        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverStartIo"), WStr("0x" & WHex(DriverInfo.DriverStartIoAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverStartIoAddr))
+        AddItemColListEx lvwIOFunction, 3,,, WStr("FastIoDispatch"), WStr("0x" & WHex(DriverInfo.FastIoDispatchAddr)), WStr(GetDriverPathByAddr(DriverInfo.FastIoDispatchAddr))
+        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverUnload"), WStr("0x" & WHex(DriverInfo.DriverUnloadAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverUnloadAddr))
         For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
             'If i = &H20 Then Continue For ' 这里有什么用?
-            lvwIOFunction.AddItemColList ,, IRP_MJ_ToString(i), "0x" & WHex(DriverInfo.MajorFunctionAddr(i)), GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))
+            AddItemColListEx lvwIOFunction, 3,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i)))
         Next
     End If
+    CommitListViewView lvwIOFunction
 End Sub
 
 Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
@@ -311,7 +314,9 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
         Print "Failed to allocate memory."
         Exit Sub
     End If
-    lvwKernelModule.DeleteAllItems
+    
+    InitListViewData lvwKernelModule
+    
     'First Call To Get the required buffer SIZE
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, @bufferSize)
     If (st = STATUS_INFO_LENGTH_MISMATCH) Then
@@ -332,23 +337,21 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
 
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
     'Print "Enumerated Drivers:"
-    Print "Count:" & smi->Count
+    'Print "Count:" & smi->Count
+    lvwKernelModule.AddItemCount smi->Count
     For i As Integer = 0 To smi->Count - 1
         Dim DriverName As WString * 20, DriverPath As ZString * MAX_PATH = smi->Modules(i).ImageName
-        lvwKernelModule.AddItem WStr(i)
+        Dim DriverObject As Integer
+        
         DriverPath = GetCorrectPath(DriverPath)
-        'Print DriverPath
         DriverName = Right(DriverPath, Len(DriverPath) - InStrRev(DriverPath, "\"))
-        'Print "Path:" & DriverPath
-        lvwKernelModule.SetItemText i, 1, DriverName
-        lvwKernelModule.SetItemText i, 2, "0x" & Hex(smi->Modules(i).dwBase)
-        lvwKernelModule.SetItemText i, 3, "0x" & Hex(smi->Modules(i).dwSize)
-        lvwKernelModule.SetItemText i, 4, DriverPath
-        If IsDriverLoaded Then lvwKernelModule.SetItemText i, 5, "0x" & Hex(GetDriverObjectAddr(smi->Modules(i).dwBase))
-        'lvwKernelModule.SetItemText i, 4, WStr(smi->Modules(i).LoadCount)
-        'lvwKernelModule.SetItemText i, 5, WStr(smi->Modules(i).dwFlags)
+        If IsDriverLoaded Then DriverObject = GetDriverObjectAddr(smi->Modules(i).dwBase)
+        
+        AddItemColListEx lvwKernelModule, 6,,, WStr(i), WStr(DriverName), "0x" & WHex(smi->Modules(i).dwBase), "0x" & WHex(smi->Modules(i).dwSize), _
+        WStr(DriverPath), "0x" & WHex(DriverObject)
     Next
     Deallocate buffer
+    CommitListViewView lvwKernelModule
 End Sub
 
 Public Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize As ULong) As PVOID
@@ -454,6 +457,7 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
             Return 0
         End If
     End If
+    
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
         AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
@@ -513,6 +517,7 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
             lvwGDT.SetItemText hItem, 8, Description
         Next
     Next
+    'CommitListViewView lvwGDT
     Return 0
 End Function
 
@@ -606,6 +611,7 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
             lvwIDT.SetItemText hItem, 6, GetDriverPathByAddr(IDTArray(i).IdtEntries(j).HandlerFunc)
         Next
     Next
+    'CommitListViewView lvwIDT
     Return 0
 End Function
 
@@ -626,16 +632,20 @@ Function GetSSDT(lvwSSDT As Class_ListView) As ULong
             Return 0
         End If
     End If
+    
+    InitListViewData lvwSSDT
+    
     For Index As DWORD = 0 To 1000
         Dim SSDTFuncAddr As ULONG64
         If IoControl(hDrv, IOCTL_GetSSDTFuncByIndex, @Index, SizeOf(DWORD), @SSDTFuncAddr, SizeOf(ULONG64)) = 0 Then
             'Print "[GetSSDT]获取索引为" & Index & "的SSDT函数时失败:" & WinErrorMsg(GetLastError) & GetLastError
             If GetLastError = ERROR_NO_MORE_ITEMS Then Exit For
         Else
-            lvwSSDT.AddItemColList,, WStr(Count), WHex(Index), FindFunctionNameBySyscallIndex("ntdll.dll", Index), "0x" & WHex(SSDTFuncAddr), GetDriverPathByAddr(SSDTFuncAddr)
+            AddItemColListEx lvwSSDT, 5,,, WStr(Count), WHex(Index), WStr(FindFunctionNameBySyscallIndex("ntdll.dll", Index)), WStr("0x" & WHex(SSDTFuncAddr)), WStr(GetDriverPathByAddr(SSDTFuncAddr))
             Count += 1
         End If
     Next
+    CommitListViewView lvwSSDT
     Return Count
 End Function
 
@@ -656,17 +666,21 @@ Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
             Return 0
         End If
     End If
+    
+    InitListViewData lvwSSSDT
+    
     Do While True
         Dim SSSDTFuncAddr As ULONG64
         If IoControl(hDrv, IOCTL_GetSSSDTFuncByIndex, @Index, SizeOf(DWORD), @SSSDTFuncAddr, SizeOf(ULONG64)) = 0 Then
             Exit Do
         Else
             'Print FindFunctionNameBySyscallIndex("win32u.dll", Index)
-            lvwSSSDT.AddItemColList,, WStr(Count), WHex(Index + &H1000), FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000), "0x" & WHex(SSSDTFuncAddr), GetDriverPathByAddr(SSSDTFuncAddr)
+            AddItemColListEx lvwSSSDT, 5,,, WStr(Count), WHex(Index + &H1000), WStr(FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000)), "0x" & WHex(SSSDTFuncAddr), WStr(GetDriverPathByAddr(SSSDTFuncAddr))
             Count += 1
         End If
         Index += 1
     Loop
+    CommitListViewView lvwSSSDT
     Return Count
 End Function
 
@@ -688,7 +702,9 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
         End If
     End If
     
-    Dim HalDispatchName(12) As ZString * 50 = { _
+    InitListViewData lvwHalDistapch
+    
+    Dim HalDispatchName(12) As WString * 50 = { _
     "Version", _
     "HalQuerySystemInformation", _
     "HalSetSystemInformation", _
@@ -708,12 +724,13 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
         Dim HalDispatchAddr As PVOID = NULL
         If IoControl(hDrv, IOCTL_GetHalDispatchByIndex, @Index, SizeOf(DWORD), @HalDispatchAddr, SizeOf(PVOID)) <> 0 Then
             Print HalDispatchName(Index) & ":" & "0x" & WHex(HalDispatchAddr)
-            lvwHalDistapch.AddItemColList,, WStr(Index), HalDispatchName(Index), "0x" & WHex(HalDispatchAddr), GetDriverPathByAddr(Cast(ULONG64, HalDispatchAddr))
+            AddItemColListEx lvwHalDistapch, 4,,, WStr(Index), HalDispatchName(Index), "0x" & WHex(HalDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalDispatchAddr)))
             Count += 1
         Else
             Print "[GetHalDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError
         End If
     Next
+    CommitListViewView lvwHalDistapch
     Return Count
 End Function
 
@@ -735,7 +752,9 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
         End If
     End If
     
-    Dim HalPrivateDispatchName(149) As ZString * 50 = { _
+    InitListViewData lvwHalPrivateDistapch
+    
+    Dim HalPrivateDispatchName(149) As WString * 50 = { _
     "Version", _
     "HalHandlerForBus", _
     "HalHandlerForConfigSpace", _
@@ -892,11 +911,12 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
         Dim HalPrivateDispatchAddr As PVOID = NULL
         If IoControl(hDrv, IOCTL_GetHalPrivateDispatchByIndex, @Index, SizeOf(DWORD), @HalPrivateDispatchAddr, SizeOf(ULONG64)) <> 0 Then
             Print HalPrivateDispatchName(Index) & ":" & "0x" & WHex(HalPrivateDispatchAddr)
-            lvwHalPrivateDistapch.AddItemColList,, WStr(Index), HalPrivateDispatchName(Index), "0x" & WHex(HalPrivateDispatchAddr), GetDriverPathByAddr(Cast(ULONG64, HalPrivateDispatchAddr))
+            AddItemColListEx lvwHalPrivateDistapch, 4,,, WStr(Index), HalPrivateDispatchName(Index), "0x" & WHex(HalPrivateDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalPrivateDispatchAddr)))
             Count += 1
         Else
             Print "[GetHalPrivateDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError
         End If
     Next
+    CommitListViewView lvwHalPrivateDistapch
     Return Count
 End Function

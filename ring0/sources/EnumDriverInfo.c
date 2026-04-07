@@ -14,22 +14,16 @@ NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 	OUT PVOID* Object
 );
 
-#define MAX_TARGET_DEVICES 10
-#define MAP_POOL_TAG 'pamD'
-
-// 全局设备附加映射表
-typedef struct _DEVICE_ATTACHMENT_ENTRY {
-    PDEVICE_OBJECT AttachedToDevice;  // 被附加的设备（key）
-    PDEVICE_OBJECT AttacherDevice;    // 附加者的设备
-    PDRIVER_OBJECT AttacherDriver;    // 附加者的驱动
-    WCHAR AttacherDriverName[256];    // 附加者驱动名称
-    struct _DEVICE_ATTACHMENT_ENTRY* Next;
-} DEVICE_ATTACHMENT_ENTRY, * PDEVICE_ATTACHMENT_ENTRY;
-
 // 全局映射表头和锁
-PDEVICE_ATTACHMENT_ENTRY g_AttachmentMap = NULL;
 KSPIN_LOCK g_AttachmentMapLock;
-BOOLEAN g_MapInitialized = FALSE;
+
+#define MAX_TRACKED_DEVICES 2048
+PDEVICE_OBJECT g_AddedDevices[MAX_TRACKED_DEVICES] = { NULL };
+ULONG g_AddedDeviceCount = 0;
+
+// 在函数开始处定义
+#define MAX_RECORDED_DEVICES 4096   // 足够大，实际设备数远小于此
+#define MAX_PATH 260
 
 VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
 	//PDRIVER_INFO pDriverInfo = (PDRIVER_INFO)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
@@ -49,86 +43,6 @@ VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
 		pDriverInfo->MajorFunctionAddr[i] = (PVOID)pDriverObject->MajorFunction[i];
 		DbgPrint("MajorFunctionAddr[%d]: 0x%p, TrueMajorFunctionAddr[%d]: 0x%p", i, pDriverInfo->MajorFunctionAddr[i], i, pDriverObject->MajorFunction[i]);
 	}
-}
-
-NTSTATUS EnumAttachDevices(
-	_In_  PDRIVER_OBJECT TargetDriver,
-	_Out_ PATTACH_DEVICE_INFO AttachInfo
-)
-{
-	if (!TargetDriver || !AttachInfo)
-		return STATUS_INVALID_PARAMETER;
-
-	RtlZeroMemory(AttachInfo, sizeof(ATTACH_DEVICE_INFO));
-
-	// 填充驱动名
-	if (TargetDriver->DriverName.Length > 0)
-	{
-		RtlStringCbCopyUnicodeString(
-			AttachInfo->DriverName,
-			sizeof(AttachInfo->DriverName),
-			&TargetDriver->DriverName
-		);
-	}
-
-	ULONG Index = 0;
-	PDEVICE_OBJECT DeviceObject = TargetDriver->DeviceObject;
-
-	// 枚举该驱动创建的所有 DeviceObject
-	while (DeviceObject)
-	{
-		// 枚举每个设备的附加链
-		PDEVICE_OBJECT AttachedDevice = DeviceObject->AttachedDevice;
-
-		while (AttachedDevice)
-		{
-			if (Index >= 10)
-				goto _Exit;
-
-			PATTACHED_DEVICE_NODE Node = &AttachInfo->Devices[Index];
-
-			Node->DeviceObject = AttachedDevice;
-			Node->DriverObject = AttachedDevice->DriverObject;
-
-			// 复制驱动名
-			if (AttachedDevice->DriverObject->DriverName.Length > 0)
-			{
-				RtlStringCbCopyUnicodeString(
-					Node->DriverName,
-					sizeof(Node->DriverName),
-					&AttachedDevice->DriverObject->DriverName
-				);
-			}
-
-			// 复制驱动路径（DriverSection->FullImageName）
-			if (AttachedDevice->DriverObject->DriverSection)
-			{
-				PLDR_DATA_TABLE_ENTRY LdrEntry =
-					(PLDR_DATA_TABLE_ENTRY)AttachedDevice->DriverObject->DriverSection;
-
-				if (LdrEntry && LdrEntry->FullDllName.Length > 0)
-				{
-					RtlStringCbCopyUnicodeString(
-						Node->DriverPath,
-						sizeof(Node->DriverPath),
-						&LdrEntry->FullDllName
-					);
-				}
-
-			}
-
-			Index++;
-
-			AttachedDevice = AttachedDevice->AttachedDevice; // 下一个附加设备
-		}
-
-		DeviceObject = DeviceObject->NextDevice; // 下一个设备
-	}
-
-_Exit:
-	AttachInfo->TotalDevices = Index;
-
-	return STATUS_SUCCESS;
 }
 
 // 辅助函数：安全获取对象类型（避免直接访问对象头）
@@ -264,247 +178,628 @@ VOID GetDriverObjectName(
     _Out_writes_(256) WCHAR* NameBuffer
 )
 {
-    if (DriverObject->DriverName.Length > 0 && DriverObject->DriverName.Buffer) {
-        USHORT copyLength = min(DriverObject->DriverName.Length, 255 * sizeof(WCHAR));
-        RtlCopyMemory(NameBuffer, DriverObject->DriverName.Buffer, copyLength);
-        NameBuffer[copyLength / sizeof(WCHAR)] = L'\0';
+    // 1. 清空缓冲区，避免残留数据
+    RtlZeroMemory(NameBuffer, 256 * sizeof(WCHAR));
+
+    if (DriverObject != NULL && DriverObject->DriverName.Length > 0 && DriverObject->DriverName.Buffer) {
+        // 2. 按WCHAR计算长度，避免字节/字符混淆
+        ULONG charCount = DriverObject->DriverName.Length / sizeof(WCHAR);
+        ULONG copyCount = min(charCount, 255); // 留1位给\0
+        RtlCopyMemory(NameBuffer, DriverObject->DriverName.Buffer, copyCount * sizeof(WCHAR));
+        // 3. 强制终止字符串
+        NameBuffer[copyCount] = L'\0';
     }
     else {
         wcscpy_s(NameBuffer, 256, L"Unknown");
     }
 }
 
-// 释放全局映射表
+// 辅助函数：获取设备对象的名称（如 \Device\Harddisk0\DR0）
+NTSTATUS GetDeviceObjectName(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Out_writes_(NameBufferSize) PWCHAR NameBuffer,
+    _In_ ULONG NameBufferSize
+)
+{
+    NTSTATUS status;
+    POBJECT_NAME_INFORMATION nameInfo = NULL;
+    ULONG returnLength = 0;
+
+    // 空指针检查
+    if (DeviceObject == NULL) {
+        if (NameBuffer && NameBufferSize >= sizeof(WCHAR)) {
+            NameBuffer[0] = L'\0';  // 设置为空字符串
+        }
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // 查询所需大小
+    status = ObQueryNameString(DeviceObject, NULL, 0, &returnLength);
+    if (status != STATUS_INFO_LENGTH_MISMATCH) {
+        return status;
+    }
+
+    // 分配缓冲区
+    nameInfo = (POBJECT_NAME_INFORMATION)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        returnLength,
+        MAP_POOL_TAG
+    );
+    if (!nameInfo) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    // 获取名称
+    status = ObQueryNameString(DeviceObject, nameInfo, returnLength, &returnLength);
+    if (NT_SUCCESS(status)) {
+        if (nameInfo->Name.Length < NameBufferSize * sizeof(WCHAR)) {
+            RtlCopyMemory(NameBuffer, nameInfo->Name.Buffer, nameInfo->Name.Length);
+            NameBuffer[nameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
+        }
+        else {
+            // 名称太长，使用地址作为标识
+            RtlStringCchPrintfW(NameBuffer, NameBufferSize, L"\\Device\\%p", DeviceObject);
+        }
+        ExFreePoolWithTag(nameInfo, MAP_POOL_TAG);
+    }
+    else {
+        // 无法获取名称，使用地址作为标识
+        RtlStringCchPrintfW(NameBuffer, NameBufferSize, L"\\Device\\%p", DeviceObject);
+        if (nameInfo) {
+            ExFreePoolWithTag(nameInfo, MAP_POOL_TAG);
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+// 通过映射表找到原始设备
+PDEVICE_OBJECT FindBaseDeviceByFilter(PDEVICE_OBJECT filterDevice)
+{
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+
+    PDEVICE_ATTACHMENT_ENTRY entry = g_AttachmentMap;
+    while (entry) {
+        if (entry->AttacherDevice == filterDevice && entry->AttachedToDevice != filterDevice) {
+            KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+            return entry->AttachedToDevice;  // 找到原始设备
+        }
+        entry = entry->Next;
+    }
+
+    KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+    return NULL;
+}
+
+// 获取驱动文件完整路径
+VOID GetDriverFilePath(PDRIVER_OBJECT DriverObject, WCHAR* PathBuffer, SIZE_T BufferSize)
+{
+    if (!DriverObject || !DriverObject->DriverSection)
+    {
+        PathBuffer[0] = L'\0';
+        return;
+    }
+
+    __try
+    {
+        // DriverSection 指向 LDR_DATA_TABLE_ENTRY 结构
+        PLDR_DATA_TABLE_ENTRY ldrEntry = (PLDR_DATA_TABLE_ENTRY)DriverObject->DriverSection;
+
+        if (ldrEntry->FullDllName.Buffer && ldrEntry->FullDllName.Length > 0)
+        {
+            RtlStringCbCopyNW(PathBuffer, BufferSize,
+                ldrEntry->FullDllName.Buffer, ldrEntry->FullDllName.Length);
+        }
+        else
+        {
+            PathBuffer[0] = L'\0';
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        PathBuffer[0] = L'\0';
+    }
+}
+
+// ============================================================================
+// 初始化
+// ============================================================================
+NTSTATUS InitAttachmentMap(void)
+{
+    if (!g_MapInitialized) {
+        KeInitializeSpinLock(&g_AttachmentMapLock);
+        g_MapInitialized = TRUE;
+        g_GlobalMapBuilt = FALSE;
+        g_AttachmentMap = NULL;
+    }
+    return STATUS_SUCCESS;
+}
+
+// ============================================================================
+// 释放全局映射
+// ============================================================================
 VOID FreeGlobalDeviceAttachmentMap()
 {
     KIRQL oldIrql;
     KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
 
-    PDEVICE_ATTACHMENT_ENTRY current = g_AttachmentMap;
+    PDEVICE_ATTACHMENT_ENTRY pEntry = g_AttachmentMap;
+    while (pEntry) {
+        PDEVICE_ATTACHMENT_ENTRY pNext = pEntry->Next;
+        ExFreePoolWithTag(pEntry, MAP_POOL_TAG);
+        pEntry = pNext;
+    }
     g_AttachmentMap = NULL;
+    g_GlobalMapBuilt = FALSE;
 
     KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
-
-    // 释放所有条目（无锁，因为已断开链表）
-    while (current) {
-        PDEVICE_ATTACHMENT_ENTRY next = current->Next;
-        ExFreePoolWithTag(current, MAP_POOL_TAG);
-        current = next;
-    }
 }
 
-// 构建全局设备附加映射表
-NTSTATUS BuildGlobalDeviceAttachmentMap()
+// ============================================================================
+// 清理
+// ============================================================================
+void CleanupAttachmentMap(void)
+{
+    FreeGlobalDeviceAttachmentMap();
+    g_GlobalMapBuilt = FALSE;
+}
+
+// ============================================================================
+// 修复版：构建全局设备附加映射（带调试输出 + 修复fltmgr遍历）
+// ============================================================================
+NTSTATUS BuildGlobalDeviceAttachmentMap(void)
 {
     NTSTATUS status = STATUS_SUCCESS;
     UNICODE_STRING driverDirPath;
     HANDLE hDriverDir = NULL;
     OBJECT_ATTRIBUTES oa;
-    PDIRECTORY_BASIC_INFORMATION pBuffer = NULL;
-    ULONG ulContext = 0;
-    ULONG ulRet = 0;
-    ULONG ulLength = 0x800;
     KIRQL oldIrql;
 
-    // 初始化自旋锁（仅一次）
+    if (g_GlobalMapBuilt && g_AttachmentMap != NULL) {
+        DbgPrint("[AttachMap] 全局映射已缓存，复用\n");
+        return STATUS_SUCCESS;
+    }
+
     if (!g_MapInitialized) {
         KeInitializeSpinLock(&g_AttachmentMapLock);
         g_MapInitialized = TRUE;
     }
 
-    // 清空现有映射表
+    RtlZeroMemory(g_AddedDevices, sizeof(g_AddedDevices));
+    g_AddedDeviceCount = 0;
     FreeGlobalDeviceAttachmentMap();
 
-    // 枚举 \Driver 和 \FileSystem 两个目录
+    // 【调试】枚举目录：\Driver 和 \FileSystem
     PCWSTR dirPaths[] = { L"\\Driver", L"\\FileSystem" };
     ULONG dirCount = sizeof(dirPaths) / sizeof(dirPaths[0]);
 
-    for (ULONG dirIdx = 0; dirIdx < dirCount; dirIdx++) {
+    for (ULONG dirIdx = 0; dirIdx < dirCount; dirIdx++)
+    {
         RtlInitUnicodeString(&driverDirPath, dirPaths[dirIdx]);
-        InitializeObjectAttributes(&oa, &driverDirPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        DbgPrint("[AttachMap] 打开目录: %ws\n", dirPaths[dirIdx]); // 调试输出
+
+        InitializeObjectAttributes(&oa, &driverDirPath,
+            OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
 
         status = ZwOpenDirectoryObject(&hDriverDir, DIRECTORY_QUERY, &oa);
         if (!NT_SUCCESS(status)) {
-            DbgPrint("ZwOpenDirectoryObject failed for %ws! status=%X", dirPaths[dirIdx], status);
+            DbgPrint("[AttachMap] 打开目录失败: %ws, 状态: %08X\n", dirPaths[dirIdx], status);
             continue;
         }
 
-        ulContext = 0;
-        do {
-            if (pBuffer) {
-                ExFreePoolWithTag(pBuffer, MAP_POOL_TAG);
-                pBuffer = NULL;
-            }
+        PVOID buffer = NULL;
+        ULONG bufferSize = 0;
+        BOOLEAN restartScan = TRUE;
+        ULONG context = 0;
 
-            ulLength = ulLength * 2;
-            pBuffer = (PDIRECTORY_BASIC_INFORMATION)ExAllocatePool2(
-                POOL_FLAG_NON_PAGED,
-                ulLength,
-                MAP_POOL_TAG
-            );
-            if (!pBuffer) {
-                status = STATUS_INSUFFICIENT_RESOURCES;
+        while (TRUE)
+        {
+            status = ZwQueryDirectoryObject(hDriverDir, NULL, 0, TRUE, restartScan, &context, &bufferSize);
+            if (status != STATUS_BUFFER_TOO_SMALL) {
+                if (status == STATUS_NO_MORE_ENTRIES) status = STATUS_SUCCESS;
                 break;
             }
 
-            status = ZwQueryDirectoryObject(
-                hDriverDir,
-                pBuffer,
-                ulLength,
-                FALSE,
-                TRUE,
-                &ulContext,
-                &ulRet
-            );
-        } while (status == STATUS_MORE_ENTRIES || status == STATUS_BUFFER_TOO_SMALL);
+            if (buffer) ExFreePoolWithTag(buffer, MAP_POOL_TAG);
+            bufferSize = max(bufferSize, sizeof(DIRECTORY_BASIC_INFORMATION) + 0x200);
+            buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, MAP_POOL_TAG);
+            if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; break; }
 
-        if (status != STATUS_SUCCESS) {
-            DbgPrint("ZwQueryDirectoryObject failed! status=%X", status);
-            if (pBuffer) {
-                ExFreePoolWithTag(pBuffer, MAP_POOL_TAG);
-                pBuffer = NULL;
+            status = ZwQueryDirectoryObject(hDriverDir, buffer, bufferSize, TRUE, restartScan, &context, &bufferSize);
+            restartScan = FALSE;
+            if (status == STATUS_NO_MORE_ENTRIES || !NT_SUCCESS(status)) break;
+
+            PDIRECTORY_BASIC_INFORMATION pEntry = (PDIRECTORY_BASIC_INFORMATION)buffer;
+            if (pEntry->ObjectName.Length == 0 || pEntry->ObjectType.Length == 0) continue;
+
+            UNICODE_STRING uDriver, uFileSystem;
+            RtlInitUnicodeString(&uDriver, L"Driver");
+            RtlInitUnicodeString(&uFileSystem, L"FileSystem");
+            if (!RtlEqualUnicodeString(&pEntry->ObjectType, &uDriver, TRUE) &&
+                !RtlEqualUnicodeString(&pEntry->ObjectType, &uFileSystem, TRUE))
+                continue;
+
+            // 【调试】输出遍历到的驱动名
+            DbgPrint("[AttachMap] 找到驱动对象: %wZ\n", &pEntry->ObjectName);
+
+            WCHAR szDriverPath[MAX_PATH] = { 0 };
+            UNICODE_STRING usDriverPath;
+            RtlInitEmptyUnicodeString(&usDriverPath, szDriverPath, MAX_PATH);
+            RtlAppendUnicodeStringToString(&usDriverPath, &driverDirPath);
+            RtlAppendUnicodeToString(&usDriverPath, L"\\");
+            RtlAppendUnicodeStringToString(&usDriverPath, &pEntry->ObjectName);
+
+            PDRIVER_OBJECT pDriverObj = NULL;
+            status = ObReferenceObjectByName(&usDriverPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                NULL, 0, *IoDriverObjectType, KernelMode, NULL, (PVOID*)&pDriverObj);
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[AttachMap] 引用驱动失败: %wZ, 状态: %08X\n", &usDriverPath, status);
+                continue;
             }
-            ZwClose(hDriverDir);
-            continue;
-        }
 
-        PDIRECTORY_BASIC_INFORMATION pBuffer2 = pBuffer;
-        while (pBuffer2->ObjectName.Length != 0 && pBuffer2->ObjectType.Length != 0) {
-            UNICODE_STRING driverPath;
-            WCHAR driverPathBuf[256];
-            RtlInitEmptyUnicodeString(&driverPath, driverPathBuf, sizeof(driverPathBuf));
-            RtlAppendUnicodeToString(&driverPath, dirPaths[dirIdx]);
-            RtlAppendUnicodeToString(&driverPath, L"\\");
-            RtlAppendUnicodeStringToString(&driverPath, &pBuffer2->ObjectName);
+            PDEVICE_OBJECT pDevObj = pDriverObj->DeviceObject;
+            while (pDevObj)
+            {
+                // ==============================================
+                // 【修复1】标记根设备 = 原始设备
+                // ==============================================
+                PDEVICE_ATTACHMENT_ENTRY pRootEntry = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                    sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
+                if (pRootEntry)
+                {
+                    RtlZeroMemory(pRootEntry, sizeof(DEVICE_ATTACHMENT_ENTRY));
+                    pRootEntry->AttachedToDevice = NULL;
+                    pRootEntry->ParentDeviceObject = NULL;
+                    pRootEntry->AttacherDevice = pDevObj;
+                    pRootEntry->AttacherDriver = pDriverObj;
+                    pRootEntry->Level = 0;
 
-            PDRIVER_OBJECT driverObject = NULL;
-            status = ObReferenceObjectByName(
-                &driverPath,
-                OBJ_CASE_INSENSITIVE,
-                NULL,
-                0,
-                *IoDriverObjectType,
-                KernelMode,
-                NULL,
-                (PVOID*)&driverObject
-            );
+                    GetDriverObjectName(pDriverObj, pRootEntry->AttacherDriverName);
+                    GetDeviceObjectName(pDevObj, pRootEntry->DeviceObjectName, MAX_PATH);
 
-            if (NT_SUCCESS(status)) {
-                // 遍历该驱动的所有设备
-                PDEVICE_OBJECT currentDevice = driverObject->DeviceObject;
-                while (currentDevice != NULL) {
-                    // 遍历附加链
-                    PDEVICE_OBJECT attachedDevice = currentDevice->AttachedDevice;
-                    while (attachedDevice != NULL) {
-                        // 添加到全局映射表
-                        PDEVICE_ATTACHMENT_ENTRY newEntry =
-                            (PDEVICE_ATTACHMENT_ENTRY)ExAllocatePool2(
-                                POOL_FLAG_NON_PAGED,
-                                sizeof(DEVICE_ATTACHMENT_ENTRY),
-                                MAP_POOL_TAG
-                            );
+                    // 【调试】输出根设备信息
+                    DbgPrint("[AttachMap] [根设备] 驱动: %ws | 设备: %ws | DevObj: %p\n",
+                        pRootEntry->AttacherDriverName, pRootEntry->DeviceObjectName, pDevObj);
 
-                        if (newEntry) {
-                            RtlZeroMemory(newEntry, sizeof(DEVICE_ATTACHMENT_ENTRY));
-                            newEntry->AttachedToDevice = currentDevice;
-                            newEntry->AttacherDevice = attachedDevice;
-
-                            // 获取附加设备的驱动对象
-                            PDRIVER_OBJECT attacherDriver = attachedDevice->DriverObject;
-                            newEntry->AttacherDriver = attacherDriver;
-                            GetDriverObjectName(attacherDriver, newEntry->AttacherDriverName);
-
-                            // 插入到链表（加锁）
-                            KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
-                            newEntry->Next = g_AttachmentMap;
-                            g_AttachmentMap = newEntry;
-                            KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
-                        }
-
-                        attachedDevice = attachedDevice->AttachedDevice;
-                    }
-                    currentDevice = currentDevice->NextDevice;
+                    KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+                    pRootEntry->Next = g_AttachmentMap;
+                    g_AttachmentMap = pRootEntry;
+                    KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
                 }
-                ObDereferenceObject(driverObject);
+
+                // ==============================================
+                // 【修复2】遍历过滤链 + 修复break→continue
+                // ==============================================
+                PDEVICE_OBJECT pCurrent = pDevObj;
+                PDEVICE_OBJECT pParent = pDevObj;
+                ULONG level = 1;
+
+                while (pCurrent->AttachedDevice && level < MAX_FILTER_DEPTH)
+                {
+                    pCurrent = pCurrent->AttachedDevice;
+
+                    // 去重：跳过重复，不终止遍历
+                    BOOLEAN isDup = FALSE;
+                    for (ULONG i = 0; i < g_AddedDeviceCount; i++) {
+                        if (g_AddedDevices[i] == pCurrent) { isDup = TRUE; break; }
+                    }
+                    if (isDup) {
+                        DbgPrint("[AttachMap] 跳过重复设备: %p\n", pCurrent);
+                        continue; // 【修复】break → continue，核心！
+                    }
+
+                    // 录入过滤设备（fltmgr在这里）
+                    PDEVICE_ATTACHMENT_ENTRY pFilterEntry = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                        sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
+                    if (pFilterEntry)
+                    {
+                        RtlZeroMemory(pFilterEntry, sizeof(DEVICE_ATTACHMENT_ENTRY));
+                        pFilterEntry->AttachedToDevice = pParent;
+                        pFilterEntry->ParentDeviceObject = pParent;
+                        pFilterEntry->AttacherDevice = pCurrent;
+                        pFilterEntry->AttacherDriver = pCurrent->DriverObject;
+                        pFilterEntry->Level = level;
+
+                        GetDriverObjectName(pCurrent->DriverObject, pFilterEntry->AttacherDriverName);
+                        GetDeviceObjectName(pCurrent, pFilterEntry->DeviceObjectName, MAX_PATH);
+
+                        // 【调试】输出过滤设备（fltmgr会在这里打印）
+                        DbgPrint("[AttachMap] [过滤设备] 驱动: %ws | 设备: %ws | DevObj: %p | 父设备: %p\n",
+                            pFilterEntry->AttacherDriverName, pFilterEntry->DeviceObjectName, pCurrent, pParent);
+
+                        KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+                        pFilterEntry->Next = g_AttachmentMap;
+                        g_AttachmentMap = pFilterEntry;
+                        KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+
+                        if (g_AddedDeviceCount < MAX_TRACKED_DEVICES)
+                            g_AddedDevices[g_AddedDeviceCount++] = pCurrent;
+                    }
+
+                    pParent = pCurrent;
+                    level++;
+                }
+
+                pDevObj = pDevObj->NextDevice;
             }
 
-            pBuffer2++;
+            ObDereferenceObject(pDriverObj);
         }
 
-        if (pBuffer) {
-            ExFreePoolWithTag(pBuffer, MAP_POOL_TAG);
-            pBuffer = NULL;
-        }
+        if (buffer) ExFreePoolWithTag(buffer, MAP_POOL_TAG);
         ZwClose(hDriverDir);
         hDriverDir = NULL;
     }
 
+    if (NT_SUCCESS(status)) {
+        g_GlobalMapBuilt = TRUE;
+        ULONG count = 0;
+        PDEVICE_ATTACHMENT_ENTRY p = g_AttachmentMap;
+        while (p) { count++; p = p->Next; }
+        DbgPrint("[AttachMap] 构建完成！总节点数: %lu\n", count);
+    }
+
+    return status;
+}
+
+NTSTATUS CalculateGlobalDataSize(OUT PULONG pTotalSize)
+{
+    //NTSTATUS status = STATUS_SUCCESS;
+    KIRQL oldIrql;
+    ULONG driverCount = 0;
+    ULONG totalDeviceNodes = 0;
+    PDEVICE_ATTACHMENT_ENTRY pEntry;
+
+    // 获取驱动总数和设备节点总数
+    KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+    pEntry = g_AttachmentMap;
+    while (pEntry) {
+        totalDeviceNodes++;
+        // 检查驱动是否已统计过
+        PDRIVER_OBJECT currentDriver = pEntry->AttacherDriver;
+        BOOLEAN found = FALSE;
+        for (PDEVICE_ATTACHMENT_ENTRY tmp = g_AttachmentMap; tmp != pEntry; tmp = tmp->Next) {
+            if (tmp->AttacherDriver == currentDriver) {
+                found = TRUE;
+                break;
+            }
+        }
+        if (!found) driverCount++;
+        pEntry = pEntry->Next;
+    }
+    KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+
+    // 计算总大小
+    *pTotalSize = sizeof(GLOBAL_ATTACH_INFO) +
+        driverCount * sizeof(DRIVER_ATTACH_INFO) +
+        totalDeviceNodes * sizeof(ATTACHED_DEVICE_NODE);
     return STATUS_SUCCESS;
 }
 
-// 主函数：枚举目标驱动的过滤链
-NTSTATUS EnumFilterChains(
-    _In_ PDRIVER_OBJECT TargetDriver,
-    _Out_ PATTACH_DEVICE_INFO AttachInfo
-)
+// ============================================================================
+// 【崩溃修复版】FillGlobalData - 修正逻辑顺序，数据完整合法，R3不再崩溃
+// ============================================================================
+NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pBytesWritten)
 {
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL oldIrql;
+    PDEVICE_ATTACHMENT_ENTRY pEntry;
+    ULONG totalEntries = 0;
+    ULONG i, j, d;
 
-    if (!TargetDriver || !AttachInfo) {
-        return STATUS_INVALID_PARAMETER;
+    typedef struct _TEMP_NODE {
+        PDEVICE_OBJECT AttachedToDevice;
+        PDEVICE_OBJECT AttacherDevice;
+        PDEVICE_OBJECT ParentDeviceObject;
+        PDRIVER_OBJECT AttacherDriver;
+        BOOLEAN IsOriginalDevice;
+        WCHAR DriverName[260];
+        WCHAR DriverPath[260];
+        WCHAR DeviceName[260];
+        ULONG Level;
+    } TEMP_NODE, * PTEMP_NODE;
+
+    typedef struct _DRV_INFO {
+        PDRIVER_OBJECT DriverObject;
+        ULONG DeviceCount;
+        WCHAR DriverName[260];
+        WCHAR DriverPath[260];
+    } DRV_INFO, * PDRV_INFO;
+
+    typedef struct _DRV_NODES {
+        PULONG Indices;
+        ULONG Count;
+    } DRV_NODES, * PDRV_NODES;
+
+    PTEMP_NODE tempNodes = NULL;
+    PDRV_INFO drvInfos = NULL;
+    PDRV_NODES drvNodes = NULL;
+    PULONG counters = NULL;
+
+    // ==============================================
+    // 【修复1】第一步：统计总节点数 (必须最先执行！)
+    // ==============================================
+    KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+    pEntry = g_AttachmentMap;
+    while (pEntry)
+    {
+        totalEntries++;
+        pEntry = pEntry->Next;
+    }
+    KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+
+    // 无节点直接返回
+    if (totalEntries == 0) {
+        if (pBytesWritten) *pBytesWritten = 0;
+        return STATUS_SUCCESS;
     }
 
-    RtlZeroMemory(AttachInfo, sizeof(ATTACH_DEVICE_INFO));
+    // ==============================================
+    // 【修复2】第二步：分配临时节点内存 (统计后再分配！)
+    // ==============================================
+    tempNodes = ExAllocatePool2(POOL_FLAG_NON_PAGED, totalEntries * sizeof(TEMP_NODE), MAP_POOL_TAG);
+    if (!tempNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
+    RtlZeroMemory(tempNodes, totalEntries * sizeof(TEMP_NODE));
 
-    // 构建全局映射表
-    status = BuildGlobalDeviceAttachmentMap();
-    if (!NT_SUCCESS(status)) {
-        return status;
+    // ==============================================
+    // 【修复3】第三步：一次性填充数据 (删除重复遍历！)
+    // 正确设置 IsOriginalDevice (父设备=NULL → 原始设备)
+    // ==============================================
+    KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
+    pEntry = g_AttachmentMap;
+    i = 0;
+    while (pEntry && i < totalEntries)
+    {
+        tempNodes[i].AttachedToDevice = pEntry->AttachedToDevice;
+        tempNodes[i].AttacherDevice = pEntry->AttacherDevice;
+        tempNodes[i].ParentDeviceObject = pEntry->ParentDeviceObject;
+        tempNodes[i].AttacherDriver = pEntry->AttacherDriver;
+        // 核心修复：仅这里设置一次，正确标记原始设备
+        tempNodes[i].IsOriginalDevice = (pEntry->ParentDeviceObject == NULL);
+        i++;
+        pEntry = pEntry->Next;
+    }
+    KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
+
+    // 填充名称、路径
+    for (i = 0; i < totalEntries; i++) {
+        PTEMP_NODE pNode = &tempNodes[i];
+        GetDriverObjectName(pNode->AttacherDriver, pNode->DriverName);
+        GetDriverFilePath(pNode->AttacherDriver, pNode->DriverPath, RTL_NUMBER_OF(pNode->DriverPath));
+        GetDeviceObjectName(pNode->AttacherDevice, pNode->DeviceName, RTL_NUMBER_OF(pNode->DeviceName));
+        pNode->Level = pNode->Level;
     }
 
-    // 获取目标驱动名称
-    GetDriverObjectName(TargetDriver, AttachInfo->DriverName);
-    DbgPrint("DriverName:%ws", AttachInfo->DriverName);
+    // ==============================================
+    // 驱动去重 (原有逻辑不变，完全正确)
+    // ==============================================
+    ULONG drvCount = 0;
+    for (i = 0; i < totalEntries; i++) {
+        PDRIVER_OBJECT currentDrv = tempNodes[i].AttacherDriver;
+        BOOLEAN found = FALSE;
 
-    // 遍历目标驱动的所有设备
-    PDEVICE_OBJECT currentDevice = TargetDriver->DeviceObject;
-    ULONG deviceIndex = 0;
-    ULONG attachedCount = 0;
-
-    while (currentDevice != NULL && attachedCount < MAX_TARGET_DEVICES) {
-        // 查询谁附加到了这个设备上
-        //PDEVICE_OBJECT attachedByList[10] = { 0 };
-        //ULONG attachedCount = 0;
-
-        KeAcquireSpinLock(&g_AttachmentMapLock, &oldIrql);
-
-        PDEVICE_ATTACHMENT_ENTRY entry = g_AttachmentMap;
-        while (entry && attachedCount < 10) {
-            if (entry->AttachedToDevice == currentDevice) {
-                DbgPrint("DeviceObject:0x%p, DriverObject:0x%p, DriverName:%ws", 
-                    currentDevice, entry->AttacherDriver, entry->AttacherDriverName);
-                AttachInfo->Devices[attachedCount].DeviceObject = currentDevice;
-                AttachInfo->Devices[attachedCount].DriverObject = entry->AttacherDriver;
-                wcscpy_s(AttachInfo->Devices[attachedCount].DriverName,
-                    260,
-                    entry->AttacherDriverName);
-                attachedCount++;
+        for (j = 0; j < drvCount; j++) {
+            if (drvInfos[j].DriverObject == currentDrv) {
+                drvInfos[j].DeviceCount++;
+                found = TRUE;
+                break;
             }
-            entry = entry->Next;
         }
-
-        KeReleaseSpinLock(&g_AttachmentMapLock, oldIrql);
-
-        //deviceIndex++;
-        currentDevice = currentDevice->NextDevice;
+        if (!found) {
+            PDRV_INFO newInfos = ExAllocatePool2(POOL_FLAG_NON_PAGED, (drvCount + 1) * sizeof(DRV_INFO), MAP_POOL_TAG);
+            if (!newInfos) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
+            if (drvInfos) {
+                RtlCopyMemory(newInfos, drvInfos, drvCount * sizeof(DRV_INFO));
+                ExFreePoolWithTag(drvInfos, MAP_POOL_TAG);
+            }
+            drvInfos = newInfos;
+            drvInfos[drvCount].DriverObject = currentDrv;
+            drvInfos[drvCount].DeviceCount = 1;
+            RtlCopyMemory(drvInfos[drvCount].DriverName, tempNodes[i].DriverName, sizeof(drvInfos[drvCount].DriverName));
+            RtlCopyMemory(drvInfos[drvCount].DriverPath, tempNodes[i].DriverPath, sizeof(drvInfos[drvCount].DriverPath));
+            drvCount++;
+        }
     }
 
-    //AttachInfo->TotalDevices = deviceIndex;
-    AttachInfo->TotalDevices = attachedCount;
+    // 分配驱动节点索引
+    drvNodes = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvCount * sizeof(DRV_NODES), MAP_POOL_TAG);
+    if (!drvNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
+    RtlZeroMemory(drvNodes, drvCount * sizeof(DRV_NODES));
 
-    // 清理全局映射表
-    FreeGlobalDeviceAttachmentMap();
+    for (d = 0; d < drvCount; d++) {
+        drvNodes[d].Count = drvInfos[d].DeviceCount;
+        drvNodes[d].Indices = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvInfos[d].DeviceCount * sizeof(ULONG), MAP_POOL_TAG);
+        if (!drvNodes[d].Indices) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
+    }
 
-    return STATUS_SUCCESS;
+    counters = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvCount * sizeof(ULONG), MAP_POOL_TAG);
+    if (!counters) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
+    RtlZeroMemory(counters, drvCount * sizeof(ULONG));
+
+    // 绑定设备索引
+    for (i = 0; i < totalEntries; i++) {
+        PDRIVER_OBJECT currentDrv = tempNodes[i].AttacherDriver;
+        for (d = 0; d < drvCount; d++) {
+            if (drvInfos[d].DriverObject == currentDrv) {
+                drvNodes[d].Indices[counters[d]++] = i;
+                break;
+            }
+        }
+    }
+
+    // 计算总大小
+    ULONG totalSize = sizeof(GLOBAL_ATTACH_INFO);
+    for (d = 0; d < drvCount; d++) {
+        totalSize += sizeof(DRIVER_ATTACH_INFO) + drvInfos[d].DeviceCount * sizeof(ATTACHED_DEVICE_NODE);
+    }
+
+    // 缓冲区检查
+    if (OutputBufferSize < totalSize) {
+        if (pBytesWritten) *pBytesWritten = totalSize;
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto cleanup;
+    }
+
+    // 填充输出数据 (原有逻辑不变)
+    PGLOBAL_ATTACH_INFO pGlobal = OutputBuffer;
+    RtlZeroMemory(pGlobal, totalSize);
+    pGlobal->DriverCount = drvCount;
+    pGlobal->TotalSize = totalSize;
+
+    ULONG currentOffset = sizeof(GLOBAL_ATTACH_INFO);
+    for (d = 0; d < drvCount; d++) {
+        PDRIVER_ATTACH_INFO pDrvInfo = (PDRIVER_ATTACH_INFO)((PUCHAR)pGlobal + currentOffset);
+        RtlCopyMemory(pDrvInfo->DriverName, drvInfos[d].DriverName, sizeof(pDrvInfo->DriverName));
+        pDrvInfo->DriverObject = (UINT64)drvInfos[d].DriverObject;
+        pDrvInfo->DeviceCount = drvInfos[d].DeviceCount;
+        currentOffset += sizeof(DRIVER_ATTACH_INFO);
+
+        PATTACHED_DEVICE_NODE pDeviceNodes = (PATTACHED_DEVICE_NODE)((PUCHAR)pGlobal + currentOffset);
+        for (ULONG n = 0; n < drvInfos[d].DeviceCount; n++) {
+            PTEMP_NODE pSrc = &tempNodes[drvNodes[d].Indices[n]];
+            PATTACHED_DEVICE_NODE pDst = &pDeviceNodes[n];
+            pDst->IsOriginalDevice = pSrc->IsOriginalDevice; // 修复：传递正确值
+            pDst->DeviceObject = pSrc->AttacherDevice;
+            pDst->DriverObject =pSrc->AttacherDriver;
+            RtlCopyMemory(pDst->DriverName, pSrc->DriverName, sizeof(pDst->DriverName));
+            RtlCopyMemory(pDst->DriverPath, pSrc->DriverPath, sizeof(pDst->DriverPath));
+            RtlCopyMemory(pDst->DeviceName, pSrc->DeviceName, sizeof(pDst->DeviceName));
+            pDst->Level = pSrc->Level;
+            pDst->ParentDeviceObject = pSrc->ParentDeviceObject;
+        }
+        currentOffset += drvInfos[d].DeviceCount * sizeof(ATTACHED_DEVICE_NODE);
+    }
+
+    if (pBytesWritten) *pBytesWritten = totalSize;
+
+cleanup:
+    // 释放内存
+    if (tempNodes) ExFreePoolWithTag(tempNodes, MAP_POOL_TAG);
+    if (drvInfos) ExFreePoolWithTag(drvInfos, MAP_POOL_TAG);
+    if (drvNodes) {
+        for (d = 0; d < drvCount; d++) if (drvNodes[d].Indices) ExFreePoolWithTag(drvNodes[d].Indices, MAP_POOL_TAG);
+        ExFreePoolWithTag(drvNodes, MAP_POOL_TAG);
+    }
+    if (counters) ExFreePoolWithTag(counters, MAP_POOL_TAG);
+    return status;
+}
+
+ULONG CalculateDeviceLevel(PDEVICE_OBJECT StackTop, PDEVICE_OBJECT TargetDev)
+{
+    if (!StackTop || !TargetDev) return 0;
+
+    ULONG level = 0;
+    PDEVICE_OBJECT current = StackTop;
+
+    // 从设备栈顶部（最后附加的过滤器）向下遍历到底层设备
+    while (current != NULL) {
+        if (current == TargetDev) {
+            return level;
+        }
+        level++;
+        current = current->AttachedDevice;  // 向下一个设备（更接近底层）
+    }
+
+    return 0; // 未找到
 }

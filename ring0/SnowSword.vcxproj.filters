@@ -82,13 +82,13 @@
     <ClInclude Include="include\Thread.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="wfp.h">
-      <Filter>Header Files\EnumCallbacks</Filter>
-    </ClInclude>
     <ClInclude Include="include\EnumCallbacks.h">
       <Filter>Header Files\EnumCallbacks</Filter>
     </ClInclude>
     <ClInclude Include="include\Hook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Window.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -150,13 +150,13 @@
     <ClCompile Include="sources\EnumCallbacks.c">
       <Filter>Source Files\EnumCallbacks</Filter>
     </ClCompile>
-    <ClCompile Include="wfp.c">
-      <Filter>Source Files\EnumCallbacks</Filter>
-    </ClCompile>
     <ClCompile Include="sources\GUI.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sources\Hook.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Window.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

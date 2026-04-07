@@ -8,8 +8,15 @@ typedef struct _AUX_ACCESS_DATA {
     PPRIVILEGE_SET PrivilegesUsed;
     GENERIC_MAPPING GenericMapping;
     ACCESS_MASK AccessesToAudit;
-    ULONG Reserve;                           
+    ACCESS_MASK MaximumAuditMask;
+    //UCHAR padding[0xC0];
 } AUX_ACCESS_DATA, * PAUX_ACCESS_DATA;
+
+typedef struct _COPY_PATH {
+    WCHAR SourcePath[260];
+    WCHAR TargetPath[260];
+	BOOLEAN IsDirectory;
+} COPY_PATH, * PCOPY_PATH;
 
 NTKERNELAPI
 NTSTATUS
@@ -181,7 +188,8 @@ IrpQueryDirectoryFile(
     OUT PVOID  FileInformation,
     IN ULONG  Length,
     IN FILE_INFORMATION_CLASS  FileInformationClass,
-    IN PUNICODE_STRING  FileName  OPTIONAL
+    IN PUNICODE_STRING  FileName  OPTIONAL,
+    IN BOOLEAN bRestartScan
 );
 
 //
@@ -332,40 +340,10 @@ NTSTATUS MyDeleteFile(HANDLE FileHandle);
 // 强制删除文件
 NTSTATUS ForceDeleteFile(UNICODE_STRING ustrFileName);
 
-NTSTATUS FakeDiskWriteDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
-
-NTSTATUS FakeDiskReadDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
-
-NTSTATUS FakeDiskDeviceControlDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
-
-NTSTATUS HookDiskWriteDispatch();
-
-NTSTATUS UnhookDiskWriteDispatch();
-
-NTSTATUS FakeStorPortScsiDispatch(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
-
-NTSTATUS HookStorPortScsiDispatch();
-
-VOID UnhookStorPortScsiDispatch();
-
-//通过FILE_OBJECT拿到文件名
-BOOLEAN QueryFileObjectDosName(PFILE_OBJECT pFileObject, PWCHAR OutputBufferFreeByCaller);
-
-NTSTATUS FakeNtfsCreateDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp);
-
-NTSTATUS HookNtfsDispatch();
-
-VOID UnhookNtfsDispatch();
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS ForceCopyFolder(IN PUNICODE_STRING SrcFolder, IN PUNICODE_STRING DstFolder);
 
 VOID RtlGetEmptyUnicodeString(_Out_ PUNICODE_STRING str, _In_ USHORT length);
-
-FLT_PREOP_CALLBACK_STATUS PreAntiDelete(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-
-NTSTATUS RegisterMiniFilter(PDRIVER_OBJECT pDriverObject);
-
-VOID UnregisterMiniFilter();
-
-NTSTATUS GetNtfsCommonCleanup(PVOID* pNtfsCommonCleanup);
 
 PVOID GetNtfsDecrementCleanupCounts();
 

@@ -37,7 +37,7 @@ ProductName=SnowSword
 
 [Objects]
 Module=.\modules\ModProcess.Inc|388|14267||Yes|
-Form=.\forms\FrmMain.frm|552|25608|Startup|Yes|
+Form=.\forms\FrmMain.frm|207|7336|Startup|Yes|
 Module=.\modules\ModHive.Inc|558|21756||Yes|
 Module=.\modules\ModModule.Inc|561|24110||Yes|
 Module=.\modules\ModThread.Inc|578|28088||Yes|
@@ -74,8 +74,8 @@ Module=.\modules\ModLowFile.Inc|1241|51405||Yes|
 Module=.\modules\ModKernelHook.Inc|173|7666||Yes|
 Module=.\modules\ModGUI.Inc|309|12730||Yes|
 
-TopTab=.\forms\FrmMain.frm|False|0|552|25608
-TopTab=.\forms\FrmListView.Frm|True|0|691|40594
+TopTab=.\forms\FrmMain.frm|True|1|217|7336
+TopTab=.\forms\FrmListView.Frm|False|1|691|40594
 TopTab=.\modules\ModGUI.Inc|False|0|414|16542
 TopTab=.\modules\ModListView.Inc|False|0|148|4505
 TopTab=.\modules\ModLoadDriver.Inc|False|0|9|920

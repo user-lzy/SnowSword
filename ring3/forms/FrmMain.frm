@@ -1059,8 +1059,6 @@ Private Sub DrawTreeView()
     treMain.AddItem treHal, "HalPrivateDispatch"
     Dim treKernelHook As HTREEITEM = treMain.AddItem(treKernel, "内核Hook")
     treMain.AddItem treKernelHook, "Object Hook"
-    Dim treGUI As HTREEITEM = treMain.AddItem(treKernel, "GUI相关")
-    treMain.AddItem treGUI, "热键"
     treKernelCallbacks = treMain.AddItem(treKernel, "内核回调")
     treMain.AddItem treKernelCallbacks, "Callbacks"
     treMain.AddItem treKernelCallbacks, "KernelTimer"

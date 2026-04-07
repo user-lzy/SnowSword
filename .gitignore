@@ -1,31 +1,59 @@
-# Visual Studio / VFB 临时文件
+# ==============================================
+# SnowSword 专用 .gitignore (VS+VFB+内核开发)
+# 适配：x64/Debug、release64、ring0/ring3 架构
+# ==============================================
+
+# 1. Visual Studio 全量临时文件（内核/驱动工程必备）
 .vs/
-<<<<<<< HEAD
-x64/Debug/SnowSword/
-x64/Debug/SnowSword.tlog/
 *.suo
 *.user
 *.aps
 *.recipe
 *.tlog
 *.lastbuildstate
-=======
-*.suo
-*.user
-*.aps
->>>>>>> 64069cc18fe3533c211272be6802b6bb2e497e1c
+*.log
+*.ipch
+*.opensdf
+*.sdf
+*.cache
+*.VC.db
+*.VC.VC.opendb
 
-# 编译输出
+# 2. VisualFreeBasic (VFB) 专属临时文件
+*.fbp
+*.fbw
+*.prj
+*.lvw
+*.bak
+*.tmp
+
+# 3. 编译输出目录（精准匹配你的项目路径）
+x64/Debug/
+x64/Release/
+release64/
 [Rr]elease/
-*.dll
-*.lib
-*.pdb
-*.obj
-*.txt
+[Dd]ebug/
 
-# 系统文件
+# 4. 编译中间/输出文件（C/C++/内核驱动）
+*.obj
+*.lib
+*.dll
+# *.exe
+*.pdb
+*.idb
+*.res
+*.exp
+# *.sys        # 内核驱动文件（核心！ring0必忽略）
+*.cat
+*.inf
+*.pdb
+
+# 5. 系统/缓存垃圾文件
 Thumbs.db
 .DS_Store
+*.log
+*.tmp
+*.temp
 
-# 你自己的同步脚本（如果不想上传的话）
-# SyncAndCommit.ps1
+# 6. 你的同步脚本（可选：不想上传就取消注释）
+SyncAndCommit.ps1

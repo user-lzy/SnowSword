@@ -346,31 +346,21 @@ NTSTATUS EnumProcessTimers(
     _Out_ PULONG pCount
 );
 
-NTSTATUS EnumerateMsgHook_New(
+NTSTATUS
+EnumMsgHook(
     OUT PWIN32K_MSG_HOOK_INFO* ppHookList,
     OUT PULONG                   pulHookCount
-);
-
-NTSTATUS
-EnumerateMsgHook(
-    OUT PWIN32K_MSG_HOOK_INFO* ppHookList,
-    OUT PULONG                   pulHookCount
-);
-
-NTSTATUS
-EnumerateEventHook_Win11(
-    OUT PWIN32K_EVENT_HOOK_INFO* ppHookList,
-    OUT PULONG                       pulHookCount
 );
 
 // 函数声明：枚举钩子并返回结构体数组
 NTSTATUS
-EnumerateEventHook(
+EnumEventHook(
     OUT PWIN32K_EVENT_HOOK_INFO* ppHookList,    // 返回钩子数组
     OUT PULONG                       pulHookCount    // 返回钩子数量
 );
 
-NTSTATUS EnumHotkey(
+NTSTATUS
+EnumHotkey(
     OUT PWIN32K_HOTKEY_INFO* ppHotkeyList,
     OUT PULONG pulHotkeyCount
 );

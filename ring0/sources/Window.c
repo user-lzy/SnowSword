@@ -712,7 +712,7 @@ NTSTATUS EnumerateHooksFromPti(
 // ==========================================
 // 【修正后】主函数
 // ==========================================
-NTSTATUS EnumerateMsgHook_New(
+NTSTATUS EnumerateMsgHook_Win11(
     OUT PWIN32K_MSG_HOOK_INFO* ppHookList,
     OUT PULONG                   pulHookCount
 )
@@ -859,7 +859,7 @@ NTSTATUS EnumerateMsgHook_New(
 }
 
 NTSTATUS
-EnumerateMsgHook(
+EnumerateMsgHook_Win10(
     OUT PWIN32K_MSG_HOOK_INFO* ppHookList,
     OUT PULONG                   pulHookCount
 )
@@ -1266,7 +1266,7 @@ NTSTATUS EnumerateEventHook_Win11(
 
 // ====================== 枚举事件钩子 → 返回结构体数组 ======================
 NTSTATUS
-EnumerateEventHook(
+EnumerateEventHook_Win10(
     OUT PWIN32K_EVENT_HOOK_INFO* ppHookList,
     OUT PULONG                       pulHookCount
 )
@@ -1570,12 +1570,12 @@ PVOID FindgphkHashTable()
 #define HOTKEY_HASH_BUCKET_COUNT 0x80
 
 // 函数指针定义（仅Win11使用）
-typedef PVOID(*PFN_W32GetUserSessionState)();
+//typedef PVOID(*PFN_W32GetUserSessionState)();
 
 // ==============================================
 // 【保留】你原有的Win10枚举逻辑（完全不变，仅内部调用）
 // ==============================================
-static NTSTATUS EnumHotkey_Win10(
+static NTSTATUS EnumerateHotkey_Win10(
     OUT PWIN32K_HOTKEY_INFO* ppHotkeyList,
     OUT PULONG pulHotkeyCount
 )
@@ -1693,7 +1693,7 @@ static NTSTATUS EnumHotkey_Win10(
 // ==============================================
 // 【最终修正】Win11 热键枚举逻辑
 // ==============================================
-static NTSTATUS EnumHotkey_Win11(
+static NTSTATUS EnumerateHotkey_Win11(
     OUT PWIN32K_HOTKEY_INFO* ppHotkeyList,
     OUT PULONG pulHotkeyCount
 )
@@ -1822,6 +1822,82 @@ static NTSTATUS EnumHotkey_Win11(
 // ==============================================
 // 【主入口】你原有的EnumHotkey函数（仅增加Win11备选逻辑）
 // ==============================================
+NTSTATUS EnumMsgHook(
+    OUT PWIN32K_MSG_HOOK_INFO* ppMsgHookList,
+    OUT PULONG pulMsgHookCount
+)
+{
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+
+    // 初始化输出参数
+    *ppMsgHookList = NULL;
+    *pulMsgHookCount = 0;
+
+    DbgPrint("==================== 开始枚举消息钩子 ====================\n");
+
+    // 【优先】尝试你原有的Win10枚举逻辑
+    status = EnumerateMsgHook_Win10(ppMsgHookList, pulMsgHookCount);
+    if (NT_SUCCESS(status))
+    {
+        DbgPrint("==================== Win10枚举成功 ====================\n");
+        return status;
+    }
+
+    // 【备选】Win10失败时，尝试Win11枚举逻辑
+    DbgPrint("Win10枚举失败，尝试Win11枚举...\n");
+    status = EnumerateMsgHook_Win11(ppMsgHookList, pulMsgHookCount);
+    if (NT_SUCCESS(status))
+    {
+        DbgPrint("==================== Win11枚举成功 ====================\n");
+        return status;
+    }
+
+    // 都失败
+    DbgPrint("==================== 所有枚举方式均失败 ====================\n");
+    return status;
+}
+
+// ==============================================
+// 【主入口】你原有的EnumEventHook函数（仅增加Win11备选逻辑）
+// ==============================================
+NTSTATUS EnumEventHook(
+    OUT PWIN32K_EVENT_HOOK_INFO* ppEventHookList,
+    OUT PULONG pulEventHookCount
+)
+{
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+
+    // 初始化输出参数
+    *ppEventHookList = NULL;
+    *pulEventHookCount = 0;
+
+    DbgPrint("==================== 开始枚举事件钩子 ====================\n");
+
+    // 【优先】尝试你原有的Win10枚举逻辑
+    status = EnumerateEventHook_Win10(ppEventHookList, pulEventHookCount);
+    if (NT_SUCCESS(status))
+    {
+        DbgPrint("==================== Win10枚举成功 ====================\n");
+        return status;
+    }
+
+    // 【备选】Win10失败时，尝试Win11枚举逻辑
+    DbgPrint("Win10枚举失败，尝试Win11枚举...\n");
+    status = EnumerateEventHook_Win11(ppEventHookList, pulEventHookCount);
+    if (NT_SUCCESS(status))
+    {
+        DbgPrint("==================== Win11枚举成功 ====================\n");
+        return status;
+    }
+
+    // 都失败
+    DbgPrint("==================== 所有枚举方式均失败 ====================\n");
+    return status;
+}
+
+// ==============================================
+// 【主入口】你原有的EnumHotkey函数（仅增加Win11备选逻辑）
+// ==============================================
 NTSTATUS EnumHotkey(
     OUT PWIN32K_HOTKEY_INFO* ppHotkeyList,
     OUT PULONG pulHotkeyCount
@@ -1836,7 +1912,7 @@ NTSTATUS EnumHotkey(
     DbgPrint("==================== 开始枚举热键 ====================\n");
 
     // 【优先】尝试你原有的Win10枚举逻辑
-    status = EnumHotkey_Win10(ppHotkeyList, pulHotkeyCount);
+    status = EnumerateHotkey_Win10(ppHotkeyList, pulHotkeyCount);
     if (NT_SUCCESS(status))
     {
         DbgPrint("==================== Win10枚举成功 ====================\n");
@@ -1845,7 +1921,7 @@ NTSTATUS EnumHotkey(
 
     // 【备选】Win10失败时，尝试Win11枚举逻辑
     DbgPrint("Win10枚举失败，尝试Win11枚举...\n");
-    status = EnumHotkey_Win11(ppHotkeyList, pulHotkeyCount);
+    status = EnumerateHotkey_Win11(ppHotkeyList, pulHotkeyCount);
     if (NT_SUCCESS(status))
     {
         DbgPrint("==================== Win11枚举成功 ====================\n");

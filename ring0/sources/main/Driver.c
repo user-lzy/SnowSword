@@ -1215,12 +1215,12 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
             // 枚举消息钩子
             //status = EnumerateMsgHook(&pMsgHookCache, &msgHookCount);
-            status = EnumerateMsgHook_New(&pMsgHookCache, &msgHookCount);
-            DbgPrint("[IOCTL] EnumerateMsgHook 状态: %08X，枚举数量: %lu\n", status, msgHookCount);
+            status = EnumMsgHook(&pMsgHookCache, &msgHookCount);
+            DbgPrint("[IOCTL] EnumMsgHook 状态: %08X，枚举数量: %lu\n", status, msgHookCount);
 
             if (!NT_SUCCESS(status))
             {
-                DbgPrint("EnumerateMsgHook failed: %08X\n", status);
+                DbgPrint("EnumMsgHook failed: %08X\n", status);
                 pMsgHookCache = NULL;
                 msgHookCount = 0;
                 break;
@@ -1281,13 +1281,13 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
 
             // 枚举事件钩子
-            status = EnumerateEventHook_Win11(&pEventHookCache, &eventHookCount);
+            status = EnumEventHook(&pEventHookCache, &eventHookCount);
             //status = EnumerateEventHook(&pEventHookCache, &eventHookCount);
-            DbgPrint("[IOCTL] EnumerateWinEventHook 状态: %08X，枚举数量: %lu\n", status, eventHookCount);
+            DbgPrint("[IOCTL] EnumWinEventHook 状态: %08X，枚举数量: %lu\n", status, eventHookCount);
 
             if (!NT_SUCCESS(status))
             {
-                DbgPrint("EnumerateWinEventHook failed: %08X\n", status);
+                DbgPrint("EnumWinEventHook failed: %08X\n", status);
                 pEventHookCache = NULL;
                 eventHookCount = 0;
                 break;

@@ -8,6 +8,9 @@ Type SYMBOL_CONTEXT
     FuncAddr As ULONG64 Ptr
     pFuncName As LPWSTR
 End Type
+ 
+Declare Function SymLoadModuleEx2 Lib "DbgHelp.dll" Alias "SymLoadModuleEx"(ByVal hProcess As HANDLE, ByVal HFILE As HANDLE, ByVal ImageName As PCSTR, ByVal ModuleName As PCSTR, ByVal BaseOfDll As DWORD64, ByVal DllSize As DWORD, ByVal Data As PMODLOAD_DATA, ByVal FLAGS As DWORD) As DWORD64
+'Declare Function SymEnumSymbolsW Lib "Dbghelp.dll" Alias "SymEnumSymbolsW"(ByVal hProcess As HANDLE, ByVal BaseOfDll As ULONG64, ByVal Mask As PCWSTR, ByVal EnumSymbolsCallback As PSYM_ENUMERATESYMBOLS_CALLBACKW, ByVal UserContext As PVOID) As WINBOOL
 
 ' 初始化函数 - 获取Dll基址和导出表
 Private Function GetDllExports(ByVal DllName As String, ByRef exportDir As IMAGE_EXPORT_DIRECTORY Ptr) As PVOID
@@ -194,10 +197,15 @@ Function EnumSymCallBack(ByVal pSymInfo As PSYMBOL_INFO, ByVal SymbolSize As DWO
     Return True
 End Function
 
+Function EnumSymbolsCallback(ByVal sym As SYMBOL_INFO Ptr, ByVal SymbolSize As ULong, ByVal UserContext As PVOID) As Boolean
+    Print "[+] Found: "; sym->Name; " @ "; Hex(sym->ADDRESS)
+    Return True ' 继续枚举
+End Function
+
 ' 加载内核模块符号
 Function QuerySymbol(ByVal Addr As ULONG64 Ptr, pName As LPWSTR) As Boolean
     ' 常见的内核模块名称
-    Dim kernelModules(0) As WString * 50 = {"drivers\ntfs.sys"} ' {"drivers\ntfs.sys"} ' {"ntoskrnl.exe"}
+    Dim kernelModules(0) As WString * 50 = {"drivers\ntfs.sys"} ' {"drivers\ntfs.sys"}
     
     Dim i As Integer
     For i = 0 To UBound(kernelModules)
@@ -206,19 +214,19 @@ Function QuerySymbol(ByVal Addr As ULONG64 Ptr, pName As LPWSTR) As Boolean
         Print "ModuleBase:" & WHex(ModuleBase)
         Print "ModulePath:" & "C:\Windows\System32\" & kernelModules(i)
         Dim hFile As HANDLE = CreateFile("C:\Windows\System32\" & kernelModules(i), GENERIC_READ, FILE_SHARE_READ Or FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL)
-        If hFile = NULL Then Print "[QuerySymbol]CreateFile:" & "C:\Windows\System32\" & kernelModules(i) & " " & WinErrorMsg(GetLastError) & GetLastError
+        If hFile = INVALID_HANDLE_VALUE Then Print "[QuerySymbol]CreateFile:" & "C:\Windows\System32\" & kernelModules(i) & " " & WinErrorMsg(GetLastError) & GetLastError
         Dim dwFileSize As DWORD = GetFileSize(hFile, NULL)
         CloseHandle hFile
         'Print kernelModules(i) & ":0x" & WHex(ModuleBase)
         'Print kernelModules(i) & " 0x" & WHex(ModuleBase) & " " & "0x" & WHex(ModuleSize)
         'Dim SymLoadModule64(byval hProcess as HANDLE, byval hFile as HANDLE, byval ImageName as PSTR, byval ModuleName as PSTR, byval BaseOfDll as DWORD64, byval SizeOfDll as DWORD) as DWORD64 = DyLibSymbol(GetModuleHandle("DbgHelp.dll"), "SymLoadModuleExW")
-        Dim dwBase As ULONG64 = SymLoadModule64(GetCurrentProcess, NULL, "C:\Windows\System32\" & kernelModules(i), NULL, ModuleBase, ModuleSize)
+        Dim dwBase As ULONG64 = SymLoadModule64(GetCurrentProcess, NULL, "C:\Windows\System32\" & kernelModules(i), NULL, ModuleBase, ModuleSize) ' ModuleBase
         Print "dwBase:" & WHex(dwBase)
-        Print  WinErrorMsg(GetLastError) & GetLastError
+        Print "[SymLoadModule64]" & WinErrorMsg(GetLastError) & GetLastError
         Dim SymInfo As SYMBOL_CONTEXT
         SymInfo.FuncAddr = Addr
         SymInfo.pFuncName = pName
-        Print SymEnumSymbols(GetCurrentProcess, dwBase, NULL, @EnumSymCallBack, @SymInfo) & " " & WinErrorMsg(GetLastError) & GetLastError
+        Print "[SymEnumSymbols]" & SymEnumSymbols(GetCurrentProcess, dwBase, StrPtr("!*!"), @EnumSymCallBack, @SymInfo) & " " & WinErrorMsg(GetLastError) & GetLastError
         SymUnloadModule64 GetCurrentProcess, dwBase
         If (*(SymInfo.pFuncName) <> "") AndAlso (*Addr <> NULL) Then Return True
     Next
@@ -230,12 +238,12 @@ Function SymInit(ByVal hProcess As HANDLE) As Boolean
     Dim symbolPath As WString * 50
     
     '' 直接使用在线符号服务器，不进行本地缓存
-    symbolPath = "SRV*" & App.Path & "symbols*" & "https://msdl.microsoft.com/download/symbols" ' "http://msdl.blackint3.com:88/download/symbols"
+    symbolPath = "SRV*" & "C:\symbols*" & "https://msdl.microsoft.com/download/symbols" ' "http://msdl.blackint3.com:88/download/symbols"
     
     SetEnvironmentVariable("_NT_SYMBOL_PATH", @symbolPath)
     Print "使用在线符号服务器（无缓存）"
     
-    Dim options As DWORD = SymSetOptions(SYMOPT_DEFERRED_LOADS Or SYMOPT_UNDNAME Or SYMOPT_LOAD_LINES)
+    Dim options As DWORD = SymSetOptions(SYMOPT_UNDNAME Or SYMOPT_LOAD_LINES Or SYMOPT_DEBUG)
     
     ' 初始化符号处理
     If SymInitialize(hProcess, NULL, False) = False Then
@@ -243,6 +251,38 @@ Function SymInit(ByVal hProcess As HANDLE) As Boolean
         Return False
     End If
     Return True
+End Function
+
+Function LoadModuleSymbols(ByVal imagePath As ZString Ptr, ByVal dwBase As ULONG_PTR) As Boolean
+    Dim hProc As HANDLE = GetCurrentProcess
+
+    Dim ret As ULONG_PTR = SymLoadModuleEx(hProc, NULL, imagePath, StrPtr("nt"), dwBase, 0, NULL, 0)
+
+    if ret = 0 then
+        Print "SymLoadModuleEx failed: "; GetLastError
+        return FALSE
+    end if
+
+    Print "[+] Module loaded: "; *imagePath
+    Return True
+End Function
+
+Function GetSymbolAddress(ByVal pszName As ZString Ptr) As ULONG64
+    Dim hProc As HANDLE = GetCurrentProcess
+
+    dim buffer(1023) as ubyte
+    dim sym as SYMBOL_INFO ptr = cast(SYMBOL_INFO ptr, @buffer(0))
+
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO)
+    sym->MaxNameLen = 255
+
+    If SymFromName(hProc, pszName, sym) = 0 Then
+        Print "SymFromName failed: "; *pszName; " err="; GetLastError
+        return 0
+    end if
+
+    Print "[+] "; *pszName; " = "; Hex(sym->ADDRESS)
+    Return sym->ADDRESS
 End Function
 
 Sub CopyDataToClipboard(ByVal strData As String)

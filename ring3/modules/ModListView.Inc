@@ -229,6 +229,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "回调函数地址",, 280
                 .AddColumn "所属模块",, 500
                 .AddColumn "回调函数上下文",, 300
+                .AddColumn "备注",, 300
             Case Minifilter
                 If TreeList.GetColumnCount = 0 Then
                     TreeList.AddColumn "名称", 250

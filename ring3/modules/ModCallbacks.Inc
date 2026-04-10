@@ -1,14 +1,15 @@
 ﻿Type CallbackInfo
     TheType As Wstring * 50
-    Func As Integer
-    TheContext As Integer
+    Func As UInteger
+    TheContext As UInteger
+    Others(3) As UInteger' 预留字段，存储额外信息（如Ex2上下文等）
     'DriverName As Wstring * 260
 End Type
 
 Type ObCallbackInfo
     TheType As Wstring * 50
-    ObHandle As Integer
-    Func As Integer
+    ObHandle As UInteger
+    Func As UInteger
     'DriverName As Wstring * 260
 End Type
 
@@ -150,7 +151,19 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
             NewIndex = AddItemEx(lvwCallbacks, CallbackArray(i).TheType)
             SetItemTextEx lvwCallbacks, NewIndex, 1, "0x" & WHex(CallbackArray(i).Func)
             SetItemTextEx lvwCallbacks, NewIndex, 2, GetDriverPathByAddr(CallbackArray(i).Func)
-            If InStr(CallbackArray(i).TheType, "Ob") <= 0 Then SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+            If InStr(CallbackArray(i).TheType, "Ob") > 0 Then
+                SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+                SetItemTextEx lvwCallbacks, NewIndex, 4, "ObHandle=0x" & WHex(CallbackArray(i).Others(0))
+            ElseIf CallbackArray(i).TheType = "CmpCallback" Then
+                SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+                SetItemTextEx lvwCallbacks, NewIndex, 4, "cookie.QuadPart=0x" & WHex(CallbackArray(i).Others(0))
+            ElseIf InStr(CallbackArray(i).TheType, "\Callback\") > 0 Then
+                SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+                SetItemTextEx lvwCallbacks, NewIndex, 4, "CallbackRegistration=0x" & WHex(CallbackArray(i).Others(0))
+            Else
+                SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+                SetItemTextEx lvwCallbacks, NewIndex, 4, "无"
+            End If
         End If
     Next
     CommitListViewView lvwCallbacks

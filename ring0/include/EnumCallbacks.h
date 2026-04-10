@@ -29,6 +29,7 @@ typedef struct _CallbackInfo
 	wchar_t Type[50];
 	PVOID Func;
 	PVOID Context;
+	ULONG64 Others[4]; // 预留字段，存储额外信息（如Ex2上下文等）
 	//wchar_t DriverName[260];
 }CallbackInfo, *PCallbackInfo;
 
@@ -69,19 +70,89 @@ typedef struct _CM_NOTIFY_ENTRY
 	Thread,
 	DeskTop,
 }OB_CALLBACK_TYPE;*/
+//OB_CALLBACK_REGISTRATION a;
+// 【正确】Windows 内核原生对象回调结构体（x64，Win7~Win11通用）
+// 禁用1字节对齐！内核结构体必须自然对齐（8字节）
+//typedef struct _OB_CALLBACK
+//{
+//	LIST_ENTRY          ListEntry;      // 0x00  双向链表节点
+//	PVOID               Unknown;        // 0x10  保留字段
+//	PVOID               RegistrationContext; // 0x18  ✅ 你要的【回调上下文】
+//	HANDLE              ObHandle;       // 0x20  回调注册句柄
+//	PVOID               ObTypeAddr;     // 0x28  对象类型地址(Process/Thread)
+//	PVOID               PreCall;        // 0x30  前置回调函数
+//	PVOID               PostCall;       // 0x38  后置回调函数
+//} OB_CALLBACK, * POB_CALLBACK;
 
-// 进线程对象回调函数结构体定义
-#pragma pack(1)
+//#pragma pack(1)
+//typedef struct _OB_CALLBACK
+//{
+//	LIST_ENTRY ListEntry;
+//	ULONGLONG Unknown;
+//	HANDLE ObHandle;
+//	PVOID ObTypeAddr;
+//	PVOID PreCall;
+//	PVOID PostCall;
+//}OB_CALLBACK, * POB_CALLBACK;
+//#pragma pack()
+
+//typedef struct _OB_CALLBACK
+//{
+//	LIST_ENTRY      ListEntry;
+//	HANDLE          RegistrationHandle;
+//	PVOID           RegistrationContext;
+//	POBJECT_TYPE    ObjectType;
+//	PVOID           PreOperation;
+//	PVOID           PostOperation;
+//	ULONG           Attributes;
+//	ULONG           Operations;
+//} OB_CALLBACK, * POB_CALLBACK;
+
 typedef struct _OB_CALLBACK
 {
-	LIST_ENTRY ListEntry;
-	ULONGLONG Unknown;
-	HANDLE ObHandle;
-	PVOID ObTypeAddr;
-	PVOID PreCall;
-	PVOID PostCall;
-}OB_CALLBACK, * POB_CALLBACK;
-#pragma pack()
+	LIST_ENTRY      ListEntry;            // 0x00
+	ULONG           Operations;           // 0x10
+	ULONG           Padding0;             // 0x14 (对齐填充)
+	PVOID           RegistrationHandle;   // 0x18 <-- 这里才是真正的 Handle
+	POBJECT_TYPE    ObjectType;           // 0x20
+	PVOID           PreOperation;         // 0x28
+	PVOID           PostOperation;        // 0x30
+	ULONG           Enabled;              // 0x38
+	ULONG           Padding1;             // 0x3C
+} OB_CALLBACK, * POB_CALLBACK;
+
+// 严格对应你的 ObRegisterCallbacks 汇编
+typedef struct _OB_REGISTRATION_BLOCK
+{
+	USHORT Version;        // 0x00 固定 0x100 (你汇编里 mov r12d, 100h)
+	USHORT Reserved;       // 0x02
+	ULONG  Flags;          // 0x04
+	POBJECT_TYPE ObjectType;//0x08 进程/线程类型
+	USHORT AltitudeLength;  // 0x10
+	USHORT CallbackCount;  // 0x12 回调个数
+	ULONG  Reserved2;      // 0x14
+	POB_OPERATION_REGISTRATION Callbacks; // 0x18 回调数组（含RegistrationContext）
+	WCHAR  Altitude[1];    // 0x20 高度字符串
+} OB_REGISTRATION_BLOCK, * POB_REGISTRATION_BLOCK;
+
+// 【完整真实结构】匹配内核反汇编，包含你要的 Context
+typedef struct _EX_CALLBACK_ROUTINE_BLOCK
+{
+	EX_RUNDOWN_REF RundownProtect;  // 0x00  运行保护
+	PVOID          Function;        // 0x08  回调函数（所有类型通用）
+	ULONG          Flags;           // 0x10  类型标志（0=普通,2=Ex,6=Ex2）
+	ULONG          _Padding;        // 0x14  对齐填充
+	PVOID          Context;         // 0x18  ✅【关键】Ex/Ex2 专用上下文
+} EX_CALLBACK_ROUTINE_BLOCK, * PEX_CALLBACK_ROUTINE_BLOCK;
+
+// Windows 内核原生回调块结构体（x64）
+//typedef struct _EX_CALLBACK_ROUTINE_BLOCK_EX
+//{
+//	PVOID  Function;    // 0x00  回调函数地址（你原本读的是对的）
+//	PVOID  Context;     // 0x08  回调上下文
+//	ULONG  Flags;       // 0x10  ✅ 核心：就是反汇编里的 a2（1=普通，2=Ex）
+//	ULONG  Reserved;    // 0x14  内存对齐填充
+//} EX_CALLBACK_ROUTINE_BLOCK_EX, * PEX_CALLBACK_ROUTINE_BLOCK_EX;
 
 typedef struct _SHUTDOWN_PACKET {
 	LIST_ENTRY ListEntry;
@@ -92,10 +163,18 @@ typedef NTSTATUS(*PSE_LOGON_SESSION_TERMINATED_ROUTINE) (
 	IN PLUID LogonId
 	);
 
-typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION {
+typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION
+{
 	struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION* Next;
-	PSE_LOGON_SESSION_TERMINATED_ROUTINE CallbackRoutine;
+	PVOID CallbackRoutine;
 } SEP_LOGON_SESSION_TERMINATED_NOTIFICATION, * PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION;
+
+typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION_EX
+{
+	struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION_EX* Next;
+	PVOID CallbackRoutine;
+	PVOID CallbackContext;
+} SEP_LOGON_SESSION_TERMINATED_NOTIFICATION_EX, * PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION_EX;
 
 typedef struct _NOTIFICATION_PACKET
 {
@@ -104,17 +183,36 @@ typedef struct _NOTIFICATION_PACKET
 	PVOID NotificationRoutine;
 } NOTIFICATION_PACKET, * PNOTIFICATION_PACKET;
 
-typedef struct _SETUP_NOTIFY_DATA
-{
-	LIST_ENTRY ListEntry;
-	IO_NOTIFICATION_EVENT_CATEGORY EventCategory;
-	PDRIVER_NOTIFICATION_CALLBACK_ROUTINE Callback;
-	PVOID Context;
-	PDRIVER_OBJECT DriverObject;
-	USHORT RefCount;
-	BOOLEAN Unregistered;
-	PFAST_MUTEX Lock;
-} SETUP_NOTIFY_DATA, * PSETUP_NOTIFY_DATA;
+// ============================================================================
+// 结构体定义
+// ============================================================================
+
+// 严格匹配你 WinDbg 实测的内存偏移
+typedef struct _PNP_NOTIFY_ENTRY {
+	LIST_ENTRY      ListEntry;        // 0x00   (固定链表节点)
+	ULONG64         Reserved0;        // 0x10   (保留/未知字段，必须占位)
+	ULONG64         Reserved1;        // 0x18   (保留/未知字段，必须占位)
+	PVOID           Callback;         // 0x20   ✅ 真实回调函数(你验证过的地址)
+	PVOID           Context;          // 0x28   ✅ 真实回调上下文
+	//PDRIVER_OBJECT  DriverObject;     // 0x30   (可选，驱动对象)
+	//ULONG           RefCount;         // 0x38
+	//BOOLEAN         Unregistered;     // 0x3C
+	//UCHAR           Pad[3];           // 0x3D~0x3F 对齐
+	//PFAST_MUTEX     Lock;             // 0x40
+} PNP_NOTIFY_ENTRY, * PPNP_NOTIFY_ENTRY;
+
+typedef struct _DEVICE_CLASS_NOTIFY_INFO {
+	PLIST_ENTRY  Buckets;      // 桶数组基址
+	ULONG        NumBuckets;   // 固定 13
+	PFAST_MUTEX  Lock;
+} DEVICE_CLASS_NOTIFY_INFO, * PDEVICE_CLASS_NOTIFY_INFO;
+
+typedef struct _HWPROFILE_NOTIFY_INFO {
+	PLIST_ENTRY  ListHead;
+	PFAST_MUTEX  Lock;
+} HWPROFILE_NOTIFY_INFO, * PHWPROFILE_NOTIFY_INFO;
+#define CALCULATE_RIP_TARGET(pInstruction, instructionLength) \
+    ((PVOID)((ULONG_PTR)(pInstruction) + (instructionLength) + *(PLONG)((PUCHAR)(pInstruction) + 3)))
 
 typedef struct _CALLBACK_OBJECT {
 	ULONG Tag;                       // 偏移0: 签名标识，例如0x6C6C6143 ('llaC')
@@ -133,6 +231,35 @@ typedef struct _CALLBACK_REGISTRATION {
 	ULONG Unknown1;                  // 偏移40: 未知字段（可能为引用计数或状态），代码中初始化为0
 	UCHAR Unknown2;                  // 偏移44: 未知标志，代码中初始化为0
 } CALLBACK_REGISTRATION, * PCALLBACK_REGISTRATION;
+
+// 导出函数原型
+// NMI 回调函数原型（匹配内核）
+typedef VOID(*PKNCALLBACK)(PVOID Context, ULONG Type);
+
+// NMI 回调节点结构（严格从反汇编还原，偏移完全匹配）
+typedef struct _KI_NMI_CALLBACK_ENTRY
+{
+	struct _KI_NMI_CALLBACK_ENTRY* Next;    // 0x00  单链表指针
+	PKNCALLBACK                       Callback;  // 0x08  回调函数
+	PVOID                             Context;   // 0x10  回调上下文
+	struct _KI_NMI_CALLBACK_ENTRY* Self;    // 0x18  自引用
+} KI_NMI_CALLBACK_ENTRY, * PKI_NMI_CALLBACK_ENTRY;
+
+// 🔥 修复：DbgPrint 回调正确结构体（x64）
+/*typedef struct _DBG_PRINT_CALLBACK_ENTRY
+{
+	LIST_ENTRY             ListEntry;        // 0x00
+	PDEBUG_PRINT_CALLBACK  CallbackFunction; // 0x10 【核心修复】
+	PVOID                  CallbackContext;  // 0x18
+	ULONG                  Flags;            // 0x20
+} DBG_PRINT_CALLBACK_ENTRY, * PDBG_PRINT_CALLBACK_ENTRY;*/
+
+// 存储链表头+自旋锁
+typedef struct _DBG_PRINT_INFO
+{
+	PLIST_ENTRY     CallbackList;
+	PEX_SPIN_LOCK   CallbackLock;
+} DBG_PRINT_INFO, * PDBG_PRINT_INFO;
 
 #pragma pack(1)
 typedef struct _MINIFILTER_MAJORFUNCTION
@@ -188,33 +315,9 @@ typedef struct _WFP_FILTER_INFO {
 	WCHAR   Name[256];          // Filter 名称
 } WFP_FILTER_INFO, * PWFP_FILTER_INFO;
 
-PVOID FindPspCreateProcessNotifyRoutine();
-
-PVOID FindPspCreateThreadNotifyRoutine();
-
-PVOID FindPspLoadImageNotifyRoutine();
-
-PVOID FindCmCallbackListHead();
-
 NTSTATUS ControlCallback(PVOID pCallbackFunc, PUCHAR OldCode, BOOLEAN Status);
-
-VOID EnumAttachDevice();
-
+NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo);
 ULONG EnumMiniFilter(PMINIFILTER_OBJECT pArray);
-
-PVOID FindKeBugCheckCallbackListHead();
-
-PVOID FindKeBugCheckReasonCallbackListHead();
-
-PVOID FindPspLegoNotifyRoutine();
-
-VOID FindIopNotifyShutdownQueueHead(PVOID* pIopNotifyShutdownQueueHead, PVOID* pIopNotifyLastChanceShutdownQueueHead);
-
-PVOID FindLogonSessionTerminatedRoutinueHead();
-
-PVOID FindPnpDeviceClassNotifyList();
-
-PVOID FindIopFsNotifyChangeQueueHead();
 
 ULONG EnumCallbacks(PCallbackInfo* pArray);
 

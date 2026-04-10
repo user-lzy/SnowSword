@@ -169,7 +169,7 @@ PVOID SearchSpecialCode1(PVOID pSearchBeginAddr, ULONG ulSearchLength, PUCHAR pS
             // 判断地址是否有效
             if (FALSE == MmIsAddressValid((PVOID)(i + j)))
             {
-                DbgPrint("[SearchSpecialCode] 地址无效: %p", i + j);
+                //DbgPrint("[SearchSpecialCode] 地址无效: %p", i + j);
                 //break;
             }
             // 匹配特征码
@@ -178,8 +178,8 @@ PVOID SearchSpecialCode1(PVOID pSearchBeginAddr, ULONG ulSearchLength, PUCHAR pS
                 // 可以在这里输出不匹配的字节
                 if (j == 0)  // 如果是第一个字节不匹配
                 {
-                    DbgPrint("[SearchSpecialCode] 在 %p 不匹配: 0x%02X != 0x%02X",
-                        i, *(PUCHAR)i, pSpecialCode[0]);
+                    //DbgPrint("[SearchSpecialCode] 在 %p 不匹配: 0x%02X != 0x%02X",
+                    //    i, *(PUCHAR)i, pSpecialCode[0]);
                 }
                 break;
             }
@@ -199,50 +199,49 @@ PVOID SearchSpecialCode1(PVOID pSearchBeginAddr, ULONG ulSearchLength, PUCHAR pS
 }
 
 PVOID SearchSpecialCodeWithMask(
-    PVOID pSearchBeginAddr,
-    ULONG ulSearchLength,
+    PVOID  pSearchBeginAddr,
+    ULONG  ulSearchLength,
     PUCHAR pSpecialCode,
-    PUCHAR pMask,  // 掩码数组，1表示需要匹配，0表示通配符
-    ULONG ulSpecialCodeLength)
+    PUCHAR pMask,
+    ULONG  ulSpecialCodeLength
+)
 {
-    PVOID pDestAddr = NULL;
-    PUCHAR pBeginAddr = (PUCHAR)pSearchBeginAddr;
-    PUCHAR pEndAddr = pBeginAddr + ulSearchLength - ulSpecialCodeLength;
-    PUCHAR i = NULL;
-    ULONG j = 0;
+    if (!pSearchBeginAddr || !pSpecialCode || !pMask || ulSpecialCodeLength == 0)
+        return NULL;
 
-    if (!pSearchBeginAddr || !pSpecialCode || !pMask) return NULL;
+    PUCHAR pStart = (PUCHAR)pSearchBeginAddr;
+    PUCHAR pEnd = pStart + ulSearchLength - ulSpecialCodeLength;
 
-    for (i = pBeginAddr; i <= pEndAddr; i++)
+    for (PUCHAR pCurr = pStart; pCurr <= pEnd; pCurr++)
     {
-        // 遍历特征码
-        for (j = 0; j < ulSpecialCodeLength; j++)
+        BOOLEAN bMatch = TRUE;
+
+        for (ULONG j = 0; j < ulSpecialCodeLength; j++)
         {
-            // 读取内存中的字节
-            UCHAR bytCode = 0;
-            if (!PhysicalReadMemory(i + j, &bytCode, sizeof(UCHAR))) {
+            UCHAR currByte;
+
+            __try
+            {
+                currByte = *(pCurr + j);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                bMatch = FALSE;
+                break;   // 这里只能跳出内层 j 循环
+            }
+
+            if (pMask[j] == 1 && currByte != pSpecialCode[j])
+            {
+                bMatch = FALSE;
                 break;
             }
-
-            // 检查是否需要匹配（掩码为1）
-            if (pMask[j] != 0) {
-                // 匹配特征码
-                if (bytCode != pSpecialCode[j])
-                {
-                    break;
-                }
-            }
-            // 掩码为0表示通配符，跳过比较
         }
 
-        // 匹配成功
-        if (j >= ulSpecialCodeLength)
-        {
-            pDestAddr = (PVOID)i;
-            break;
-        }
+        if (bMatch)
+            return pCurr;
     }
-    return pDestAddr;
+
+    return NULL;
 }
 
 PVOID FindObpInfoMaskToOffset()

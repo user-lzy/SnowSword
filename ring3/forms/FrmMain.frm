@@ -682,7 +682,7 @@ Tag=
 [TopMenu]
 Name=TopMenu1
 Help=
-Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb0-10{防火墙FrmMain_TopMenu1_mnuFireWall0-10}
+Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb0-10{防火墙FrmMain_TopMenu1_mnuFireWall0-10}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10}
 Tag=
 
 [TreeView]
@@ -884,8 +884,7 @@ Dim Shared IsDriverLoaded As BOOLEAN = False
 Dim Shared PIDs() As DWORD
 Dim Shared FilePathByUnlock As String
 Dim Shared prevFrmMainProc As LONG_PTR = NULL
-'Const LISTVIEW1_SUBCLASSPROC_ID As UINT_PTR = 0
-'Dim Shared prevListView1Proc As LONG_PTR = NULL
+Dim Shared MyLog As Logger
 
 Dim Shared ListView_Height As Long
 
@@ -1077,6 +1076,25 @@ Private Sub DrawTreeView()
     treMain.AddItem treAdvance, "设置"
 End Sub
 
+Sub InitLog()
+    ' 1. 初始化线程锁（多线程必调用，单线程可选）
+    'MyLog.InitMutex()
+
+    ' 2. 自定义配置（默认仅控制台输出，无需配置可直接用）
+    MyLog.SetOutput(True, False) ' 仅开启控制台双输出
+    MyLog.SetTextBox FrmLog.txtLog
+    'MyLog.SetAppend(True)             ' 开启日志追加（不覆盖）
+    'MyLog.SetLogPath("./logs")        ' 设置日志保存到 logs 文件夹
+    MyLog.SetEncoding(False)           ' 使用 UTF-8 编码
+    MyLog.SetFilterLevel(LOG_DEBUG)   ' 修改过滤级别为 DEBUG（输出所有日志）
+
+    ' 3. 打印日志（支持可选参数）
+    /'MyLog.PrintLog(LOG_WARN, "进程句柄获取失败", __FILE__, __FUNCTION__, "OpenProcess")
+    MyLog.PrintLog(LOG_ERROR, "内存分配失败", , , "VirtualAlloc")
+    MyLog.PrintLog(LOG_INFO, "模块初始化完成")
+    MyLog.PrintLog(LOG_FATAL, "程序异常退出")'/
+End Sub
+
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     'ChangeWindowMessageFilter(0x0049, MSGFLT_ADD)'允许拖放文件
     AdjustPrivilege
@@ -1163,7 +1181,20 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     Print GetSystemVersion
     'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
     prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WndProc))
-    'AfxMsg SizeOf(WIN32K_HOTKEY_INFO)
+    'AfxMsg SizeOf(CallbackInfo)
+    /'If SymInit(GetCurrentProcess) Then 
+        ' 加载 ntoskrnl（路径必须正确）
+        LoadModuleSymbols("C:\Windows\System32\ntoskrnl.exe", &HFFFFF8017A000000)
+
+        ' 查询符号
+        Dim addr As ULONG64
+
+        Print "nt!PsLoadedModuleList:0x" & WHex(GetSymbolAddress("nt!PsLoadedModuleList"))
+        Print "nt!PsActiveProcessHead:0x" & WHex(GetSymbolAddress("nt!PsActiveProcessHead"))
+        
+        Print "正在搜索包含 'PsActive' 的符号..."
+        SymEnumSymbols(GetCurrentProcess, &HFFFFF8017A000000, StrPtr("*!*"), @EnumSymbolsCallback, NULL)
+    End If'/
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1171,9 +1202,17 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 'xPos yPos   当前鼠标位置，相对于屏幕。就是屏幕坐标。
 Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos As Long, yPos As Long)
-    CurrentPos.x = xPos
-    CurrentPos.y = yPos
+    Dim lvinfo As LVHITTESTINFO
+    lvinfo.pt.x = xPos
+    lvinfo.pt.y = yPos
     ScreenToClient hWndControl, @CurrentPos
+    ListView_SubItemHitTest(hWndControl, @lvinfo)
+    If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
+    (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
+        LastClickedItem = lvinfo.iItem
+        LastClickedSubItem = lvinfo.iSubItem
+    End If
+    
     Select Case CurrentInformation.intType
         Case Process
             PopupMenu hWndForm,mnuProcess.HMENU
@@ -1395,14 +1434,14 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmMain_mnuProcess_mnuViewHotkey ' 查看热键
             FrmListView.Show,, Hotkey
         Case FrmMain_mnuProcess_mnuLittleCopy ' 复制单格数据
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            'Print lvinfo.iItem & " " & lvinfo.iSubItem
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
         Case FrmMain_mnuProcess_mnuLocateFilePath ' 定位文件位置(资源浏览器)
             Dim lpFilePath As StringW = ListView1.GetItemText(ListView1.SelectedItem, 4)
@@ -1778,13 +1817,14 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmMain_mnuFile_mnuIsPhysicalAnalyze ' 是否物理磁盘分析
             SetMenuCheckState mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze, Not GetMenuCheckState(mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
         Case FrmMain_mnuFile_mnuLittleCopy ' 复制单格数据
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
     End Select
 End Sub
@@ -1965,6 +2005,8 @@ Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
             RestartasAdmin
         Case FrmMain_TopMenu1_mnuFireWall ' 防火墙
             FrmFireWall.Show
+        Case FrmMain_TopMenu1_mnuViewLog ' 显示日志
+            FrmLog.Show
    End Select
 End Sub
 
@@ -2210,13 +2252,14 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             Put #1,, bytDump()
             Close #1
         Case FrmMain_mnuKernelModule_mnuLittleCopy ' 复制单格数据
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
         Case FrmMain_mnuKernelModule_mnuLocateFilePath ' 定位文件位置(资源浏览器)
             Dim lpFilePath As StringW = ListView1.GetItemText(ListView1.SelectedItem, 4)
@@ -2288,51 +2331,24 @@ Sub FrmMain_mnuCallbacks_WM_Command(hWndForm As hWnd, wID As ULong)
             
         Case FrmMain_mnuCallbacks_mnuRemoveCallback ' 移除回调
             Dim CallbackAddress As PVOID = Cast(PVOID, ValULng(FF_Replace(ListView1.GetItemText(SelectIndex, 1), "0x", "&H")))
-            Dim ObHandle As PVOID, Cookie As LARGE_INTEGER
+            Dim CallbackType As StringW = ListView1.GetItemText(SelectIndex, 0)
+            Dim Other0 As StringW = ListView1.GetItemText(SelectIndex, 4)
+            Other0 = RightW(Other0, LenW(Other0) - InStr(Other0, "="))
+            Dim Callback_Info As CallbackInfo
             If (IsDriverLoaded AndAlso CallbackAddress <> NULL) Then
-                Dim CallbackType As StringW = ListView1.GetItemText(SelectIndex, 0)
-                If InStr(CallbackType, "Ob") > 0 Then
-                    Dim ObHandle As PVOID = Cast(PVOID, CallbackArray(SelectIndex).TheContext)
-                    If IoControl(hDrv, IOCTL_UnregisterObCallback, @ObHandle, SizeOf(ObHandle)) = 0 Then
-                        Print "[IOCTL_UnregisterObCallback]" & WinErrorMsg(GetLastError) & GetLastError
-                    Else
-                        ListView1.DeleteItem SelectIndex
-                    End If
-                ElseIf CallbackType = "CreateProcess" Then
-                    If IoControl(hDrv, IOCTL_RemoveCreateProcessNotifyRoutine, @CallbackAddress, SizeOf(CallbackAddress)) = 0 Then
-                        Print "[IOCTL_RemoveCreateProcessNotifyRoutine]" & WinErrorMsg(GetLastError) & GetLastError
-                    Else
-                        ListView1.DeleteItem SelectIndex
-                    End If
-                ElseIf CallbackType = "CreateThread" Then
-                    If IoControl(hDrv, IOCTL_RemoveCreateThreadNotifyRoutine, @CallbackAddress, SizeOf(CallbackAddress)) = 0 Then
-                        Print "[IOCTL_RemoveCreateThreadNotifyRoutine]" & WinErrorMsg(GetLastError) & GetLastError
-                    Else
-                        ListView1.DeleteItem SelectIndex
-                    End If
-                ElseIf CallbackType = "LoadImage" Then
-                    If IoControl(hDrv, IOCTL_RemoveLoadImageNotifyRoutine, @CallbackAddress, SizeOf(CallbackAddress)) = 0 Then
-                        Print "[IOCTL_RemoveLoadImageNotifyRoutine]" & WinErrorMsg(GetLastError) & GetLastError
-                    Else
-                        ListView1.DeleteItem SelectIndex
-                    End If
-                ElseIf CallbackType = "CmpCallback" Then
-                    Cookie.QuadPart = CallbackArray(SelectIndex).TheContext
-                    If IoControl(hDrv, IOCTL_UnregisterCmpCallback, @Cookie, SizeOf(Cookie)) = 0 Then
-                        Print "[IOCTL_UnregisterCmpCallback]" & WinErrorMsg(GetLastError) & GetLastError
-                    Else
-                        ListView1.DeleteItem SelectIndex
-                    End If
-                End If
+                Callback_Info.Func = Cast(UInteger, CallbackAddress)
+                Callback_Info.TheType = CallbackType
+                Callback_Info.Others(0) = ValULng(FF_Replace(Other0, "0x", "&H"))
             End If
         Case FrmMain_mnuCallbacks_mnuLittleCopy ' 复制单格数据
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
         Case FrmMain_mnuCallbacks_mnuLocateFilePath ' 定位文件位置(资源浏览器)
             Dim lpFilePath As StringW = ListView1.GetItemText(ListView1.SelectedItem, 2)
@@ -2362,13 +2378,14 @@ Sub FrmMain_mnuService_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmMain_mnuService_mnuDeleteService ' 删除服务
             'If MyDeleteService(ListView1.GetItemText(ListView1.SelectedItem, 0)) Then AfxMsg "删除成功!" Else AfxMsg "删除失败!"
         Case FrmMain_mnuService_mnuLittleCopy ' 复制单格数据
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
         Case FrmMain_mnuService_mnuLocateFilePath ' 定位文件位置(资源浏览器)
             Dim lpFilePath As StringW = ListView1.GetItemText(ListView1.SelectedItem, 2)
@@ -2812,14 +2829,14 @@ Sub FrmMain_ListView1_LVN_KeyDown(hWndForm As hWnd, hWndControl As hWnd, pNKD As
     If pNKD.wVKey = Asc("C") Then
         If (GetKeyState(VK_CONTROL) And &H8000) <> 0 Then
             Print "按下Ctrl+C"
-            Dim lvinfo As LVHITTESTINFO
-            lvinfo.pt.x = CurrentPos.x
-            lvinfo.pt.y = CurrentPos.y
-            ListView_SubItemHitTest(ListView1.hWnd, @lvinfo)
-            Print lvinfo.iItem & " " & lvinfo.iSubItem
-            If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
-            (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(lvinfo.iItem, lvinfo.iSubItem)
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
         End If
     End If
@@ -2840,6 +2857,27 @@ Sub FrmMain_mnuReg_WM_Command(hWndForm As hWnd, wID As ULong)
             SetMenuCheckState mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis, Not GetMenuCheckState(mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis)
     End Select
 End Sub
+
+'[FrmMain.ListView1]事件 : 按下鼠标左键
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+'MouseFlags  MK_CONTROL   MK_LBUTTON     MK_MBUTTON     MK_RBUTTON    MK_SHIFT     MK_XBUTTON1       MK_XBUTTON2 
+''           CTRL键按下   鼠标左键按下   鼠标中键按下   鼠标右键按下  SHIFT键按下  第一个X按钮按下   第二个X按钮按下
+'检查什么键按下用  If (MouseFlags And MK_CONTROL)<>0 Then CTRL键按下 
+'xPos yPos   当前鼠标位置，相对于控件。就是在控件里的坐标。
+Sub FrmMain_ListView1_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd, MouseFlags As Long, xPos As Long, yPos As Long)
+    Dim lvinfo As LVHITTESTINFO
+    lvinfo.pt.x = xPos
+    lvinfo.pt.y = yPos
+    ScreenToClient hWndControl, @CurrentPos
+    ListView_SubItemHitTest(hWndControl, @lvinfo)
+    If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
+    (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
+        LastClickedItem = lvinfo.iItem
+        LastClickedSubItem = lvinfo.iSubItem
+    End If
+End Sub
+
 
 
 

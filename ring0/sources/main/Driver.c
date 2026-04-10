@@ -114,7 +114,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     static CallbackInfo Callbacks[64] = { 0 };
     static ObCallbackInfo ObCallbacks[64] = {0};
     PWSTR ustrFileName = NULL;
-    PVOID NotifyRoutine = NULL;
+    //PVOID NotifyRoutine = NULL;
 
     //DbgPrint("Enter the IoctlDispatchRoutine!");
     //DbgPrint("Current PID:%Iu", (ULONG_PTR)PsGetCurrentProcessId());
@@ -737,34 +737,10 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             DbgPrint("[IOCTL_TIMER] 第一次调用完成，返回总长度=%lu\n", Information);
         }
         break;
-    case IOCTL_RemoveCreateProcessNotifyRoutine:
+    case IOCTL_DeleteCallback:
         if (pInputData != NULL && InputDataLength > 0) {
-            NotifyRoutine = *(PVOID*)pInputData;
-            status = RemoveCreateProcessNotifyRoutine(NotifyRoutine);
-        }
-        break;
-    case IOCTL_RemoveCreateThreadNotifyRoutine:
-        if (pInputData != NULL && InputDataLength > 0) {
-            NotifyRoutine = *(PVOID*)pInputData;
-            status = RemoveCreateThreadNotifyRoutine(NotifyRoutine);
-        }
-        break;
-    case IOCTL_RemoveLoadImageNotifyRoutine:
-        if (pInputData != NULL && InputDataLength > 0) {
-            NotifyRoutine = *(PVOID*)pInputData;
-            status = RemoveLoadImageNotifyRoutine(NotifyRoutine);
-        }
-        break;
-    case IOCTL_UnregisterCmpCallback:
-        if (pInputData != NULL && InputDataLength > 0) {
-            LARGE_INTEGER nCookie = *(LARGE_INTEGER*)pInputData;
-            status = UnregisterCmpCallback(nCookie);
-        }
-        break;
-    case IOCTL_UnregisterObCallback:
-        if (pInputData != NULL && InputDataLength > 0) {
-            PVOID ObHandle = *(PVOID*)pInputData;
-            UnregisterObCallback(ObHandle);
+            CallbackInfo Callback = *(PCallbackInfo)pInputData;
+            status = DeleteCallback(&Callback);
         }
         break;
     case IOCTL_EnumMiniFilter:

@@ -93,6 +93,7 @@ PVOID FindPspExitThread();
 VOID KillThreadRoutine(IN PKAPC Apc, IN PKNORMAL_ROUTINE* NormalRoutine, IN PVOID* NormalContext, IN PVOID* SystemArgument1, IN PVOID* SystemArgument2);
 
 NTSTATUS ForceKillThread(HANDLE ThreadId);
+BOOLEAN ForceDestroyThread(HANDLE hThreadId);
 
 //NTSTATUS MyPsLookupThreadByThreadId(HANDLE ProcessId, PEPROCESS* Process);
 ULONG EnumThreads(PHANDLE Array);

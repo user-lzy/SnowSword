@@ -27,3 +27,6 @@ PVOID GetKeServiceDescriptorTableShadow();
 
 PVOID GetSSDTFuncAddrByIndex(ULONG sysCallNumber);
 PVOID GetSSSDTFuncAddrByIndex(ULONG sysCallNumber);
+
+PVOID GetSSDTFuncAddr(PWCHAR SSDTFuncName);
+PVOID GetSSSDTFuncAddr(PCHAR SSSDTFuncName);

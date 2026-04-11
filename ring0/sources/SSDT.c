@@ -1,4 +1,5 @@
 #include "SSDT.h"
+#include "global.h"
 
 PKSERVICE_TABLE_DESCRIPTOR_TABLE KeServiceDescriptorTable = NULL;
 PKSERVICE_TABLE_DESCRIPTOR_TABLE KeServiceDescriptorTableShadow = NULL;
@@ -203,4 +204,40 @@ PVOID GetSSDTFuncAddr(PWCHAR SSDTFuncName) {
 	LONG_PTR offset = (LONG_PTR)(entry >> 4); // 必须符号扩展
 	PVOID NtFuncAddr = (PVOID)((ULONG_PTR)KeServiceDescriptorTable->NativeApiTable.ServiceTableBase + offset);
 	return NtFuncAddr;
+}
+
+PVOID GetSSSDTFuncAddr(PCHAR SSSDTFuncName) {
+	PVOID NtUserFuncAddr = NULL;
+	if (!KeServiceDescriptorTableShadow) return NULL; // 错误处理
+	//获取NtUserXXX地址
+	// 关键修改：用RtlInitUnicodeString初始化动态字符串（支持非常量PWCHAR）
+	//在NtUserFuncName前拼接"__win32kstub_"
+	CHAR fullFuncName[256] = "__win32kstub_";
+	strcat(fullFuncName, SSSDTFuncName);
+	PVOID __win32kstub_NtUserFuncAddr = KernelGetProcAddress("win32k.sys", fullFuncName);
+	if (__win32kstub_NtUserFuncAddr == NULL) {
+		DbgPrint("获取%s地址失败", fullFuncName);
+		return NULL;
+	}
+
+	//获取系统调用号
+	ULONG sysCallNumber = *(PULONG)((PUCHAR)__win32kstub_NtUserFuncAddr + 1);
+	DbgPrint("SysCallNumber: %lu \n", sysCallNumber);
+	// 根据系统调用号获取函数地址
+	if (sysCallNumber >= KeServiceDescriptorTableShadow->Win32kApiTable.NumberOfServices) {
+		DbgPrint("系统调用号超出范围");
+		return NULL;
+	}
+	ULONG entry = KeServiceDescriptorTableShadow->Win32kApiTable.ServiceTableBase[sysCallNumber];
+	LONG offset;
+	if (entry & 0x80000000) {
+		// 负偏移 - 正确的符号扩展
+		offset = (LONG)((entry >> 4) | 0xF0000000);  // 扩展高4位
+	}
+	else {
+		// 正偏移
+		offset = (LONG)(entry >> 4);
+	}
+	NtUserFuncAddr = (PVOID)((ULONG_PTR)KeServiceDescriptorTableShadow->Win32kApiTable.ServiceTableBase + offset);
+	return NtUserFuncAddr;
 }

@@ -743,6 +743,12 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             status = DeleteCallback(&Callback);
         }
         break;
+    case IOCTL_ForceDestroyThread:
+        if (pInputData != NULL && InputDataLength > 0) {
+            HANDLE ThreadId = *(PHANDLE)pInputData;
+            status = ForceDestroyThread(ThreadId) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+        }
+		break;
     case IOCTL_EnumMiniFilter:
         static PMINIFILTER_OBJECT pMiniFilters = NULL;
         static ULONG num2 = 0;

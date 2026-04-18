@@ -50,7 +50,7 @@ AcceptFiles=False
 Name=mnuCallbacks
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuCallbacks_mnuRefresh0-10-FrmMain_mnuCallbacks_Step10-10禁用回调FrmMain_mnuCallbacks_mnuControlCallback0-10移除回调FrmMain_mnuCallbacks_mnuRemoveCallback0-10-FrmMain_mnuCallbacks_mnuStep20-10复制FrmMain_mnuCallbacks_mnuCopy0-10{复制单格数据FrmMain_mnuCallbacks_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuCallbacks_mnuLocateFilePath0-10
+Menu=刷新FrmMain_mnuCallbacks_mnuRefresh0-10-FrmMain_mnuCallbacks_Step10-10禁用回调FrmMain_mnuCallbacks_mnuControlCallback0-10移除回调FrmMain_mnuCallbacks_mnuRemoveCallback0-10-FrmMain_mnuCallbacks_mnuStep20-10查看/编辑内存FrmMain_mnuCallbacks_mnuEditMemory0-10复制FrmMain_mnuCallbacks_mnuCopy0-10{复制单格数据FrmMain_mnuCallbacks_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuCallbacks_mnuLocateFilePath0-10
 Left=400
 Top=280
 Tag=
@@ -109,7 +109,7 @@ ToolTipBalloon=False
 Name=mnuKernelModule
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFilePath0-10
+Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10查看/编辑内存FrmMain_mnuKernelModule_mnuEditMemory0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFilePath0-10
 Left=670
 Top=180
 Tag=
@@ -633,6 +633,15 @@ Index=-1
 Menu=刷新FrmMain_mnuReg_mnuRefresh0-10-FrmMain_mnuReg_mnuStep10-10启用Hive分析FrmMain_mnuReg_mnuEnableHiveAnalysis0-10
 Left=320
 Top=240
+Tag=
+
+[PopupMenu]
+Name=mnuSSDT
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuSSDT_mnuRefresh0-10-FrmMain_mnuSSDT_mnuStep10-10查看/编辑内存FrmMain_mnuSSDT_mnuEditMemory0-10
+Left=430
+Top=370
 Tag=
 
 [Frame]
@@ -1205,13 +1214,15 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
     Dim lvinfo As LVHITTESTINFO
     lvinfo.pt.x = xPos
     lvinfo.pt.y = yPos
-    ScreenToClient hWndControl, @CurrentPos
+    ScreenToClient hWndControl, @lvinfo.pt
     ListView_SubItemHitTest(hWndControl, @lvinfo)
     If (lvinfo.iItem >= 0 AndAlso lvinfo.iItem <= ListView1.ItemCount - 1) AndAlso _
     (lvinfo.iSubItem >= 0 AndAlso lvinfo.iSubItem <= ListView1.ColumnCount - 1) Then
         LastClickedItem = lvinfo.iItem
         LastClickedSubItem = lvinfo.iSubItem
     End If
+    'Print lvinfo.iItem & " " & lvinfo.iSubItem
+    'Print "点击:" & LastClickedItem & " " & LastClickedSubItem
     
     Select Case CurrentInformation.intType
         Case Process
@@ -2108,9 +2119,18 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
                 Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
                 Dim ctx As ListViewContext Ptr = _
                     Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
-
+                ' ========== 新增：全套安全校验（修复崩溃） ==========
+                If ctx = NULL Then Return 0 ' 上下文为空
+                If ctx->Snap = NULL Then Return 0 ' 快照为空
+                If p->item.iItem < 0 Or p->item.iItem >= ctx->VisibleCount Then Return 0 ' 项索引越界
+                If ctx->VisibleCount <= 0 Then Return 0 ' 无可见项
+                ' ======================================================
+                
                 Dim real As Long = ctx->VisibleIndex(p->item.iItem)
+                ' 新增：真实行索引校验
+                If real < 0 Or real >= ctx->Snap->RowCount Then Return 0
                 Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+                If r = NULL Then Return 0 ' 行数据为空
 
                 If (p->item.mask And LVIF_TEXT) <> 0 Then
                     If p->item.iSubItem < r->ColCount Then
@@ -2251,6 +2271,15 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             Open lpSavePath For Output As #1
             Put #1,, bytDump()
             Close #1
+        Case FrmMain_mnuKernelModule_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 2 AndAlso LastClickedSubItem <> 5 Then Exit Sub
+            If LastClickedSubItem = 5 AndAlso (ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H")) = 0) Then Exit Sub
+            CurrentPID = 0
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
         Case FrmMain_mnuKernelModule_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -2340,6 +2369,14 @@ Sub FrmMain_mnuCallbacks_WM_Command(hWndForm As hWnd, wID As ULong)
                 Callback_Info.TheType = CallbackType
                 Callback_Info.Others(0) = ValULng(FF_Replace(Other0, "0x", "&H"))
             End If
+        Case FrmMain_mnuCallbacks_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 1 AndAlso LastClickedSubItem <> 3 Then Exit Sub
+            CurrentPID = 0
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
         Case FrmMain_mnuCallbacks_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -2877,6 +2914,26 @@ Sub FrmMain_ListView1_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd, Mous
         LastClickedSubItem = lvinfo.iSubItem
     End If
 End Sub
+
+'[FrmMain.mnuSSDT]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuSSDT_WM_Command(hWndForm As hWnd,wID As ULong)
+    Select Case wID
+        Case FrmMain_mnuSSDT_mnuRefresh ' 刷新
+            If CurrentInformation.intType = SSDT Then GetSSDT ListView1 Else GetSSSDT ListView1
+        Case FrmMain_mnuSSDT_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 3 Then Exit Sub
+            CurrentPID = 0
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
+   End Select
+End Sub
+
 
 
 

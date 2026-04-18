@@ -689,7 +689,7 @@ Sub DeleteAllItemsEx(ListView As Class_ListView)
             ' 释放列指针数组
             Deallocate(r->Cols)
             ' 释放行结构
-            Delete r
+            Delete r ' 是否应改为Deallocate?
         End If
     Next
     

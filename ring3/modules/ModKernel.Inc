@@ -338,7 +338,7 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
     'Print "Enumerated Drivers:"
     'Print "Count:" & smi->Count
-    lvwKernelModule.AddItemCount smi->Count
+    'lvwKernelModule.AddItemCount smi->Count
     For i As Integer = 0 To smi->Count - 1
         Dim DriverName As WString * 20, DriverPath As ZString * MAX_PATH = smi->Modules(i).ImageName
         Dim DriverObject As Integer

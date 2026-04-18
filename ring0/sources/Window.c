@@ -304,25 +304,27 @@ PVOID FindaatomSysLoaded() {
 }
 
 // 从模块索引获取基址
-NTSTATUS GetModuleNameFromihMod(int ihmod, LPWSTR NameBuffer)
+NTSTATUS GetModuleNameFromihMod(BOOLEAN bWin11, int ihmod, LPWSTR NameBuffer)
 {
 #define MAX_PATH 260
     // 在win11上变为*(_WORD *)(W32GetUserSessionState() + 0xA17C)
     static ATOM* aatomSysLoaded = NULL;
     static PFN_W32GetUserSessionState W32GetUserSessionState = NULL;
     if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) {
-        aatomSysLoaded = (ATOM*)FindaatomSysLoaded();
-        if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) {
+        if (bWin11) {
             if (!W32GetUserSessionState || !MmIsAddressValid((PVOID)W32GetUserSessionState)) {
                 W32GetUserSessionState = (PFN_W32GetUserSessionState)KernelGetProcAddress("win32k.sys", "W32GetUserSessionState");
                 if (!W32GetUserSessionState || !MmIsAddressValid((PVOID)W32GetUserSessionState)) {
                     DbgPrint("W32GetUserSessionState not found!\n");
                     return STATUS_INVALID_ADDRESS;
                 }
-			}
+            }
             aatomSysLoaded = (ATOM*)(((PUCHAR)W32GetUserSessionState()) + 0xA17C);
-            if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) return STATUS_INVALID_ADDRESS;
         }
+        else {
+            aatomSysLoaded = (ATOM*)FindaatomSysLoaded();
+        }
+        if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) return STATUS_INVALID_ADDRESS;
     }
     static PVOID UserLibmgmtAtomTableHandle = NULL;
     if (!UserLibmgmtAtomTableHandle || !MmIsAddressValid(UserLibmgmtAtomTableHandle)) {
@@ -590,7 +592,7 @@ NTSTATUS EnumerateHooksFromPti(
 
                         // ihmod: 0xFFFFFFFF 为系统钩子
                         if (ihmod != 0xFFFFFFFF && ihmod < 0x1000) {
-                            GetModuleNameFromihMod((INT)ihmod, pEntry->ModulePath);
+                            GetModuleNameFromihMod(TRUE, (INT)ihmod, pEntry->ModulePath);
                         }
 
                         pEntry->IsGlobal = TRUE;
@@ -675,7 +677,7 @@ NTSTATUS EnumerateHooksFromPti(
                     RtlZeroMemory(pEntry->ModulePath, sizeof(pEntry->ModulePath));
 
                     if (ihmod != 0xFFFFFFFF && ihmod < 0x1000) {
-                        GetModuleNameFromihMod((INT)ihmod, pEntry->ModulePath);
+                        GetModuleNameFromihMod(TRUE, (INT)ihmod, pEntry->ModulePath);
                     }
 
                     pEntry->IsGlobal = FALSE;
@@ -1011,7 +1013,7 @@ EnumerateMsgHook_Win10(
         if (low32 == 0 && ihmod > 0 && ihmod <= 32)
         {
             DbgPrint("  → 真模块索引 ihmod=%lu\n", ihmod);
-            if (NT_SUCCESS(GetModuleNameFromihMod((int)ihmod, pCurHook->ModulePath)))
+            if (NT_SUCCESS(GetModuleNameFromihMod(FALSE, (int)ihmod, pCurHook->ModulePath)))
             {
                 DbgPrint("  → 模块名: %ws\n", pCurHook->ModulePath);
             }
@@ -1232,7 +1234,7 @@ NTSTATUS EnumerateEventHook_Win11(
         // 情况1：ihmod索引（小整数）
         if (idx <= 32)
         {
-            NTSTATUS modStatus = GetModuleNameFromihMod(idx, pCurrentInfo->ModulePath);
+            NTSTATUS modStatus = GetModuleNameFromihMod(TRUE, idx, pCurrentInfo->ModulePath);
             if (NT_SUCCESS(modStatus))
             {
                 DbgPrint(" -> 模块名: %ws\n", pCurrentInfo->ModulePath);
@@ -1413,7 +1415,7 @@ EnumerateEventHook_Win10(
             USHORT idx = (USHORT)(ULONG_PTR)pCurHook->hmodWinEventProc;
             if (idx != 0)
             {
-                NTSTATUS modStatus = GetModuleNameFromihMod(idx, pCurHook->ModulePath);
+                NTSTATUS modStatus = GetModuleNameFromihMod(FALSE, idx, pCurHook->ModulePath);
                 if (NT_SUCCESS(modStatus))
                 {
                     resolved = TRUE;

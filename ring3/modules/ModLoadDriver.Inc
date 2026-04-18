@@ -3,7 +3,7 @@
 #include Once "win/winerror.bi"
 
 Type PUNICODE_STRING As UNICODE_STRING Ptr
-#define STATUS_IMAGE_ALREADY_LOADED &HC000010E
+#define STATUS_IMAGE_ALREADY_LOADED Cast(NTSTATUS, &HC000010E)
 
 Function OpenDrv(ByVal szDrvLinkName As String) As HANDLE
     Dim hDrvHandle As HANDLE
@@ -185,7 +185,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
             Return False
         End If
     Else
-        Dim st As ULong = ZwLoadDriver(@uDriverServiceName)
+        Dim st As NTSTATUS = ZwLoadDriver(@uDriverServiceName)
         If Not (NT_SUCCESS(st) Or st = STATUS_IMAGE_ALREADY_LOADED) Then
             Print "ZwLoadDriver Error: " & WinErrorMsg(st) & "(" & WStr(Hex(st)) & ")"
             Function = False

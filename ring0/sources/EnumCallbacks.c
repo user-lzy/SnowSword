@@ -1252,6 +1252,7 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 	PCallbackInfo Array = *pArray;  // 解引用
 	ULONG max_num = 512;
 	ULONG k = 0;
+	PCallbackInfo newArray = NULL;
 
 #define MAX_TEMP 512
 	PVOID* tempFunc = NULL;
@@ -1611,12 +1612,22 @@ exit3:
 		if (MmIsAddressValid(pNotifyEntry->Function))
 		{
 			//DbgPrint("回调函数地址: 0x%p | 回调函数Cookie: 0x%I64X \n", pNotifyEntry->Function, pNotifyEntry->Cookie.QuadPart);
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"CmpCallback");
 			Array[k].Func = (PVOID)pNotifyEntry->Function;
@@ -1636,12 +1647,22 @@ exit4:
 		DbgPrint("Failed to find PspLegoNotifyRoutine!\n");
 		goto exit7;
 	}
-	if (k > max_num)
+	if (k >= max_num)  // 修正边界
 	{
-		ExFreePoolWithTag(Array, 'cbin');
-		Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-		max_num += 100;
-		*pArray = Array;  // ✅ 更新调用者指针
+		ULONG newSize = max_num + 100;
+		newArray = (PCallbackInfo)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+		if (!newArray) goto exit7;  // 必须检查
+
+		if (Array && k > 0) {
+			RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+		}
+
+		ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+		Array = newArray;
+		max_num = newSize;  // 直接赋值，避免 += 导致不一致
+		*pArray = Array;
 	}
 	RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"Lego");
 	Array[k].Func = PspLegoNotifyRoutine;
@@ -1662,12 +1683,22 @@ exit7:
 	__try
 	{
 		do {
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			pShutdownEntry = pShutdownEntry->Flink;
 			pShutdownPacket = CONTAINING_RECORD(pShutdownEntry, SHUTDOWN_PACKET, ListEntry);
@@ -1693,12 +1724,22 @@ exit8:
 	__try
 	{
 		do {
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			pLastChanceEntry = pLastChanceEntry->Flink;
 			pLastChanceShutdownPacket = CONTAINING_RECORD(pLastChanceEntry, SHUTDOWN_PACKET, ListEntry);
@@ -1730,15 +1771,22 @@ exit9:
 		{
 			while (pEntry && MmIsAddressValid(pEntry))
 			{
-				if (k >= max_num)
+				if (k >= max_num)  // 修正边界
 				{
-					PCallbackInfo newBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-					if (!newBuf) break;
-					RtlCopyMemory(newBuf, Array, sizeof(CallbackInfo) * k);
-					ExFreePoolWithTag(Array, 'cbin');
-					Array = newBuf;
+					ULONG newSize = max_num + 100;
+					newArray = (PCallbackInfo)ExAllocatePool2(
+						POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+					if (!newArray) break;  // 必须检查
+
+					if (Array && k > 0) {
+						RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+					}
+
+					ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+					Array = newArray;
+					max_num = newSize;  // 直接赋值，避免 += 导致不一致
 					*pArray = Array;
-					max_num += 100;
 				}
 
 				// 明确标注类型，R3 能看懂
@@ -1764,15 +1812,22 @@ exit9:
 		{
 			while (pEntry && MmIsAddressValid(pEntry))
 			{
-				if (k >= max_num)
+				if (k >= max_num)  // 修正边界
 				{
-					PCallbackInfo newBuf = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-					if (!newBuf) break;
-					RtlCopyMemory(newBuf, Array, sizeof(CallbackInfo) * k);
-					ExFreePoolWithTag(Array, 'cbin');
-					Array = newBuf;
+					ULONG newSize = max_num + 100;
+					newArray = (PCallbackInfo)ExAllocatePool2(
+						POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+					if (!newArray) break;  // 必须检查
+
+					if (Array && k > 0) {
+						RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+					}
+
+					ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+					Array = newArray;
+					max_num = newSize;  // 直接赋值，避免 += 导致不一致
 					*pArray = Array;
-					max_num += 100;
 				}
 
 				RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"LogonSessionTerminatedEx");
@@ -1797,12 +1852,22 @@ exit9:
 	__try
 	{
 		do {
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			pIopFsNotifyChangeEntry = pIopFsNotifyChangeEntry->Flink;
 			PNOTIFICATION_PACKET pFsNotificationPacket = CONTAINING_RECORD(pIopFsNotifyChangeEntry, NOTIFICATION_PACKET, ListEntry);
@@ -1819,7 +1884,7 @@ exit9:
 exit11:
 	// ===================== 【关键】遍历前一次性预分配内存（max_num + 128 个元素） =====================
 	// 先扩容：一次性分配足够内存，遍历中不再操作堆
-	PCallbackInfo newArray = (PCallbackInfo)ExAllocatePool2(
+	newArray = (PCallbackInfo)ExAllocatePool2(
 		POOL_FLAG_NON_PAGED,
 		sizeof(CallbackInfo) * (max_num + 128),  // 按要求多分配128个
 		'cbin'
@@ -1932,12 +1997,22 @@ exit12:
 	__try
 	{
 		do {
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			pListEntry = pListEntry->Flink;
 			pCallbackRecord = CONTAINING_RECORD(pListEntry, KBUGCHECK_CALLBACK_RECORD, Entry);
@@ -1945,6 +2020,7 @@ exit12:
 			RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"BugCheck");
 			Array[k].Func = (PVOID)pCallbackRecord->CallbackRoutine;
 			Array[k].Context = pCallbackRecord->Component;
+			Array[k].Others[0] = (ULONG64)pCallbackRecord;
 			k++;
 		} while (pListEntry->Flink != pHead);
 	}
@@ -1974,12 +2050,22 @@ exit5:
 	__try
 	{
 		do {
-			if (k > max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
-				max_num += 100;
-				*pArray = Array;  // ✅ 更新调用者指针
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
+
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 			pListEntry = pListEntry->Flink;
 			pReasonCallbackRecord = CONTAINING_RECORD(pListEntry, KBUGCHECK_REASON_CALLBACK_RECORD, Entry);
@@ -1987,6 +2073,7 @@ exit5:
 			RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"BugCheckReason");
 			Array[k].Func = (PVOID)pReasonCallbackRecord->CallbackRoutine;
 			Array[k].Context = (PVOID)pReasonCallbackRecord->Component;
+			Array[k].Others[0] = (ULONG64)pReasonCallbackRecord;
 			k++;
 		} while (pListEntry->Flink != pHead);
 	}
@@ -2100,19 +2187,22 @@ exit6:
 	// 完全不影响你的枚举逻辑
 	// ======================
 	for (int i = 0; i < tempCount3; i++) {
-		if (k >= max_num) {
-			newArray = ExAllocatePool2(
-				POOL_FLAG_NON_PAGED,
-				sizeof(CallbackInfo) * (max_num + 100),
-				'cbin'
-			);
-			if (!newArray) break;
+		if (k >= max_num)  // 修正边界
+		{
+			ULONG newSize = max_num + 100;
+			newArray = (PCallbackInfo)ExAllocatePool2(
+				POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
-			RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);
-			ExFreePoolWithTag(Array, 'cbin');
+			if (!newArray) break;  // 必须检查
+
+			if (Array && k > 0) {
+				RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+			}
+
+			ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
 			Array = newArray;
+			max_num = newSize;  // 直接赋值，避免 += 导致不一致
 			*pArray = Array;
-			max_num += 100;
 		}
 
 		// 命名逻辑 完全保留
@@ -2177,20 +2267,22 @@ exit13:
 		// 下方逻辑完全不动
 		for (int i = 0; i < tempCnt2; i++)
 		{
-			if (k >= max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				PCallbackInfo newBuf = ExAllocatePool2(
-					POOL_FLAG_NON_PAGED,
-					sizeof(CallbackInfo) * (max_num + 16),
-					'cbin'
-				);
-				if (!newBuf) break;
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
-				RtlCopyMemory(newBuf, Array, sizeof(CallbackInfo) * k);
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = newBuf;
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
 				*pArray = Array;
-				max_num += 16;
 			}
 
 			RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"KeRegisterNmiCallback");
@@ -2242,20 +2334,22 @@ exit13:
 		// 下方拷贝逻辑 一字不改
 		for (int i = 0; i < tempCnt; i++)
 		{
-			if (k >= max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				PCallbackInfo newArr = ExAllocatePool2(
-					POOL_FLAG_NON_PAGED,
-					sizeof(CallbackInfo) * (max_num + 16),
-					'cbin'
-				);
-				if (!newArr) break;
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
-				RtlCopyMemory(newArr, Array, sizeof(CallbackInfo) * k);
-				ExFreePoolWithTag(Array, 'cbin');
-				Array = newArr;
+				if (!newArray) break;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
+				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
 				*pArray = Array;
-				max_num += 16;
 			}
 
 			RtlStringCbCopyW(Array[k].Type, sizeof(Array[k].Type), L"DbgPrintCallback");
@@ -2287,27 +2381,22 @@ exit13:
 		// 【解锁后/安全区】再分配内存、填充数据
 		if (callbackFunc != NULL)
 		{
-			if (k >= max_num)
+			if (k >= max_num)  // 修正边界
 			{
-				PCallbackInfo newBuf = ExAllocatePool2(
-					POOL_FLAG_NON_PAGED,
-					sizeof(CallbackInfo) * (max_num + 16),
-					'cbin'
-				);
+				ULONG newSize = max_num + 100;
+				newArray = (PCallbackInfo)ExAllocatePool2(
+					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
-				if (newBuf)
-				{
-					RtlCopyMemory(newBuf, Array, sizeof(CallbackInfo) * k);
-					ExFreePoolWithTag(Array, 'cbin');
-					Array = newBuf;
-					*pArray = Array;
-					max_num += 16;
+				if (!newArray) goto exit_bound;  // 必须检查
+
+				if (Array && k > 0) {
+					RtlCopyMemory(newArray, Array, sizeof(CallbackInfo) * k);  // ✅ 拷贝旧数据
 				}
-				else
-				{
-					// 分配失败直接退出，不破坏数据
-					goto exit_bound;
-				}
+
+				ExFreePoolWithTag(Array, 'cbin');  // 释放旧内存
+				Array = newArray;
+				max_num = newSize;  // 直接赋值，避免 += 导致不一致
+				*pArray = Array;
 			}
 
 			// 填充数据
@@ -2827,15 +2916,15 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 			(PLOAD_IMAGE_NOTIFY_ROUTINE)pCallbackInfo->Func);
 	}
 	// --------------------------------- 通用 Ex 回调（\Callback\*） ---------------------------------
-	/*else if (_wcsnicmp(pCallbackInfo->Type, L"\\Callback\\", 10) == 0){
+	else if (_wcsnicmp(pCallbackInfo->Type, L"\\Callback\\", 10) == 0){
 		if (pCallbackInfo->Context) {
-			ExUnregisterCallback((PCALLBACK_OBJECT)pCallbackInfo->Context);
+			ExUnregisterCallback((PCALLBACK_OBJECT)pCallbackInfo->Others[0]);
 			status = STATUS_SUCCESS;
 		}
 		else {
 			status = STATUS_INVALID_HANDLE;
 		}
-	}*/
+	}
 	// --------------------------------- 注册表回调 ---------------------------------
 	else if (_wcsicmp(pCallbackInfo->Type, L"CmpCallback") == 0) {
 		if (pCallbackInfo->Context) {
@@ -2851,7 +2940,7 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 	else if (wcsstr(pCallbackInfo->Type, L"ObThreadCallback") != NULL ||
 		wcsstr(pCallbackInfo->Type, L"ObProcessCallback") != NULL) {
 		if (pCallbackInfo->Context) {
-			//ObUnRegisterCallbacks(pCallbackInfo->Context);
+			ObUnRegisterCallbacks(pCallbackInfo->Others[0]);
 			status = STATUS_SUCCESS;
 		}
 		else {
@@ -2859,12 +2948,17 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 		}
 	}
 	// --------------------------------- BugCheck 回调 ---------------------------------
-	/*else if (_wcsicmp(pCallbackInfo->Type, L"BugCheckCallback") == 0) {
+	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheck") == 0) {
 		BOOLEAN ret = KeDeregisterBugCheckCallback(
-			(PKBUGCHECK_CALLBACK_ROUTINE)pCallbackInfo->Func,
-			pCallbackInfo->Context);
+			pCallbackInfo->Others[0]);
 		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
-	}*/
+	}
+	// --------------------------------- BugCheckReason 回调 ---------------------------------
+	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheckReason") == 0) {
+		BOOLEAN ret = KeDeregisterBugCheckReasonCallback(
+			pCallbackInfo->Others[0]);
+		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+	}
 	// --------------------------------- 其他未支持的类型 ---------------------------------
 	else {
 		DbgPrint("[DeleteCallback] 不支持的回调类型：%ws\n", pCallbackInfo->Type);

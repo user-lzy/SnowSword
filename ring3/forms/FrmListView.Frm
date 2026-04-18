@@ -158,7 +158,7 @@ Tag=
 Name=mnuModule
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuModule_mnuRefreshModule0-10卸载模块FrmListView_mnuModule_mnuUnloadModule0-10全局卸载模块FrmListView_mnuModule_mnuGlobalUnloadModule0-10强制卸载模块FrmListView_mnuModule_mnuForceUnloadModule0-10查看HookFrmListView_mnuModule_mnuViewHook0-10-FrmListView_mnuModule_mnuStep10-10复制FrmListView_mnuModule_mnuCopy0-10{复制单格数据FrmListView_mnuModule_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuModule_mnuLocateFilePath0-10
+Menu=刷新FrmListView_mnuModule_mnuRefreshModule0-10卸载模块FrmListView_mnuModule_mnuUnloadModule0-10全局卸载模块FrmListView_mnuModule_mnuGlobalUnloadModule0-10强制卸载模块FrmListView_mnuModule_mnuForceUnloadModule0-10查看HookFrmListView_mnuModule_mnuViewHook0-10-FrmListView_mnuModule_mnuStep10-10查看/编辑内存FrmListView_mnuModule_mnuEditMemory0-10复制FrmListView_mnuModule_mnuCopy0-10{复制单格数据FrmListView_mnuModule_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuModule_mnuLocateFilePath0-10
 Left=450
 Top=150
 Tag=
@@ -167,7 +167,7 @@ Tag=
 Name=mnuThread
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10-FrmListView_mnuThread_mnuStep30-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
+Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10暴力摧毁线程(可能蓝屏)FrmListView_mnuThread_mnuForceDestroyThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10-FrmListView_mnuThread_mnuStep30-10查看/编辑内存FrmListView_mnuThread_mnuEditMemory0-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
 Left=360
 Top=150
 Tag=
@@ -185,7 +185,7 @@ Tag=
 Name=mnuMsgHook
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuMsgHook_mnuRefresh0-10-FrmListView_mnuMsgHook_mnuStep10-10移除FrmListView_mnuMsgHook_mnuRemove0-10-FrmListView_mnuMsgHook_mnuStep20-10显示全部FrmListView_mnuMsgHook_mnuViewAll0-10
+Menu=刷新FrmListView_mnuMsgHook_mnuRefresh0-10-FrmListView_mnuMsgHook_mnuStep10-10移除FrmListView_mnuMsgHook_mnuRemove0-10-FrmListView_mnuMsgHook_mnuStep20-10显示全部FrmListView_mnuMsgHook_mnuViewAll0-10-FrmListView_mnuMsgHook_mnuStep30-10查看/编辑内存FrmListView_mnuMsgHook_mnuEditMemory0-10复制FrmListView_mnuMsgHook_mnuCopy0-10{复制整行数据FrmListView_mnuMsgHook_mnuCopyRowData0-10}
 Left=500
 Top=100
 Tag=
@@ -194,7 +194,7 @@ Tag=
 Name=mnuEventHook
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuEventHook_mnuRefresh0-10-FrmListView_mnuEventHook_mnuStep10-10移除FrmListView_mnuEventHook_mnuRemove0-10-FrmListView_mnuEventHook_mnuStep20-10显示全部FrmListView_mnuEventHook_mnuViewAll0-10
+Menu=刷新FrmListView_mnuEventHook_mnuRefresh0-10-FrmListView_mnuEventHook_mnuStep10-10移除FrmListView_mnuEventHook_mnuRemove0-10-FrmListView_mnuEventHook_mnuStep20-10显示全部FrmListView_mnuEventHook_mnuViewAll0-10-FrmListView_mnuEventHook_mnuStep30-10查看/编辑内存FrmListView_mnuEventHook_mnuEditMemory0-10复制FrmListView_mnuEventHook_mnuCopy0-10{复制整行数据FrmListView_mnuEventHook_mnuCopyRowData0-10}
 Left=600
 Top=100
 Tag=
@@ -203,7 +203,7 @@ Tag=
 Name=mnuHotkey
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuHotkey_mnuRefresh0-10-FrmListView_mnuHotkey_mnuStep10-10移除FrmListView_mnuHotkey_mnuRemove0-10-FrmListView_mnuHotkey_mnuStep20-10显示全部FrmListView_mnuHotkey_mnuViewAll0-10
+Menu=刷新FrmListView_mnuHotkey_mnuRefresh0-10-FrmListView_mnuHotkey_mnuStep10-10移除FrmListView_mnuHotkey_mnuRemove0-10-FrmListView_mnuHotkey_mnuStep20-10显示全部FrmListView_mnuHotkey_mnuViewAll0-10-FrmListView_mnuHotkey_mnuStep30-10查看/编辑内存FrmListView_mnuHotkey_mnuEditMemory0-10复制FrmListView_mnuHotkey_mnuCopy0-10{复制整行数据FrmListView_mnuHotkey_mnuCopyRowData0-10}
 Left=660
 Top=70
 Tag=
@@ -540,14 +540,32 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd,wID As ULong)
                 End If
             Next
             CommitListViewView ListView
+        Case FrmListView_mnuThread_mnuForceDestroyThread ' 暴力摧毁线程(可能蓝屏)
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim TID As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
+                    Print "TID:" & TID
+                    If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then DeleteItemEx ListView, i, False
+                End If
+            Next
+            CommitListViewView ListView
         Case FrmListView_mnuThread_mnuSuspendThread ' 挂起线程
             For i As Integer = 0 To ListView.ItemCount - 1
                 If IsListViewItemSelected(ListView, i) Then MySuspendThread ValULng(ListView.GetItemText(i, 0))
             Next
+            GetThreadList CurrentPID, ListView
         Case FrmListView_mnuThread_mnuResumeThread ' 恢复线程
             For i As Integer = 0 To ListView.ItemCount - 1
                 If IsListViewItemSelected(ListView, i) Then MyResumeThread ValULng(ListView.GetItemText(i, 0))
             Next
+            GetThreadList CurrentPID, ListView
+        Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
         Case FrmListView_mnuThread_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -595,6 +613,13 @@ Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
             CurrentInformation.CurrentModule.ModuleName = ListView.GetItemText(ListView.SelectedItem, 1)
             CurrentInformation.CurrentModule.ModuleHandle = ModuleHandle
             FrmListView.Show,, Hook
+        Case FrmListView_mnuModule_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 2 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
         Case FrmListView_mnuModule_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -690,7 +715,7 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd,wID As ULong)
                         DeleteItemEx ListView, i, False
                         AfxMsg "关闭句柄成功!", "提示"
                     Else
-                        AfxMsg "关闭句柄失败!", "提示"
+                        'AfxMsg "关闭句柄失败!", "提示"
                     End If
                 End If
             Next
@@ -888,9 +913,18 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
                 Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
                 Dim ctx As ListViewContext Ptr = _
                     Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
-
+                ' ========== 新增：全套安全校验（修复崩溃） ==========
+                If ctx = NULL Then Return 0 ' 上下文为空
+                If ctx->Snap = NULL Then Return 0 ' 快照为空
+                If p->item.iItem < 0 Or p->item.iItem >= ctx->VisibleCount Then Return 0 ' 项索引越界
+                If ctx->VisibleCount <= 0 Then Return 0 ' 无可见项
+                ' ======================================================
+                
                 Dim real As Long = ctx->VisibleIndex(p->item.iItem)
+                ' 新增：真实行索引校验
+                If real < 0 Or real >= ctx->Snap->RowCount Then Return 0
                 Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+                If r = NULL Then Return 0 ' 行数据为空
 
                 If (p->item.mask And LVIF_TEXT) <> 0 Then
                     If p->item.iSubItem < r->ColCount Then
@@ -982,7 +1016,7 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd,wID As ULong)
             End If
         Case FrmListView_mnuMsgHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWindowsHookEx(hHook) = 0 Then
+            If UnhookWindowsHookEx(hHook) <> 0 Then
                 AfxMsg "移除成功!"
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
@@ -997,6 +1031,15 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd,wID As ULong)
                 GetMsgHookList -1, ListView
                 SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, True
             End If
+        Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 3 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
+        Case FrmListView_mnuMsgHook_mnuCopyRowData ' 复制整行数据
+            
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
 End Sub
@@ -1015,7 +1058,7 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd,wID As ULong)
             End If
         Case FrmListView_mnuEventHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWinEvent(hHook) = 0 Then
+            If UnhookWinEvent(hHook) <> 0 Then
                 AfxMsg "移除成功!"
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
@@ -1030,6 +1073,13 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd,wID As ULong)
                 GetEventHookList -1, ListView
                 SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, True
             End If
+        Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            If LastClickedSubItem <> 3 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
 End Sub
@@ -1049,7 +1099,7 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmListView_mnuHotkey_mnuRemove ' 移除
             Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
             Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
-            If UnregisterHotKey(hWnd, id) = 0 Then
+            If UnregisterHotKey(hWnd, id) <> 0 Then
                 AfxMsg "移除成功!"
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
@@ -1064,6 +1114,12 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
                 GetHotkeyList -1, ListView
                 SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, True
             End If
+        Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            'Print "Addr:0x" & WHex(Addr)
+            FrmMemoryEditor.Show,, Addr
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
 End Sub

@@ -453,95 +453,107 @@ NTSTATUS ForceKillThread(HANDLE ThreadId)
 
 BOOLEAN ForceDestroyThread(HANDLE hThreadId)
 {
-    HANDLE hThread = NULL;
-    NTSTATUS status = STATUS_UNSUCCESSFUL;
-    BOOLEAN bFinalSuccess = FALSE;
+    PETHREAD   pEThread = NULL;
+    PEPROCESS  pEProcess = NULL;
+    HANDLE     hThread = NULL;
+    NTSTATUS   status = STATUS_UNSUCCESSFUL;
+    BOOLEAN    bFinalSuccess = FALSE;
 
-    // 1. 打开线程句柄
-    status = OpenThread(hThreadId, &hThread);
+    // 1. 通过TID获取线程对象 ETHREAD (引用计数 +1)
+    status = PsLookupThreadByThreadId(hThreadId, &pEThread);
     if (!NT_SUCCESS(status))
     {
-        DbgPrint("[Error] OpenThread failed, Status: %08X\n", status);
+        DbgPrint("[Error] PsLookupThreadByThreadId 失败: %08X\n", status);
         return FALSE;
     }
 
-    // 2. 定义函数指针（修复原定义错误）
-    typedef NTSTATUS(NTAPI* NtSuspendThread_Func)(HANDLE ThreadHandle, PULONG SuspendCount);
-    typedef NTSTATUS(NTAPI* NtResumeThread_Func)(HANDLE ThreadHandle, PULONG SuspendCount);
-    typedef NTSTATUS(NTAPI* NtGetContextThread_Func)(HANDLE ThreadHandle, PCONTEXT ThreadContext);
-    typedef NTSTATUS(NTAPI* NtSetContextThread_Func)(HANDLE ThreadHandle, PCONTEXT ThreadContext);
-    typedef VOID(*PspExitThread_Func)(IN NTSTATUS ExitStatus);
+    // 2. 从线程获取所属进程对象 PEPROCESS (引用计数 +1)
+    pEProcess = PsGetThreadProcess(pEThread);
+    ObReferenceObject(pEProcess);
 
-    // 3. 获取函数地址
-    NtGetContextThread_Func NtGetContextThread = (NtGetContextThread_Func)GetSSDTFuncAddr(L"NtGetContextThread");
-    NtSetContextThread_Func NtSetContextThread = (NtSetContextThread_Func)GetSSDTFuncAddr(L"NtSetContextThread");
-    NtSuspendThread_Func NtSuspendThread = (NtSuspendThread_Func)GetSSDTFuncAddr(L"NtSuspendThread");
-    NtResumeThread_Func  NtResumeThread = (NtResumeThread_Func)GetSSDTFuncAddr(L"NtResumeThread");
-    PspExitThread_Func   PspExitThread = (PspExitThread_Func)FindPspExitThread();
-
-    // 4. 校验函数地址有效性
-    if (NtGetContextThread == NULL || NtSetContextThread == NULL ||
-        NtSuspendThread == NULL || NtResumeThread == NULL || PspExitThread == NULL)
+    // 3. 打开线程内核句柄 (备用)
+    status = ObOpenObjectByPointer(
+        pEThread,
+        OBJ_KERNEL_HANDLE,
+        NULL,
+        THREAD_ALL_ACCESS,
+        *PsThreadType,
+        KernelMode,
+        &hThread
+    );
+    if (!NT_SUCCESS(status))
     {
-        DbgPrint("[Error] Failed to get kernel functions!\n");
-        ZwClose(hThread);
-        return FALSE;
+        DbgPrint("[Error] ObOpenObjectByPointer 失败: %08X\n", status);
+        goto Exit_CleanupThread;
+    }
+
+    PVOID PspExitThread = FindPspExitThread();
+
+    // 校验函数有效性
+    if (!PspExitThread)
+    {
+        DbgPrint("[Error] 内核函数获取失败\n");
+        goto Exit_CleanupHandle;
     }
 
     CONTEXT ctx = { 0 };
-    // 必须设置的上下文标志（获取/修改 RIP/RSP 等核心寄存器）
     ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
 
-    // --------------------------
-    // 核心流程：严格判断每一步
-    // --------------------------
-    // 步骤1：挂起线程
-    status = NtSuspendThread(hThread, NULL);
+    // ====================== 核心流程 ======================
+    // 步骤1：挂起【整个进程】（进程内所有线程停止）
+    /*status = PsSuspendProcess(pEProcess);
     if (!NT_SUCCESS(status))
     {
-        DbgPrint("[Error] NtSuspendThread failed, Status: %08X\n", status);
-        goto Exit_CloseHandle;
+        DbgPrint("[Error] PsSuspendProcess 失败: %08X\n", status);
+        goto Exit_CleanupHandle;
     }
-    DbgPrint("[Info] Thread suspended successfully.\n");
+    DbgPrint("[Info] 进程挂起成功\n");*/
 
-    // 步骤2：获取线程上下文
-    status = NtGetContextThread(hThread, &ctx);
+    // 步骤2：获取目标线程上下文
+    status = PsGetContextThread(pEThread, &ctx, 0);
     if (!NT_SUCCESS(status))
     {
-        DbgPrint("[Error] NtGetContextThread failed, Status: %08X\n", status);
-        goto Exit_ResumeThread;
+        DbgPrint("[Error] PsGetContextThread 失败: %08X\n", status);
+        goto Exit_ResumeProcess;
     }
-    DbgPrint("[Info] Get thread context success. Current RIP: %llx\n", ctx.Rip);
+    DbgPrint("[Info] 获取线程上下文成功, 当前RIP: %llx\n", ctx.Rip);
 
-    // 步骤3：修改RIP -> PspExitThread（修复栈平衡，传递退出码）
+    // 步骤3：修改RIP -> 线程退出函数 + 修复栈平衡
     ctx.Rip = (ULONG64)PspExitThread;
-    // x64 修复：设置退出状态参数 (rdx = 退出码)，防止栈不平衡蓝屏
-    ctx.Rdx = STATUS_SUCCESS;
+    ctx.Rdx = STATUS_SUCCESS;  // x64 调用约定传参，防止蓝屏
 
-    // 步骤4：写入新的上下文
-    status = NtSetContextThread(hThread, &ctx);
+    // 步骤4：写入修改后的上下文
+    status = PsSetContextThread(pEThread, &ctx, 0);
     if (!NT_SUCCESS(status))
     {
-        DbgPrint("[Error] NtSetContextThread failed, Status: %08X\n", status);
-        goto Exit_ResumeThread;
+        DbgPrint("[Error] PsSetContextThread 失败: %08X\n", status);
+        goto Exit_ResumeProcess;
     }
-    DbgPrint("[Info] Set RIP to PspExitThread success: %llx\n", ctx.Rip);
+    DbgPrint("[Info] 修改RIP成功: %llx\n", ctx.Rip);
 
-    // 所有核心步骤执行成功
+    // 所有操作成功
     bFinalSuccess = TRUE;
-    DbgPrint("[Info] Force destroy thread prepare success!\n");
+    DbgPrint("[Info] 强制终止线程准备完成\n");
 
-Exit_ResumeThread:
-    // 无论成功/失败，必须恢复线程（否则永久挂起）
-    NtResumeThread(hThread, NULL);
-    DbgPrint("[Info] Thread resumed.\n");
+    // ====================== 清理流程 ======================
+Exit_ResumeProcess:
+    // 无论成败，必须恢复进程！
+    //PsResumeProcess(pEProcess);
+    //DbgPrint("[Info] 进程已恢复\n");
 
-Exit_CloseHandle:
-    // 关闭线程句柄，避免句柄泄漏
-    ZwClose(hThread);
-    DbgPrint("[Info] Thread handle closed.\n");
+Exit_CleanupHandle:
+    // 关闭线程句柄
+    if (hThread)
+        ZwClose(hThread);
 
-    // 返回最终执行结果
+Exit_CleanupThread:
+    // 释放进程/线程对象引用 (必须成对调用)
+    if (pEProcess)
+        ObDereferenceObject(pEProcess);
+    if (pEThread)
+        ObDereferenceObject(pEThread);
+
+    DbgPrint("[Info] 所有资源已释放\n");
     return bFinalSuccess;
 }
 

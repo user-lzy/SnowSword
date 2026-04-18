@@ -530,7 +530,7 @@ Sub UpdateTextBoxFromBytes( _
             Dim As UInt64 offset = ud_insn_off(@u)
             
             ' 统一用你指定的Hex函数
-            Dim addrStr As String = "0x" & Hex(@offset, 16)
+            Dim addrStr As String = "0x" & Hex(offset, 16)
             Dim hexStr As String = *hexText
             Dim fixedHex As String = hexStr
             

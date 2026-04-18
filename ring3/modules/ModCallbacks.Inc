@@ -160,6 +160,9 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
             ElseIf InStr(CallbackArray(i).TheType, "\Callback\") > 0 Then
                 SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
                 SetItemTextEx lvwCallbacks, NewIndex, 4, "CallbackRegistration=0x" & WHex(CallbackArray(i).Others(0))
+            ElseIf CallbackArray(i).TheType = "BugCheck" OrElse CallbackArray(i).TheType = "BugCheckReason" Then
+                SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
+                SetItemTextEx lvwCallbacks, NewIndex, 4, "CallbackRecord=0x" & WHex(CallbackArray(i).Others(0))
             Else
                 SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
                 SetItemTextEx lvwCallbacks, NewIndex, 4, "无"

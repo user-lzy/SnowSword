@@ -644,3 +644,100 @@ Function GetModuleBaseByPath(ByVal hProcess As HANDLE, ByVal szModulePath As Str
     Print "[提示] 未找到匹配模块"
     Return 0
 End Function
+
+' ==============================================
+' 核心函数：根据模块名、函数名、基址 获取 函数虚拟地址(VA)
+' 参数：
+'   szModuleName  模块名(如 ntoskrnl.exe)
+'   szFuncName    导出函数名(如 IopInvalidDeviceRequest)
+'   ModuleBase    模块加载基址(内核/R3基址)
+' 返回：函数虚拟地址(失败返回0)
+' ==============================================
+Function GetProcVA( _
+    ByVal szModuleName As String, _
+    ByVal szFuncName As String, _
+    ByVal ModuleBase As ULONG_PTR _
+) As ULONG_PTR
+    Dim As HANDLE hFile, hMapping
+    Dim As UByte Ptr pMapBase = 0
+    Dim As ULONG_PTR FuncVA = 0
+    Dim As String szModulePath
+    
+    Dim As IMAGE_DOS_HEADER Ptr pDos
+    Dim As IMAGE_NT_HEADERS64 Ptr pNt
+    Dim As IMAGE_DATA_DIRECTORY Ptr pExportDir
+    Dim As IMAGE_EXPORT_DIRECTORY Ptr pExport
+    
+    Dim As ULong Ptr pNames
+    Dim As UShort Ptr pOrdinals
+    Dim As ULong Ptr pFuncs
+    
+    ' 1. 拼接系统模块完整路径（System32目录）
+    Dim As ZString * MAX_PATH sysDir
+    GetSystemDirectoryA(sysDir, MAX_PATH)
+    szModulePath = sysDir & "\" & szModuleName
+
+    ' 2. 打开模块文件
+    hFile = CreateFileA(_
+        szModulePath, _
+        GENERIC_READ, _
+        FILE_SHARE_READ Or FILE_SHARE_WRITE, _
+        NULL, _
+        OPEN_EXISTING, _
+        FILE_ATTRIBUTE_NORMAL, _
+        NULL _
+    )
+    If hFile = INVALID_HANDLE_VALUE Then Return 0
+
+    ' 3. 创建文件映射
+    hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL)
+    If hMapping = NULL Then
+        CloseHandle(hFile)
+        Return 0
+    End If
+
+    ' 4. 映射文件到内存
+    pMapBase = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0)
+    If pMapBase = NULL Then
+        CloseHandle(hMapping)
+        CloseHandle(hFile)
+        Return 0
+    End If
+
+    ' 5. 解析PE头
+    pDos = Cast(IMAGE_DOS_HEADER Ptr, pMapBase)
+    If pDos->e_magic <> IMAGE_DOS_SIGNATURE Then Goto Cleanup ' 无效DOS头
+
+    pNt = Cast(IMAGE_NT_HEADERS64 Ptr, pMapBase + pDos->e_lfanew)
+    If pNt->Signature <> IMAGE_NT_SIGNATURE Then Goto Cleanup ' 无效NT头
+
+    ' 6. 获取导出表
+    pExportDir = @pNt->OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT)
+    If pExportDir->VirtualAddress = 0 Then Goto Cleanup ' 无导出表
+
+    pExport = Cast(IMAGE_EXPORT_DIRECTORY Ptr, pMapBase + pExportDir->VirtualAddress)
+    
+    ' 7. 遍历导出表 查找函数名
+    pNames     = Cast(ULong Ptr, pMapBase + pExport->AddressOfNames)
+    pOrdinals   = Cast(UShort Ptr, pMapBase + pExport->AddressOfNameOrdinals)
+    pFuncs       = Cast(ULong Ptr, pMapBase + pExport->AddressOfFunctions)
+
+    For i As ULong = 0 To pExport->NumberOfNames - 1
+        Dim As ZString Ptr pFuncName = Cast(ZString Ptr, pMapBase + pNames[i])
+        Print *pFuncName
+        If *pFuncName = szFuncName Then
+            ' 找到函数 → 获取RVA → 计算VA
+            Dim As ULong FuncRVA = pFuncs[pOrdinals[i]]
+            FuncVA = ModuleBase + FuncRVA
+            Exit For
+        End If
+    Next
+
+Cleanup:
+    ' 释放资源
+    UnmapViewOfFile(pMapBase)
+    CloseHandle(hMapping)
+    CloseHandle(hFile)
+
+    Return FuncVA
+End Function

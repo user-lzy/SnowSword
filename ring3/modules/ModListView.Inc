@@ -39,6 +39,10 @@ Enum Interface
     HalDispatch
     HalPrivateDispatch
     ObjectHook
+    
+    EtwProvider
+    WinsockSPI
+    TaskScheduler
 End Enum
 
 Type CurrentDriverInfo
@@ -366,6 +370,31 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "地址",, 300
                 .AddColumn "对象类型",, 250
                 .AddColumn "所属模块",, 600
+            Case EtwProvider
+                'TreeList.AddColumn "序号", 100
+                .AddColumn "GUID",, 600
+                .AddColumn "名称",, 500
+                'TreeList.AddColumn "类型", 150
+                'TreeList.AddColumn "状态", 100
+            Case WinsockSPI
+                .AddColumn "序号",, 60
+                .AddColumn "协议名称",, 180
+                .AddColumn "提供者路径",, 320
+                .AddColumn "文件厂商",, 120
+                .AddColumn "CLSID",, 260
+            Case TaskScheduler
+                .AddColumn "序号",, 60
+                .AddColumn "任务路径",, 320
+                .AddColumn "启用状态",, 60
+                .AddColumn "当前状态",, 80
+                .AddColumn "上次运行",, 140
+                .AddColumn "下次运行",, 140
+                .AddColumn "运行结果",, 100
+                .AddColumn "程序路径",, 260
+                .AddColumn "任务描述",, 280
+                .AddColumn "公司",, 120
+                .AddColumn "版本",, 100
+                .AddColumn "文件描述",, 180
         End Select
     End With
 End Sub
@@ -783,4 +812,9 @@ Sub OptimizeListViewForOwnerDraw(hWndControl As HWND)
     
     ' 设置项目高度（可选）
     'SendMessage(hWndControl, LVM_SETITEMHEIGHT, 0, 20)
+End Sub
+
+Sub TreeList_DeleteAllChildItem(TreeList As Class_mCtrlTreeList, Item As MC_HTREELISTITEM)
+    Do While TreeList.DeleteItem(TreeList.GetNextItem(Item, MC_TLGN_CHILD)) = True
+    Loop
 End Sub

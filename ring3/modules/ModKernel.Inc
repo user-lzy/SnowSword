@@ -393,6 +393,15 @@ Public Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef Modul
     Deallocate buffer
 End Function
 
+Function GetKernelProcAddress(ModuleName As StringW, FunctionName As StringW) As ULONG_PTR
+    ' 1. 这里替换为你通过R3获取的 ntoskrnl.exe 内核基址
+    Dim As ULONG_PTR ModuleBase = Cast(ULONG_PTR, GetKernelModuleBase(ModuleName.WstrPtr, NULL))
+    If ModuleBase = NULL Then Return 0
+    Print "ModuleBase:0x" & WHex(ModuleBase)
+    ' 2. 获取函数VA
+    Return GetProcVA(ModuleName, FunctionName, ModuleBase)
+End Function
+
 Public Function GetWString(ByVal SourceString As String) As LPWSTR
     Dim pStr As LPWSTR = Allocate(Len(SourceString) + 1)
     *pStr = StrToWStr(SourceString)

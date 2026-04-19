@@ -1,4 +1,5 @@
 ﻿#include "win/iphlpapi.bi"
+#include once "win/ws2spi.bi"
 
 Const TCP_TABLE_BASIC_LISTENER As Long = 0
 Const TCP_TABLE_BASIC_CONNECTIONS As Long = 1
@@ -181,4 +182,105 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
     Next
     Deallocate pUdp6Table
     CommitListViewView lvwInternet
+End Sub
+
+' ==============================================
+' 核心函数：枚举系统 Winsock SPI 提供者 (对齐ETW代码风格)
+' ==============================================
+Sub GetWinsockSPIList(lvwSPI As Class_ListView)
+    Dim pBuffer As PVOID = NULL
+    Dim bufSize As ULONG = 0
+    Dim lProtocolsCount As LONG = 0
+    Dim pProtocolInfo As LPWSAPROTOCOL_INFOW  ' 用你的自定义指针
+    Dim i As Integer, count As Integer
+    Dim wsaData As WSADATA
+    
+    ' ======================
+    ' 1. 清空 ListView
+    ' ======================
+    InitListViewData lvwSPI
+    
+    ' ======================
+    ' 2. 初始化Winsock
+    ' ======================
+    If WSAStartup(MAKEWORD(2, 2), @wsaData) <> 0 Then
+        Print "Winsock初始化失败"
+        Exit Sub
+    End If
+    
+    ' ======================
+    ' 3. 获取缓冲区大小
+    ' ======================
+    WSCEnumProtocols(NULL, NULL, @bufSize, NULL)
+    If bufSize = 0 Then
+        Print "获取缓冲区大小失败"
+        WSACleanup()
+        Exit Sub
+    End If
+    
+    ' ======================
+    ' 4. 分配内存
+    ' ======================
+    pBuffer = Allocate(bufSize)
+    If pBuffer = NULL Then
+        Print "内存分配失败"
+        WSACleanup()
+        Exit Sub
+    End If
+    
+    pProtocolInfo = pBuffer
+    
+    ' ======================
+    ' 🔥 修复2：删除强制转型！直接传你的自定义结构体指针
+    ' ======================
+    lProtocolsCount = WSCEnumProtocols(NULL, pProtocolInfo, @bufSize, NULL)
+    If lProtocolsCount = SOCKET_ERROR Then
+        Print "枚举SPI失败，错误码："; Hex(GetLastError())
+        Deallocate(pBuffer)
+        WSACleanup()
+        Exit Sub
+    End If
+    
+    ' ======================
+    ' 5. 遍历数据
+    ' ======================
+    count = lProtocolsCount
+    If count = 0 Then
+        Print "未找到任何Winsock SPI提供者"
+        Deallocate(pBuffer)
+        WSACleanup()
+        Exit Sub
+    End If
+    
+    For i = 0 To count - 1
+        Dim pInfo As WSAPROTOCOL_INFOW Ptr = @pProtocolInfo[i]
+        Dim szCLSID As WString * 64
+        Dim szDllPath As WString * 1024  ' 缓冲区
+        Dim nPath As Long = 1024
+        Dim nErrno As Long
+        
+        ' CLSID 转换 (ProviderId 就是你要的 GUID)
+        StringFromGUID2(@pInfo->ProviderId, szCLSID, 64)
+        
+        ' 🔥 正确获取 DLL 路径 🔥
+        If WSCGetProviderPath(@pInfo->ProviderId, szDllPath, @nPath, @nErrno) = SOCKET_ERROR Then
+            szDllPath = "获取失败"
+        End If
+        szDllPath = FF_Replace(szDllPath, "%SystemRoot%", Environ("SystemRoot"))
+        ' 添加列表
+        AddItemColListEx lvwSPI, 5,,, WStr(i + 1), _
+            pInfo->szProtocol, _
+            szDllPath, _  ' 这里传正确获取的路径
+            WStr("未知"), _
+            szCLSID
+    Next
+    
+    ' ======================
+    ' 6. 释放资源
+    ' ======================
+    Deallocate(pBuffer)
+    WSACleanup()
+    
+    Print "Winsock SPI 枚举完成，总数："; count
+    CommitListViewView lvwSPI
 End Sub

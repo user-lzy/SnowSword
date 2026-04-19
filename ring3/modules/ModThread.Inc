@@ -1094,7 +1094,7 @@ End Function
 'ZwSetInformationThread ThreadAttachContainer
 
 Public Function KillThread(ByVal dwThreadId As DWORD) As Boolean
-    Dim IsCritical As BOOLEAN
+    Dim IsCritical As Boolean
     If (NT_SUCCESS(IsThreadCritical(dwThreadId, @IsCritical))) Then
         If (IsCritical) Then
             If (AfxMsg("此线程处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDNO) Then

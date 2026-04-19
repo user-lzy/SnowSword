@@ -455,8 +455,8 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
             sHotkey = sMod & "+" & sKey
         ElseIf sMod = "" Then
             sHotkey = sKey
-        Else
-            sHotkey = sKey
+        ElseIf sKey = "" Then
+            sHotkey = sMod
         End If
         
         Dim Note As StringW = ""

@@ -1077,9 +1077,12 @@ Private Sub DrawTreeView()
     treHardDisk = treMain.AddItem(NULL, "硬盘")
     treMain.AddItem treHardDisk, "文件"
     treMain.AddItem NULL, "注册表"
-    treOther = treMain.AddItem(NULL, "启动管理")
+    treOther = treMain.AddItem(NULL, "其他")
     treMain.AddItem treOther, "服务"
     treMain.AddItem treOther, "启动项"
+    treMain.AddItem treOther, "Etw Provider"
+    treMain.AddItem treOther, "Winsock SPI"
+    treMain.AddItem treOther, "任务计划"
     Dim treAdvance As HTREEITEM = treMain.AddItem(NULL, "高级")
     treMain.AddItem treAdvance, "暴力检测"
     treMain.AddItem treAdvance, "设置"
@@ -1189,21 +1192,10 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     'EnumGlobalDesktopHooks
     Print GetSystemVersion
     'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
-    prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WndProc))
-    'AfxMsg SizeOf(CallbackInfo)
-    /'If SymInit(GetCurrentProcess) Then 
-        ' 加载 ntoskrnl（路径必须正确）
-        LoadModuleSymbols("C:\Windows\System32\ntoskrnl.exe", &HFFFFF8017A000000)
-
-        ' 查询符号
-        Dim addr As ULONG64
-
-        Print "nt!PsLoadedModuleList:0x" & WHex(GetSymbolAddress("nt!PsLoadedModuleList"))
-        Print "nt!PsActiveProcessHead:0x" & WHex(GetSymbolAddress("nt!PsActiveProcessHead"))
-        
-        Print "正在搜索包含 'PsActive' 的符号..."
-        SymEnumSymbols(GetCurrentProcess, &HFFFFF8017A000000, StrPtr("*!*"), @EnumSymbolsCallback, NULL)
-    End If'/
+    prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WNDPROC))
+    
+    'Test
+    'Print GetKernelProcAddress("ntoskrnl.exe", "IopInvalidDeviceRequest ")
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1663,6 +1655,36 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         InitializeListView ListView1, mCtrlTreeList1, TreeView
         lblNum.Caption = "正在获取..."
         GetServiceList ListView1
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+    ElseIf SelectText = "Etw Provider" Then
+        gLayoutMode = LAYOUT_LIST_ONLY
+        gMainView = VIEW_LISTVIEW
+        UpdateLayout
+        
+        CurrentInformation.intType = EtwProvider
+        InitializeListView ListView1, mCtrlTreeList1, TreeView
+        lblNum.Caption = "正在获取..."
+        GetETWProviderList ListView1
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+    ElseIf SelectText = "Winsock SPI" Then
+        gLayoutMode = LAYOUT_LIST_ONLY
+        gMainView = VIEW_LISTVIEW
+        UpdateLayout
+        
+        CurrentInformation.intType = WinsockSPI
+        InitializeListView ListView1, mCtrlTreeList1, TreeView
+        lblNum.Caption = "正在获取..."
+        GetWinsockSPIList ListView1
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+    ElseIf SelectText = "任务计划" Then
+        gLayoutMode = LAYOUT_LIST_ONLY
+        gMainView = VIEW_LISTVIEW
+        UpdateLayout
+        
+        CurrentInformation.intType = TaskScheduler
+        InitializeListView ListView1, mCtrlTreeList1, TreeView
+        lblNum.Caption = "正在获取..."
+        GetTaskSchedulerList ListView1
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
     ElseIf SelectText = "暴力检测" Then
         gLayoutMode = LAYOUT_LIST_ONLY

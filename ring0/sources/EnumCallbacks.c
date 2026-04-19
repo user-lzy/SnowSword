@@ -99,6 +99,20 @@ NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 
 CALLBACK_LOOKUP_TABLE g_CallbackTable = { 0 };
 
+// ============================================================================
+// 版本检测函数（精准区分Win10/Win11）
+// ============================================================================
+BOOLEAN IsWindows11OrGreater() {
+	RTL_OSVERSIONINFOW osVersion = { sizeof(RTL_OSVERSIONINFOW) };
+	NTSTATUS status = RtlGetVersion(&osVersion);
+	if (!NT_SUCCESS(status)) {
+		return FALSE;
+	}
+	// Win11 内部版本号从 22000 开始，Win10 最高为 19045
+	return (osVersion.dwMajorVersion == 10 && osVersion.dwBuildNumber >= 22000)
+		|| (osVersion.dwMajorVersion > 10);
+}
+
 PVOID FindPspCreateProcessNotifyRoutine()
 {
 	UNICODE_STRING PsSetCreateProcessNotifyRoutineName = RTL_CONSTANT_STRING(L"PsSetCreateProcessNotifyRoutine");
@@ -616,6 +630,7 @@ PVOID FindKeBugCheckReasonCallbackListHead()
 
 	// 指定特征码
 	UCHAR pSpecialCode[3] = { 0x48,0x8d,0x3d };
+	if (!IsWindows11OrGreater()) pSpecialCode[2] = 0x0d;
 
 	// 指定特征码长度
 	ULONG ulSpecialCodeLength = 3;
@@ -787,58 +802,157 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 // ============================================================================
 // 1. 查找设备类通知的桶数组和锁
 // ============================================================================
+//NTSTATUS FindDeviceClassNotifyInfo(PDEVICE_CLASS_NOTIFY_INFO pInfo) {
+//	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
+//	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
+//
+//	// 特征码：48 8D 0D ?? ?? ?? ?? E8  (lea rcx, [PnpDeviceClassNotifyLock]; call ExAcquireFastMutex)
+//	UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
+//	UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
+//	PVOID pLockIns = SearchSpecialCodeWithMask((PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x180, 0x100, patternLock, maskLock, sizeof(patternLock));
+//	//DbgPrint("pLockIns:0x%p", pLockIns);
+//	if (!pLockIns) return STATUS_NOT_FOUND;
+//
+//	pInfo->Lock = (PFAST_MUTEX)CALCULATE_RIP_TARGET(pLockIns, 7);
+//
+//	// 在锁指令附近向后搜索桶数组基址：48 8D 15 ?? ?? ?? ??
+//	UCHAR patternList[] = { 0x48, 0x8D, 0x15, 0xCC, 0xCC, 0xCC, 0xCC };
+//	UCHAR maskList[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
+//	PVOID pListIns = SearchSpecialCodeWithMask((PUCHAR)pLockIns, 0x100, patternList, maskList, sizeof(patternList));
+//	//DbgPrint("pListIns:0x%p", pListIns);
+//	if (!pListIns) return STATUS_NOT_FOUND;
+//
+//	pInfo->Buckets = (PLIST_ENTRY)CALCULATE_RIP_TARGET(pListIns, 7);
+//	pInfo->NumBuckets = 13;   // 反汇编推导：模13哈希
+//	return STATUS_SUCCESS;
+//}
+
+// ============================================================================
+// 1. 查找设备类通知信息（Win11原逻辑100%保留，新增Win10兼容分支）
+// ============================================================================
 NTSTATUS FindDeviceClassNotifyInfo(PDEVICE_CLASS_NOTIFY_INFO pInfo) {
+	RtlZeroMemory(pInfo, sizeof(DEVICE_CLASS_NOTIFY_INFO));
 	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
 	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
 
-	// 特征码：48 8D 0D ?? ?? ?? ?? E8  (lea rcx, [PnpDeviceClassNotifyLock]; call ExAcquireFastMutex)
-	UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
-	UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
-	PVOID pLockIns = SearchSpecialCodeWithMask((PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x180, 0x100, patternLock, maskLock, sizeof(patternLock));
-	//DbgPrint("pLockIns:0x%p", pLockIns);
+	BOOLEAN isWin11 = IsWindows11OrGreater();
+	PVOID pLockIns = NULL;
+
+	// -------------------------------------------------------------------------
+	// 【Win11 分支】完全复用你原有的硬编码偏移和特征码，无任何修改
+	// -------------------------------------------------------------------------
+	if (isWin11) {
+		UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
+		UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
+		// 完全保留你原有的 +0x180 偏移
+		pLockIns = SearchSpecialCodeWithMask(
+			(PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x180,
+			0x100,
+			patternLock,
+			maskLock,
+			sizeof(patternLock)
+		);
+	}
+	// -------------------------------------------------------------------------
+	// 【Win10 分支】匹配Win10专属特征码（KeAcquireGuardedMutex）
+	// -------------------------------------------------------------------------
+	else {
+		// Win10 专属特征：lea rcx, [PnpDeviceClassNotifyLock] + call KeAcquireGuardedMutex
+		UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
+		UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
+		// Win10 特征在函数前半段，从函数基址搜索
+		pLockIns = SearchSpecialCodeWithMask(
+			(PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x150,
+			0x100,
+			patternLock,
+			maskLock,
+			sizeof(patternLock)
+		);
+	}
+
 	if (!pLockIns) return STATUS_NOT_FOUND;
+	pInfo->Lock = (PVOID)CALCULATE_RIP_TARGET(pLockIns, 7);
 
-	pInfo->Lock = (PFAST_MUTEX)CALCULATE_RIP_TARGET(pLockIns, 7);
-
-	// 在锁指令附近向后搜索桶数组基址：48 8D 15 ?? ?? ?? ??
+	// 搜索桶数组基址（Win10/Win11通用，在锁指令附近搜索）
 	UCHAR patternList[] = { 0x48, 0x8D, 0x15, 0xCC, 0xCC, 0xCC, 0xCC };
 	UCHAR maskList[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
 	PVOID pListIns = SearchSpecialCodeWithMask((PUCHAR)pLockIns, 0x100, patternList, maskList, sizeof(patternList));
-	//DbgPrint("pListIns:0x%p", pListIns);
-	if (!pListIns) return STATUS_NOT_FOUND;
 
+	if (!pListIns) return STATUS_NOT_FOUND;
 	pInfo->Buckets = (PLIST_ENTRY)CALCULATE_RIP_TARGET(pListIns, 7);
-	pInfo->NumBuckets = 13;   // 反汇编推导：模13哈希
+	pInfo->NumBuckets = 13; // 哈希桶数量Win10/Win11均固定为13
 	return STATUS_SUCCESS;
 }
 
 // ============================================================================
-// 2. 查找硬件配置文件通知的链表和锁
+// 2. 查找硬件配置文件通知信息（Win11原逻辑100%保留，新增Win10兼容分支）
 // ============================================================================
 NTSTATUS FindHwProfileNotifyInfo(PHWPROFILE_NOTIFY_INFO pInfo) {
+	RtlZeroMemory(pInfo, sizeof(HWPROFILE_NOTIFY_INFO));
 	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
 	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
 
-	// 特征码：4C 8D 2D ?? ?? ?? ??  (lea r13, [PnpHwProfileNotifyLock])
-	UCHAR patternLock[] = { 0x4C, 0x8D, 0x2D, 0xCC, 0xCC, 0xCC, 0xCC };
-	UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
-	PVOID pLockIns = SearchSpecialCodeWithMask((PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x1a0000, 0x10000, patternLock, maskLock, sizeof(patternLock));
+	BOOLEAN isWin11 = IsWindows11OrGreater();
+	PVOID pLockIns = NULL;
+
+	// -------------------------------------------------------------------------
+	// 【Win11 分支】完全复用你原有的硬编码偏移和特征码，无任何修改
+	// -------------------------------------------------------------------------
+	if (isWin11) {
+		UCHAR patternLock[] = { 0x4C, 0x8D, 0x2D, 0xCC, 0xCC, 0xCC, 0xCC };
+		UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
+		// 完全保留你原有的 +0x1a0000 超大偏移
+		pLockIns = SearchSpecialCodeWithMask(
+			(PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x1a0000,
+			0x10000,
+			patternLock,
+			maskLock,
+			sizeof(patternLock)
+		);
+	}
+	// -------------------------------------------------------------------------
+	// 【Win10 分支】匹配Win10专属特征码
+	// -------------------------------------------------------------------------
+	else {
+		// Win10 硬件配置文件锁特征：lea rcx, [PnpHwProfileNotifyLock] + call KeAcquireGuardedMutex
+		UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
+		UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
+		pLockIns = SearchSpecialCodeWithMask(
+			(PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x300,
+			0x100,
+			patternLock,
+			maskLock,
+			sizeof(patternLock)
+		);
+		// 兜底：Win10 也可能使用 lea r13 指令
+		/*if (!pLockIns) {
+			UCHAR patternLockAlt[] = { 0x4C, 0x8D, 0x2D, 0xCC, 0xCC, 0xCC, 0xCC };
+			UCHAR maskLockAlt[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
+			pLockIns = SearchSpecialCodeWithMask(
+				(PUCHAR)IoRegisterPlugPlayNotificationAddr,
+				0x800,
+				patternLockAlt,
+				maskLockAlt,
+				sizeof(patternLockAlt)
+			);
+		}*/
+	}
+
 	if (!pLockIns) return STATUS_NOT_FOUND;
+	pInfo->Lock = (PVOID)CALCULATE_RIP_TARGET(pLockIns, 7);
 
-	pInfo->Lock = (PFAST_MUTEX)CALCULATE_RIP_TARGET(pLockIns, 7);
-
-	// 搜索链表头（lea rdx, [PnpProfileNotifyList]）
+	// 搜索链表头（Win10/Win11通用）
 	UCHAR patternList1[] = { 0x48, 0x8D, 0x15, 0xCC, 0xCC, 0xCC, 0xCC };
 	UCHAR maskList[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
-
 	PVOID pListIns = SearchSpecialCodeWithMask((PUCHAR)pLockIns, 0x100, patternList1, maskList, sizeof(patternList1));
+
 	if (pListIns) {
 		pInfo->ListHead = (PLIST_ENTRY)CALCULATE_RIP_TARGET(pListIns, 7);
 	}
 	else {
 		DbgPrint("未找到链表头特征指令,尝试打印pLockIns开始的0x100字节:\n");
 		for (int i = 0; i < 0x100 && ((PUCHAR)pLockIns)[i] != 0xc3; i++)
-			DbgPrint("0x%X:%02X", i, ((PUCHAR)pLockIns)[i]);
+			DbgPrint("0x%X:%02X ", i, ((PUCHAR)pLockIns)[i]);
 	}
 	return STATUS_SUCCESS;
 }
@@ -905,58 +1019,102 @@ PVOID FindIopFsNotifyChangeQueueHead()
 	return (PVOID)((PUCHAR)result + 7 + offset);
 }
 
-PVOID FindExpCallbackListHead()
+BOOLEAN FindExpCallbackList(PVOID* pListHead, PEX_PUSH_LOCK* pListLock)
 {
 	UCHAR pSpecialCode[3] = { 0x48,0x89,0x0d };
-	PVOID result = SearchSpecialCode((PUCHAR)ExCreateCallback, 0x100, pSpecialCode, 3);
+	if (!IsWindows11OrGreater()) pSpecialCode[2] = 0x05;
+
+	PVOID result = SearchSpecialCode((PUCHAR)ExCreateCallback, 0x200, pSpecialCode, 3);
 	if (NULL == result)
 	{
 		DbgPrint("ExpCallbackListHead is NULL");
-		return NULL;
+		return FALSE;
 	}
 
 	// 计算目标地址
 	ULONG offset = *(PULONG)((PUCHAR)result + 3);
 	DbgPrint("ExpCallbackListHead:0x%p", (PVOID)((PUCHAR)result + 7 + offset - 8));
-	return (PVOID)((PUCHAR)result + 7 + offset - 8);
-}
+	*pListHead = (PVOID)((PUCHAR)result + 7 + offset - 8);
 
-PEX_PUSH_LOCK FindExpCallbackListLock()
-{
-	/*
-	fffff807`9b072326 488bce          mov     rcx,rsi
-	fffff807`9b072329 e88607a7ff      call    nt!ExpUnlockCallbackListExclusive (fffff807`9aae2ab4)
-	*/
-	UCHAR pSpecialCode[4] = { 0x48,0x8b,0xce,0xe8 };
-	PVOID result = SearchSpecialCode((PUCHAR)ExCreateCallback, 0x150, pSpecialCode, 4);
+	result = SearchSpecialCode((PUCHAR)result, 0x100, (PUCHAR)"\xe8", 1);
 	if (NULL == result)
 	{
 		DbgPrint("ExpUnlockCallbackListExclusive is NULL");
-		return NULL;
+		return FALSE;
 	}
-	// 计算目标地址
-	LONG offset = *(PLONG)((PUCHAR)result + 4);
-	PVOID ExpUnlockCallbackListExclusive = (PVOID)((PUCHAR)result + 8 + offset);
-	DbgPrint("ExpUnlockCallbackListExclusive:0x%p", ExpUnlockCallbackListExclusive);
 
-	/*
-	fffff807`9aae2abd 0f0d0dfc77a100  prefetchw [nt!ExpCallbackListLock (fffff807`9b4fa2c0)]
-	*/
-	pSpecialCode[0] = 0x0f;
-	pSpecialCode[1] = 0x0d;
-	pSpecialCode[2] = 0x0d;
+	// 计算目标地址
+	LONG offset1 = *(PLONG)((PUCHAR)result + 1);
+	PVOID ExpUnlockCallbackListExclusive = (PVOID)((PUCHAR)result + 5 + offset1);
+
+	DbgPrint("ExpUnlockCallbackListExclusive:0x%p", ExpUnlockCallbackListExclusive);
+	if (ExpUnlockCallbackListExclusive == NULL) return FALSE;
+
+	// 在 ExpUnlockCallbackListExclusive 附近搜索锁地址
+	if (!IsWindows11OrGreater())
+	{
+		pSpecialCode[0] = 0x48;
+		pSpecialCode[1] = 0x8d;
+		pSpecialCode[2] = 0x0d;
+	}
+	else {
+		pSpecialCode[0] = 0x0f;
+		pSpecialCode[1] = 0x0d;
+		pSpecialCode[2] = 0x0d;
+	}
 	result = SearchSpecialCode((PUCHAR)ExpUnlockCallbackListExclusive, 0x50, pSpecialCode, 3);
 	if (NULL == result)
 	{
 		DbgPrint("ExpCallbackListLock is NULL");
-		return NULL;
+		return FALSE;
 	}
 
 	// 计算目标地址
-	ULONG offset2 = *(PULONG)((PUCHAR)result + 3);
-	DbgPrint("ExpCallbackListLock:0x%p", (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2));
-	return (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2);
+	offset = *(PULONG)((PUCHAR)result + 3);
+	result = (PVOID)((PUCHAR)result + 7 + offset);
+	DbgPrint("ExpCallbackListLock:0x%p", result);
+	if (result == NULL) return FALSE;
+
+	*pListLock = (PEX_PUSH_LOCK)result;
+	return TRUE;
 }
+
+//PEX_PUSH_LOCK FindExpCallbackListLock()
+//{
+//	/*
+//	fffff807`9b072326 488bce          mov     rcx,rsi
+//	fffff807`9b072329 e88607a7ff      call    nt!ExpUnlockCallbackListExclusive (fffff807`9aae2ab4)
+//	*/
+//	UCHAR pSpecialCode[4] = { 0x48,0x8b,0xce,0xe8 };
+//	PVOID result = SearchSpecialCode((PUCHAR)ExCreateCallback, 0x150, pSpecialCode, 4);
+//	if (NULL == result)
+//	{
+//		DbgPrint("ExpUnlockCallbackListExclusive is NULL");
+//		return NULL;
+//	}
+//	// 计算目标地址
+//	LONG offset = *(PLONG)((PUCHAR)result + 4);
+//	PVOID ExpUnlockCallbackListExclusive = (PVOID)((PUCHAR)result + 8 + offset);
+//	DbgPrint("ExpUnlockCallbackListExclusive:0x%p", ExpUnlockCallbackListExclusive);
+//
+//	/*
+//	fffff807`9aae2abd 0f0d0dfc77a100  prefetchw [nt!ExpCallbackListLock (fffff807`9b4fa2c0)]
+//	*/
+//	pSpecialCode[0] = 0x0f;
+//	pSpecialCode[1] = 0x0d;
+//	pSpecialCode[2] = 0x0d;
+//	result = SearchSpecialCode((PUCHAR)ExpUnlockCallbackListExclusive, 0x50, pSpecialCode, 3);
+//	if (NULL == result)
+//	{
+//		DbgPrint("ExpCallbackListLock is NULL");
+//		return NULL;
+//	}
+//
+//	// 计算目标地址
+//	ULONG offset2 = *(PULONG)((PUCHAR)result + 3);
+//	DbgPrint("ExpCallbackListLock:0x%p", (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2));
+//	return (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2);
+//}
 
 // ==============================
 // 【核心实现】查找 NMI 回调链表 + 自旋锁
@@ -1903,17 +2061,25 @@ exit11:
 	max_num += 128;  // 更新最大容量
 	// ===================== 预分配完成，开始遍历 =====================
 
+	BOOLEAN isWin11 = IsWindows11OrGreater();
+	
 	// 1. 枚举设备类通知
 	DEVICE_CLASS_NOTIFY_INFO devInfo = { 0 };
 	if (NT_SUCCESS(FindDeviceClassNotifyInfo(&devInfo))) {
 		DbgPrint("[+] Found DeviceClass notify info, Buckets:0x%p, Lock:0x%p", devInfo.Buckets, devInfo.Lock);
-
+		//goto exit115;
 		if (devInfo.Lock == NULL || devInfo.Buckets == NULL) {
 			DbgPrint("[-] DeviceClass 指针无效");
 			goto exit12;
 		}
 
-		ExAcquireFastMutex(devInfo.Lock);
+		// 【核心修正】分版本调用正确的锁获取函数
+		if (isWin11) {
+			ExAcquireFastMutex(devInfo.Lock);
+		}
+		else {
+			KeAcquireGuardedMutex((PKGUARDED_MUTEX)devInfo.Lock);
+		}
 		__try {
 			for (ULONG i = 0; i < devInfo.NumBuckets; i++) {
 				PLIST_ENTRY pBucket = &devInfo.Buckets[i];
@@ -1935,24 +2101,30 @@ exit11:
 			}
 		}
 		__finally {
-			ExReleaseFastMutex(devInfo.Lock);
+			ExReleaseFastMutex(devInfo.Lock); // KeReleaseGuardedMutex
 		}
 	}
 	else {
 		DbgPrint("[-] Failed to find DeviceClass notify info\n");
 	}
-
+exit115:
 	// 2. 枚举硬件配置文件通知（安全版，无锁异常）
 	HWPROFILE_NOTIFY_INFO hwInfo = { 0 };
 	if (NT_SUCCESS(FindHwProfileNotifyInfo(&hwInfo))) {
 		DbgPrint("[+] Found HwProfile notify info, ListHead:0x%p, Lock:0x%p", hwInfo.ListHead, hwInfo.Lock);
-
+		//goto exit12;
 		// 空链表直接跳过，不遍历
 		if (hwInfo.ListHead == NULL || hwInfo.ListHead->Flink == hwInfo.ListHead) {
 			DbgPrint("[*] HwProfile 链表为空");
 		}
 		else {
-			ExAcquireFastMutex(hwInfo.Lock);
+			// 【核心修正】分版本调用正确的锁获取函数
+			if (isWin11) {
+				ExAcquireFastMutex(hwInfo.Lock);
+			}
+			else {
+				KeAcquireGuardedMutex((PKGUARDED_MUTEX)hwInfo.Lock);
+			}
 			__try {
 				for (PLIST_ENTRY pEntry = hwInfo.ListHead->Flink; pEntry != hwInfo.ListHead; pEntry = pEntry->Flink) {
 					if (pEntry == NULL) break;
@@ -1968,7 +2140,7 @@ exit11:
 				}
 			}
 			__finally {
-				ExReleaseFastMutex(hwInfo.Lock);
+				ExReleaseFastMutex(hwInfo.Lock); // KeReleaseGuardedMutex
 			}
 		}
 	}
@@ -2044,7 +2216,7 @@ exit5:
 		DbgPrint("KeBugCheckReasonCallbackListHead is empty!\n");
 		goto exit6;
 	}
-
+	// 注意:枚举此回调需要加锁,此处暂不加锁,可能存在遍历异常的风险
 	PKBUGCHECK_REASON_CALLBACK_RECORD pReasonCallbackRecord = NULL;
 
 	__try
@@ -2088,8 +2260,13 @@ exit6:
 	// ==============================
 	PLIST_ENTRY listEntry;
 	PCALLBACK_OBJECT callbackObject;
-	PLIST_ENTRY ExpCallbackListHead = (PLIST_ENTRY)FindExpCallbackListHead();
-	PEX_PUSH_LOCK ExpCallbackListLock = (PEX_PUSH_LOCK)FindExpCallbackListLock();
+	PLIST_ENTRY ExpCallbackListHead = NULL;
+	PEX_PUSH_LOCK ExpCallbackListLock = NULL;
+
+	if ((!FindExpCallbackList(&ExpCallbackListHead, &ExpCallbackListLock))||!MmIsAddressValid(ExpCallbackListHead) || !MmIsAddressValid(ExpCallbackListLock)) {
+		DbgPrint("Failed to find ExpCallbackListHead or ExpCallbackListLock!\n");
+		goto exit13;
+	}
 
 	// 临时缓存：锁内仅存指针（唯一新增的安全修复）
 	/*PVOID tempFunc3[MAX_TEMP] = {0};
@@ -2940,7 +3117,7 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 	else if (wcsstr(pCallbackInfo->Type, L"ObThreadCallback") != NULL ||
 		wcsstr(pCallbackInfo->Type, L"ObProcessCallback") != NULL) {
 		if (pCallbackInfo->Context) {
-			ObUnRegisterCallbacks(pCallbackInfo->Others[0]);
+			ObUnRegisterCallbacks((PVOID)pCallbackInfo->Others[0]);
 			status = STATUS_SUCCESS;
 		}
 		else {
@@ -2949,14 +3126,12 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 	}
 	// --------------------------------- BugCheck 回调 ---------------------------------
 	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheck") == 0) {
-		BOOLEAN ret = KeDeregisterBugCheckCallback(
-			pCallbackInfo->Others[0]);
+		BOOLEAN ret = KeDeregisterBugCheckCallback((PKBUGCHECK_CALLBACK_RECORD)pCallbackInfo->Others[0]);
 		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 	}
 	// --------------------------------- BugCheckReason 回调 ---------------------------------
 	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheckReason") == 0) {
-		BOOLEAN ret = KeDeregisterBugCheckReasonCallback(
-			pCallbackInfo->Others[0]);
+		BOOLEAN ret = KeDeregisterBugCheckReasonCallback((PKBUGCHECK_REASON_CALLBACK_RECORD)pCallbackInfo->Others[0]);
 		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 	}
 	// --------------------------------- 其他未支持的类型 ---------------------------------

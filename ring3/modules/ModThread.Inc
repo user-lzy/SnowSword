@@ -102,6 +102,16 @@ Enum KWAIT_REASON
     WaitReasonMaximum = 26    ' 最大值（边界）
 End Enum
 
+Type WORKER_THREAD_INFO Field = 8
+    pEThread As PVOID         ' KTHREAD 内核地址
+    ThreadId As ULONG64       ' 线程ID (TID)
+    Priority As Long       ' 线程优先级
+    ' ULong        NumaNode       ' NUMA 节点
+    PoolType As Wstring * 8    ' 队列类型: ExPool/IoPool
+    QueueAddress As PVOID ' 工作队列 EX_WORK_QUEUE 地址
+    StartAddress As PVOID ' 线程入口地址
+End Type
+
 #define STILL_ALIVE 259
 Declare Function ZwCreateThreadEx Lib "ntdll.dll" Alias "ZwCreateThreadEx"(ByVal ThreadHandle As PHANDLE, ByVal DesiredAccess As ACCESS_MASK, ByVal ObjectAttributes As LPVOID, ByVal ProcessHandle As HANDLE, _
 ByVal lpStartAddress As LPTHREAD_START_ROUTINE, ByVal lpParameter As LPVOID, ByVal CreateThreadFlags As DWORD, ByVal ZeroBits As size_t, ByVal StackSize As size_t, _
@@ -877,8 +887,10 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
                 Dim strModulePath As WString * MAX_PATH
                 GetModuleByAddress ProcessId, threadInfo->StartAddress, @strModulePath
                 'Print "线程ID: " & threadInfo->ClientID.UniqueThread & ", 切换次数: " & threadInfo->ContextSwitchCount & ", 起始地址:0x" & WHex(threadInfo->StartAddress)
-                AddItemColListEx lvwThread, 7,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), WStr(ThreadStateToString(threadInfo)), _
-                WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath)
+                Dim ItemIndex As Long = AddItemColListEx(lvwThread, 8,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
+                WStr(ThreadStateToString(threadInfo)), WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), _
+                WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath), WStr(GetFileCompany(strModulePath)))
+                VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, strModulePath
                 threadInfo += 1
                 i += 1
             Next
@@ -1104,7 +1116,12 @@ Public Function KillThread(ByVal dwThreadId As DWORD) As Boolean
             End If
         End If
     End If
-    Dim hThread As HANDLE = OpenThread(THREAD_TERMINATE,False,dwThreadId)
+    Dim hThread As HANDLE = NULL
+    If IsDriverLoaded Then
+        hThread = SnowSword_OpenThread(dwThreadId)
+    Else
+        hThread = OpenThread(THREAD_TERMINATE, False, dwThreadId)
+    End If
     If (hThread = 0) Then
         Print "打开线程失败,原因:" & WinErrorMsg(GetLastError),"提示"
         Goto Err1
@@ -1130,6 +1147,43 @@ Function ForceKillThread(ByVal dwThreadId As HANDLE) As Boolean
         Print "[ForceKillThread]:" & GetLastError
     End If
 End Function
+
+Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
+    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
+            AfxMsg "加载失败!"
+            Exit Sub
+        End If
+        hDrv = OpenDrv("\\.\\SnowSword")
+        If (hDrv <> INVALID_HANDLE_VALUE) Then
+            AfxMsg "加载成功!"
+            FrmMain.Check6.Value = True
+            IsDriverLoaded = True
+        Else
+            AfxMsg "加载失败!"
+            Exit Sub
+        End If
+    End If
+    Dim ret As Long, lpRet As DWORD, NewIndex As Long
+    /'If GetSystemVersion <> "Windows 11 23H2" Then
+        AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
+        Exit Sub
+    End If '/
+    InitListViewData lvwWorkItemThread
+    
+    Dim WorkItemThreadArray() As WORKER_THREAD_INFO
+    IoControl hDrv, IOCTL_EnumWorkItemThread, NULL, 0, NULL, 0, @lpRet
+    If GetLastError <> 0 Then
+        Print "[GetWorkItemThreadList]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+        Exit Sub
+    End If
+    ReDim WorkItemThreadArray(lpRet / SizeOf(WORKER_THREAD_INFO) - 1) As WORKER_THREAD_INFO
+    IoControl hDrv, IOCTL_EnumWorkItemThread, NULL, 0, @WorkItemThreadArray(0), (UBound(WorkItemThreadArray) + 1) * SizeOf(WORKER_THREAD_INFO), @lpRet
+    For i As Integer = 0 To UBound(WorkItemThreadArray)
+        AddItemColListEx lvwWorkItemThread, 6,,, WStr(WorkItemThreadArray(i).ThreadId), "0x" & WHex(WorkItemThreadArray(i).pEThread), WStr(WorkItemThreadArray(i).Priority), WStr(""), "0x" & WHex(WorkItemThreadArray(i).StartAddress), WStr(GetDriverPathByAddr(Cast(ULONG64, WorkItemThreadArray(i).StartAddress)))
+    Next
+    CommitListViewView lvwWorkItemThread
+End Sub
 
 /'Private Declare Function SymInitialize Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal szSearchPath As String, ByVal bInvadeProcess As Long) As Long
 Private Declare Function SymGetOptions Lib "dbghelp.dll" () As Long

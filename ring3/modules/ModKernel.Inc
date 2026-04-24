@@ -109,13 +109,14 @@ Private Type SYSTEM_MODULE_INFORMATION
 End Type
 
 Type DRIVER_INFO
-    DriverObjectAddr As Integer
+    DriverObjectAddr As UInteger
     AttachDevice As PVOID
-    DriverInitAddr As Integer
-    DriverStartIoAddr As Integer
-    FastIoDispatchAddr As Integer
-    DriverUnloadAddr As Integer
-    MajorFunctionAddr(IRP_MJ_MAXIMUM_FUNCTION) As Integer
+    DriverInitAddr As UInteger
+    DriverStartIoAddr As UInteger
+    FastIoDispatchAddr As UInteger
+    DriverUnloadAddr As UInteger
+    MajorFunctionAddr(IRP_MJ_MAXIMUM_FUNCTION) As UInteger
+    FastIOFunctionAddr(26) As UInteger
 End Type
 
 Type GDT_ITEM
@@ -288,21 +289,43 @@ Private Function GetDriverObjectAddr(ByVal DriverBaseAddr As PVOID) As Integer
     Return pDriverObject
 End Function
 
-Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverObject As Integer)
-    Dim pDriverObject As Integer = DriverObject, DriverInfo As DRIVER_INFO
+Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath As StringW, DriverObject As Integer)
+    Dim pDriverObject As Integer = DriverObject
+    Dim DriverInfo As DRIVER_INFO
+    Dim OriginalDriverInfo As DRIVER_INFO
     InitListViewData lvwIOFunction
     
-    If pDriverObject <> 0 Then
-        IoControl hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)
-        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr))
-        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverStartIo"), WStr("0x" & WHex(DriverInfo.DriverStartIoAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverStartIoAddr))
-        AddItemColListEx lvwIOFunction, 3,,, WStr("FastIoDispatch"), WStr("0x" & WHex(DriverInfo.FastIoDispatchAddr)), WStr(GetDriverPathByAddr(DriverInfo.FastIoDispatchAddr))
-        AddItemColListEx lvwIOFunction, 3,,, WStr("DriverUnload"), WStr("0x" & WHex(DriverInfo.DriverUnloadAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverUnloadAddr))
-        For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
-            'If i = &H20 Then Continue For ' 这里有什么用?
-            AddItemColListEx lvwIOFunction, 3,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i)))
+    IoControl hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)
+    GetOriginalDispatchFunctionAddr(DriverPath, OriginalDriverInfo)
+    AddItemColListEx lvwIOFunction, 5,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr)), _
+    WStr("-"), WStr("无")
+    AddItemColListEx lvwIOFunction, 5,,, WStr("DriverStartIo"), WStr("0x" & WHex(DriverInfo.DriverStartIoAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverStartIoAddr)), _
+    WStr("-"), WStr("无")
+    AddItemColListEx lvwIOFunction, 5,,, WStr("DriverUnload"), WStr("0x" & WHex(DriverInfo.DriverUnloadAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverUnloadAddr)), _
+    WStr("-"), WStr("无")
+    For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
+        'If i = &H20 Then Continue For ' 这里有什么用?
+        Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))), _
+        IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.MajorFunctionAddr(i))), _
+        IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.MajorFunctionAddr(i)))))
+        If (OriginalDriverInfo.MajorFunctionAddr(i) <> NULL) AndAlso (DriverInfo.MajorFunctionAddr(i) <> OriginalDriverInfo.MajorFunctionAddr(i)) Then
+            SetItemColor lvwIOFunction, ItemIndex, FB_Red, FB_White
+        End If
+    Next
+    
+    AddItemColListEx lvwIOFunction, 5,,, WStr("FastIoDispatch"), WStr("0x" & WHex(DriverInfo.FastIoDispatchAddr)), WStr(GetDriverPathByAddr(DriverInfo.FastIoDispatchAddr)), _
+    WStr("-"), WStr("无")
+    If DriverInfo.FastIoDispatchAddr <> NULL Then
+        For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
+            Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(FastIoIndexToName(i)), WStr("0x" & WHex(DriverInfo.FastIOFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.FastIOFunctionAddr(i))), _
+            IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.FastIOFunctionAddr(i))), _
+            IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.FastIOFunctionAddr(i)))))
+            If (OriginalDriverInfo.FastIOFunctionAddr(i) <> NULL) AndAlso (DriverInfo.FastIOFunctionAddr(i) <> OriginalDriverInfo.FastIOFunctionAddr(i)) Then
+                SetItemColor lvwIOFunction, ItemIndex, FB_Red, FB_White
+            End If
         Next
     End If
+        
     CommitListViewView lvwIOFunction
 End Sub
 
@@ -385,6 +408,7 @@ Public Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef Modul
 
     For i As Integer = 0 To smi->Count - 1
         If InStr(UCase(smi->Modules(i).ImageName), UCase(wStrToStr(ModuleName))) > 0 Then
+            'Print "smi->Modules(i).ImageName:" & smi->Modules(i).ImageName
             Function = smi->Modules(i).dwBase
             ModuleSize = smi->Modules(i).dwSize
             Exit For

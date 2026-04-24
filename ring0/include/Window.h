@@ -127,6 +127,8 @@ typedef struct _tagHOOK* PTAG_HOOK;
 #define EVENTHOOK_OFFSET_EVENTMIN      0x20  // DWORD  eventMin
 #define EVENTHOOK_OFFSET_EVENTMAX      0x24  // DWORD  eventMax
 #define EVENTHOOK_OFFSET_FLAGS         0x28  // DWORD  dwFlags
+#define EVENTHOOK_OFFSET_TARGET_PID    0x30  // DWORD  idProcess
+#define EVENTHOOK_OFFSET_TARGET_TID    0x34  // DWORD  idThread
 #define EVENTHOOK_OFFSET_PFN           0x40  // HMODULE hmodWinEventProc
 #define EVENTHOOK_OFFSET_HMOD          0x48  // PVOID   pfnWinEventProc
 
@@ -234,7 +236,7 @@ typedef struct _WIN32K_HOTKEY_INFO
 } WIN32K_HOTKEY_INFO, * PWIN32K_HOTKEY_INFO;
 
 // 统一的定时器条目结构（Win10/Win11通用布局）
-typedef struct _TIMER_ENTRY {
+typedef struct _TIMER_ENTRY_WIN10 {
     // 0x00-0x17: 保留字段
     //UCHAR Reserved1[0x18];
 
@@ -275,6 +277,28 @@ typedef struct _TIMER_ENTRY {
 
     // 0x70: 哈希表链表 (gTimerHashTable)
     LIST_ENTRY HashListEntry;
+} TIMER_ENTRY_WIN10, * PTIMER_ENTRY_WIN10;
+
+typedef struct _TIMER_ENTRY_WIN11 {
+    UCHAR Reserved1[0x18];        // 0x00-0x17: 保留
+    PVOID threadInfo;              // 0x18: tagTHREADINFO*
+    WNDPROC pfn;                   // 0x20: 回调函数
+    ULONG nTimeout;                // 0x28: 超时时间
+    ULONG Reserved2;               // 0x2C
+    ULONG flags;                   // 0x30: 标志位 (0x1000=待删除)
+    ULONG nTimeout2;               // 0x34: 超时时间副本
+    UCHAR Reserved3[0x10];         // 0x38-0x47
+    LIST_ENTRY TmrListEntry;       // 0x48-0x57: 全局链表
+    PVOID windowPtr;                // 0x58: tagWND*
+    UCHAR Reserved4[0x10];         // 0x60-0x6F
+    ULONG64 nIDEvent;               // 0x70: 定时器ID
+    LIST_ENTRY HashListEntry;       // 0x78-0x87: 哈希表链表 (修正偏移！)
+} TIMER_ENTRY_WIN11, * PTIMER_ENTRY_WIN11;
+
+// 联合体：同时容纳 Win10/Win11 结构体
+typedef union _TIMER_ENTRY {
+    PTIMER_ENTRY_WIN10 Win10;
+    PTIMER_ENTRY_WIN11 Win11;
 } TIMER_ENTRY, * PTIMER_ENTRY;
 
 typedef struct _PEB_LDR_DATA {
@@ -337,11 +361,12 @@ typedef struct _WINDOW_TIMER {
     ULONG nTimeout;            // 超时时间(ms)
     ULONG64 nIDEvent;         // 定时器ID
 	HANDLE ThreadId;           // 线程ID
+    HANDLE ProcessId;          // 进程ID
+    PVOID hWnd;                // 所属窗口
     ULONG_PTR param;          // 回调参数
 } WINDOW_TIMER, * PWINDOW_TIMER;
 
 NTSTATUS EnumProcessTimers(
-    _In_ HANDLE ProcessId,
     _Out_ PWINDOW_TIMER* pArray,
     _Out_ PULONG pCount
 );

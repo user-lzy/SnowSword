@@ -208,6 +208,24 @@ Left=660
 Top=70
 Tag=
 
+[PopupMenu]
+Name=mnuIOFunction
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuIOFunction_mnuRefresh0-10
+Left=490
+Top=360
+Tag=
+
+[PopupMenu]
+Name=mnuProcessTimer
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuProcessTimer_mnuRefresh0-10-FrmListView_mnuProcessTimer_mnuStep10-10移除FrmListView_mnuProcessTimer_mnuRemove0-10-FrmListView_mnuProcessTimer_mnuStep20-10显示全部FrmListView_mnuProcessTimer_mnuViewAll0-10
+Left=600
+Top=360
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -280,8 +298,9 @@ Dim Shared CurrentPID As DWORD
 Dim Shared CurrentProcessName As StringW
 Dim Shared prevFrmListViewProc As LONG_PTR = NULL
 
-Dim Shared LastClickedItem As Long = -1      ' 最后点击的行
-Dim Shared LastClickedSubItem As Long = 0   ' 最后点击的列
+Dim Shared LastClickedItem As Long = -1 ' 最后点击的行
+Dim Shared LastSelectItem As MC_HTREELISTITEM = NULL ' 最后选择的TreeList行
+Dim Shared LastClickedSubItem As Long = -1   ' 最后点击的列
 
 Const MIN_WIDTH = 350
 Const MIN_HEIGHT = 500
@@ -409,6 +428,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
     CurrentInformation.hListView = Me.hWnd
     CurrentInformation.intType = UserData
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP)
     UninitListViewData ListView
     Me.hWndForm = hWndForm 'ListView.hWndForm = hWndForm
     CurrentPID = CurrentInformation.ProcessId
@@ -427,7 +447,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
         Case Windows
             GetWindowList CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
-        Case WindowTimer
+        Case ProcessTimer
             GetProcessTimerList CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
         Case Handles
@@ -464,7 +484,9 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             Unlock_File ListView', FilePathByUnlock
             Me.Caption = "文件占用查看小工具"
         Case IOFunction
-            If CurrentInformation.CurrentDriver.DriverObject <> 0 Then GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverObject
+            If CurrentInformation.CurrentDriver.DriverObject <> 0 Then
+                GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverPath, CurrentInformation.CurrentDriver.DriverObject
+            End If
             Me.Caption = "[" & CurrentInformation.CurrentDriver.DriverName & "]"
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
@@ -498,6 +520,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case Handles
             mnuHandle.hWndForm = hWndForm
             PopupMenu hWndForm, mnuHandle.HMENU
+        Case ProcessTimer
+            mnuProcessTimer.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuProcessTimer.HMENU
         Case MsgHook
             mnuWindow.hWndForm = hWndForm
             PopupMenu hWndForm, mnuMsgHook.HMENU
@@ -908,6 +933,7 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
     Case WM_NOTIFY
         Dim Nmhdr As NMHDR Ptr = Cast(NMHDR Ptr, lParam)
         If Nmhdr->hwndFrom = ListView.hWnd Then
+            
             Select Case Nmhdr->code
             Case LVN_GETDISPINFO
                 Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
@@ -942,32 +968,43 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
                     Cast(ListViewContext Ptr, GetWindowLongPtr(cd->nmcd.hdr.hwndFrom, GWLP_USERDATA))
 
                 Select Case cd->nmcd.dwDrawStage
-
-                Case CDDS_PREPAINT
-                    ' 告诉系统：我要接管 Item 绘制
-                    Return CDRF_NOTIFYITEMDRAW
-
-                Case CDDS_ITEMPREPAINT
-                    ' 告诉系统：我还要管子项
-                    Return CDRF_NOTIFYSUBITEMDRAW
-
-                Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
-                    Dim real As Long = ctx->VisibleIndex(cd->nmcd.dwItemSpec)
-                    Dim r As LVRow Ptr = ctx->Snap->Rows(real)
-
-                    cd->clrText   = r->Fore
-                    cd->clrTextBk = r->Back
-
-                    Return CDRF_DODEFAULT
-
+                    Case CDDS_PREPAINT
+                        ' 告诉系统：我要接管 Item 绘制
+                        Return CDRF_NOTIFYITEMDRAW
+                    Case CDDS_ITEMPREPAINT
+                        ' 告诉系统：我还要管子项
+                        Return CDRF_NOTIFYSUBITEMDRAW
+                    Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
+                        Dim real As Long = ctx->VisibleIndex(cd->nmcd.dwItemSpec)
+                        Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+                        cd->clrText   = r->Fore
+                        cd->clrTextBk = r->Back
+                        Return CDRF_DODEFAULT
                 End Select
 
-
             End Select
+        
+        End If
+    Case WM_SignVerify
+        Dim pMsg As SIGNVERIFY_MSG Ptr = Cast(SIGNVERIFY_MSG Ptr, lParam)
+        If pMsg <> 0 Then
+            If pMsg->ctrlType = "ListView" Then
+                ' 更新 ListView 的颜色
+                'Print "开始更新 ListView 的颜色..."
+                SetItemColor ListView, pMsg->rowIndex, pMsg->ForeColor, pMsg->BackColor
+                'ListView.Refresh
+                Deallocate pMsg
+            End If
+        End If
+        
+        ' 延迟刷新
+        Static LastRefresh As ULong = 0
+        If GetTickCount() - LastRefresh > 50 Then
+            ListView.Refresh
+            LastRefresh = GetTickCount()
         End If
     End Select
     Return False
-    'Return CallWindowProc(Cast(WndProc, prevFrmListViewProc), hWndForm, wMsg, wParam, lParam)
 End Function
 
 '[FrmListView.mnuPrivilege]事件 : 点击了菜单项
@@ -976,8 +1013,10 @@ End Function
 'wID      菜单项命令ID
 Sub FrmListView_mnuPrivilege_WM_Command(hWndForm As hWnd,wID As ULong)
    Select Case wID
-      Case FrmListView_mnuPrivilege_mnuRefresh ' 刷新
-
+        Case FrmListView_mnuPrivilege_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetProcessPrivilegeList CurrentPID, ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
    End Select
 End Sub
 
@@ -1009,11 +1048,13 @@ End Sub
 Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd,wID As ULong)
    Select Case wID
         Case FrmListView_mnuMsgHook_mnuRefresh ' 刷新
+           lblNum.Caption = "正在刷新..."
             If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
                 GetMsgHookList -1, ListView
             Else
                 GetMsgHookList CurrentPID, ListView
             End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuMsgHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
             If UnhookWindowsHookEx(hHook) <> 0 Then
@@ -1051,11 +1092,13 @@ End Sub
 Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd,wID As ULong)
    Select Case wID
         Case FrmListView_mnuEventHook_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
             If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
                 GetEventHookList -1, ListView
             Else
                 GetEventHookList CurrentPID, ListView
             End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuEventHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
             If UnhookWinEvent(hHook) <> 0 Then
@@ -1091,11 +1134,13 @@ End Sub
 Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
    Select Case wID
         Case FrmListView_mnuHotkey_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
             If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
                 GetHotkeyList -1, ListView
             Else
                 GetHotkeyList CurrentPID, ListView
             End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuRemove ' 移除
             Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
             Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
@@ -1185,6 +1230,55 @@ Sub FrmListView_ListView_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd, M
         LastClickedSubItem = lvinfo.iSubItem
     End If
 End Sub
+
+'[FrmListView.mnuIOFunction]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuIOFunction_WM_Command(hWndForm As hWnd, wID As ULong)
+    Select Case wID
+        Case FrmListView_mnuIOFunction_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverPath, CurrentInformation.CurrentDriver.DriverObject
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+   End Select
+End Sub
+
+'[FrmListView.mnuProcessTimer]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
+    Select Case wID
+        Case FrmListView_mnuProcessTimer_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
+                GetProcessTimerList -1, ListView
+            Else
+                GetProcessTimerList CurrentPID, ListView
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
+            Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
+            Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
+            If KillTimer(hWnd, uIDEvent) <> 0 Then
+                AfxMsg "移除成功!"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "移除失败!"
+            End If
+        Case FrmListView_mnuProcessTimer_mnuViewAll ' 显示全部
+            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
+                GetProcessTimerList CurrentPID, ListView
+                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, False
+            Else
+                GetProcessTimerList -1, ListView
+                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, True
+            End If
+    End Select
+End Sub
+
+
 
 
 

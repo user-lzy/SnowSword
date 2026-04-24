@@ -147,8 +147,9 @@ Private Sub AddMemoryBlockDirectly(ByRef lvwMemory As Class_ListView, ByVal dwPr
     Dim szModuleName As WString * MAX_PATH = ""
     If mbi.Type = MEM_IMAGE Then GetModuleByAddress dwProcessId, mbi.BaseAddress, @szModuleName
     
-    AddItemColListEx lvwMemory, 7,,, "0x" & WHex(mbi.BaseAddress), "0x" & WHex(mbi.RegionSize), WStr(GetProtectString(actualProtect)), _
-    WStr(GetStateString(mbi.State)), WStr(GetTypeString(mbi.Type)), "0x" & WHex(mbi.AllocationBase), szModuleName
+    Dim ItemIndex As Long = AddItemColListEx(lvwMemory, 7,,, "0x" & WHex(mbi.BaseAddress), "0x" & WHex(mbi.RegionSize), WStr(GetProtectString(actualProtect)), _
+    WStr(GetStateString(mbi.State)), WStr(GetTypeString(mbi.Type)), "0x" & WHex(mbi.AllocationBase), szModuleName)
+    'VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, szModuleName
 End Sub
 
 ' 如果需要合并功能，使用这个版本（更安全的合并逻辑）
@@ -311,22 +312,25 @@ Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
             FF_DoEvents
         End If
     Next
-    Print "扫描起始地址0x" & p->StartAddr & "的线程退出"
+    Print "扫描起始地址0x" & WHex(p->StartAddr) & "的线程退出"
     p->bFinish = True
 End Sub
 
 ' 主函数中的多线程扫描实现
 Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
+    Exit Sub
     Dim threads(NUM_THREADS - 1) As Any Ptr
-    Dim params(NUM_THREADS - 1) As ScanThreadParam
+    ' 循环内为每个线程单独分配堆内存（核心修复）
+    Dim pParam As ScanThreadParam Ptr
     Dim hMutex As Any Ptr
     Dim totalPages As UInteger
     Dim scannedPages As UInteger = 0
     Dim suspectCount As Integer = 0
     Dim i As Integer
     
-    Dim StartAddr As UInteger = &HFFFFF80300000000ULL
-    Dim EndAddr As UInteger = &HFFFFF90000000000ULL ' &HFFFFF80387840000
+    Dim ModuleSize As ULong
+    Dim EndAddr As UInteger = Cast(UInteger, GetKernelModuleBase("ntoskrnl.exe", ModuleSize)) '&HFFFFF90000000000ULL
+    Dim StartAddr As UInteger = EndAddr - &H70000000 ' &HFFFFF80300000000ULL
     
     Dim result As MEMORY_SCAN_RESULT
     If AfxMsg("是否扫描?",, MB_YESNO) = IDNO Then Exit Sub
@@ -361,33 +365,35 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     FrmMain.lblNum.Caption = "进度: 0%"
     FF_DoEvents
     
+    pParam = CAllocate(Len(ScanThreadParam) * NUM_THREADS)  ' 堆内存，生命周期跨线程，不会失效
+    
     ' 创建并启动线程
     For i = 0 To NUM_THREADS - 1
         ' 计算每个线程的地址范围（确保地址对齐）
         Dim addrRange As UInteger = (EndAddr - StartAddr) \ NUM_THREADS
-        params(i).StartAddr = StartAddr + i * addrRange
-        Print "为线程" & i & "分配扫描地址0x" & Hex(params(i).StartAddr) & "的任务"
+        pParam[i].StartAddr = StartAddr + i * addrRange
+        Print "为线程" & i & "分配扫描地址0x" & Hex(pParam[i].StartAddr) & "的任务"
         ' 最后一个线程处理剩余所有范围
         If i = NUM_THREADS - 1 Then
-            params(i).EndAddr = EndAddr
+            pParam[i].EndAddr = EndAddr
         Else
-            params(i).EndAddr = params(i).StartAddr + addrRange - 1
+            pParam[i].EndAddr = pParam[i].StartAddr + addrRange - 1
         End If
         
-        params(i).lvwSuspectKernelMemory = lvwSuspectKernelMemory
+        pParam[i].lvwSuspectKernelMemory = lvwSuspectKernelMemory
         
         ' 确保地址是PAGE_SIZE对齐
-        params(i).StartAddr = (params(i).StartAddr \ PAGE_SIZE) * PAGE_SIZE
-        params(i).EndAddr = ((params(i).EndAddr + PAGE_SIZE - 1) \ PAGE_SIZE) * PAGE_SIZE
+        pParam[i].StartAddr = (pParam[i].StartAddr \ PAGE_SIZE) * PAGE_SIZE
+        pParam[i].EndAddr = ((pParam[i].EndAddr + PAGE_SIZE - 1) \ PAGE_SIZE) * PAGE_SIZE
         
         ' 设置同步参数
-        params(i).hMutex = hMutex
-        params(i).scannedPages = @scannedPages
-        params(i).suspectCount = @suspectCount
-        params(i).bFinish = False
+        pParam[i].hMutex = hMutex
+        pParam[i].scannedPages = @scannedPages
+        pParam[i].suspectCount = @suspectCount
+        pParam[i].bFinish = False
         
         ' 创建线程
-        threads(i) = ThreadCreate(@KernelMemoryScanThread, @params(i))
+        threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
         If threads(i) = 0 Then
             AfxMsg "线程 " & i & " 创建失败"
         End If
@@ -403,7 +409,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
         Dim activeThreadCount As Integer = NUM_THREADS
         'Print "activeThreadCount:" & activeThreadCount
         For i As Integer = 0 To NUM_THREADS - 1
-            If params(i).bFinish = True Then activeThreadCount -= 1
+            If pParam[i].bFinish = True Then activeThreadCount -= 1
         Next
         If activeThreadCount = 0 Then
             Print "线程已全部退出!"
@@ -428,6 +434,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     
     ' 清理
     MutexDestroy(hMutex)
+    Deallocate(pParam)
     
     ' 扫描完成
     AfxMsg "扫描完成，发现 " & suspectCount & " 处可疑内存"

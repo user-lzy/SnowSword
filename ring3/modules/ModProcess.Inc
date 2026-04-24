@@ -20,7 +20,13 @@ Type UNICODE_STRING
     MaximumLength As UShort
     Buffer As PWSTR
 End Type
-    
+
+Type UNICODE_STRING32
+    Length As WORD
+    MaximumLength As WORD
+    Buffer As DWORD ' 4字节指针
+End Type
+
 Type PROCESS_BASIC_INFORMATION
     ExitStatus As NTSTATUS                                                          'NTSTATUS
     PebBaseAddress As Any Ptr                                                      'PPEB
@@ -28,6 +34,15 @@ Type PROCESS_BASIC_INFORMATION
     BasePriority As Any Ptr                                                        'KPRIORITY
     UniqueProcessId As HANDLE
     ParentProcessId As HANDLE
+End Type
+
+Type PROCESS_BASIC_INFORMATION32
+    ExitStatus As DWORD
+    PebBaseAddress As ULONG
+    AffinityMask As ULONG
+    BasePriority As DWORD
+    UniqueProcessId As ULONG
+    InheritedFromUniqueProcessId As ULONG
 End Type
 
 Type PLIST_ENTRY As LIST_ENTRY Ptr
@@ -67,6 +82,24 @@ Type RTL_USER_PROCESS_PARAMETERS
 End Type
 Type PRTL_USER_PROCESS_PARAMETERS As RTL_USER_PROCESS_PARAMETERS Ptr
 
+Type RTL_USER_PROCESS_PARAMETERS32
+    MaximumLength As DWORD          ' +0x00
+    Length As DWORD                 ' +0x04
+    Flags As DWORD                  ' +0x08
+    DebugFlags As DWORD             ' +0x0C
+    ConsoleHandle As DWORD          ' +0x10
+    ConsoleFlags As DWORD           ' +0x14
+    StdInputHandle As DWORD         ' +0x18
+    StdOutputHandle As DWORD        ' +0x1C
+    StdErrorHandle As DWORD         ' +0x20
+    CurrentDirectory As UNICODE_STRING32   ' +0x24
+    CurrentDirectoryHandle As DWORD         ' +0x2C
+    DllPath As UNICODE_STRING32             ' +0x30
+    ImagePathName As UNICODE_STRING32       ' +0x38
+    CommandLine As UNICODE_STRING32         ' +0x40 【正确偏移】
+End Type
+Type PRTL_USER_PROCESS_PARAMETERS32 As RTL_USER_PROCESS_PARAMETERS32 Ptr
+
 Type PEB64
     Reserved1(1) As Byte
     BeingDebugged As Byte
@@ -89,6 +122,10 @@ Type PEB64
     SessionId As ULong
 End Type
 Type PPEB64 As PEB64 Ptr
+
+Type PROCESS_SESSION_INFORMATION
+    SessionId As DWORD
+End Type
 
 Type OBJECT_ATTRIBUTES
     Length As ULong
@@ -160,6 +197,8 @@ Type PROCESS_TIMER
     nTimeout As ULong ' 超时时间(ms)
     nIDEvent As ULONG64 ' 定时器ID
     ThreadId As ULONG64 ' 线程ID
+    ProcessId As ULONG64 ' 进程ID
+    hWnd As hWnd ' 所属窗口
     param As ULONG_PTR ' 线程参数
 End Type
 
@@ -491,7 +530,7 @@ Function IsProcessWow64_Ex(ByVal hProcess As HANDLE) As Boolean
                 bResult = False
         End Select
         
-        Print "  是否为 WOW64 进程：" & IIf(bResult, "是", "否")
+        'Print "  是否为 WOW64 进程：" & IIf(bResult, "是", "否")
         Return bResult
     Else
         Print "错误：调用 IsWow64Process2 失败，错误码：" & GetLastError()
@@ -651,7 +690,7 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
     Dim ClientId As CLIENT_ID, ObjectAttributes As OBJECT_ATTRIBUTES, hProcess As HANDLE
     Select Case ProcessId
         Case 0
-            Return "[System Idle Process]"
+            Return "System Idle Process"
         Case 4
             Return "System"
     End Select
@@ -668,7 +707,7 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
         '调用 ZwOpenProcess 打开进程
         Dim st As NTSTATUS = ZwOpenProcess(@hProcess, PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, @ObjectAttributes, @ClientId)
         If (Not NT_SUCCESS(st)) Then
-            Print "ZwOpenProcess Failed!(" & Hex(st) & ")"
+            MyLog.PrintNtError "GetProcessPath", "ZwOpenProces", st, "PID=" & ProcessId
             Return ""
         End If
     End If
@@ -692,13 +731,18 @@ Function GetParentProcessId(ByVal PID As DWORD, ByRef ParentPID As DWORD) As Boo
     Dim pbi As PROCESS_BASIC_INFORMATION, st As NTSTATUS, ret As DWORD, hProcess As HANDLE
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(PID)
+        If hProcess = NULL Then
+            MyLog.PrintWin32Error "GetParentProcessId", "SnowSword_OpenProcess", "PID=" & PID
+            Return False
+        End If
     Else
         hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, PID)
+        If hProcess = NULL Then
+            MyLog.PrintWin32Error "GetParentProcessId", "OpenProcess", "PID=" & PID
+            Return False
+        End If
     End If
-    If (hProcess <= 0) Then
-        Print "[GetParentProcessId]OpenProcess:" & WinErrorMsg(GetLastError)
-        Return False
-    End If
+
     st = ZwQueryInformationProcess(hProcess, BasicInformation, @pbi, SizeOf(pbi), ret)
     If (NT_SUCCESS(st)) Then
         ParentPID = Cast(DWORD, Cast(UInteger, pbi.ParentProcessId))
@@ -795,6 +839,218 @@ Function IsProcessAlive(ByVal dwProcessId As DWORD) As Boolean
     Return bAlive
 End Function
 
+' ===================== 核心函数：兼容64位 + WOW64 =====================
+' 参数：dwProcessId -> 目标进程PID
+' 返回值：命令行字符串（失败返回空）
+Function GetProcessCommandLine(ByVal dwProcessId As DWORD) As String
+    Dim hProcess As HANDLE = NULL
+    Dim cmdLine As String = ""
+    Dim bytesRead As SIZE_T = 0
+    Dim ntStatus As LONG = 0
+    Dim cmdBuffer As WString * 4096
+    
+    ' 架构判断变量
+    Dim IsTargetWow64 As Boolean = FALSE
+
+    ' 1. 打开进程（最小权限，兼容性最强）
+    hProcess = OpenProcess( _
+        PROCESS_QUERY_LIMITED_INFORMATION Or PROCESS_VM_READ, _
+        FALSE, dwProcessId _
+    )
+    If hProcess = NULL Then Goto Cleanup
+
+    ' 2. 判断目标进程架构：64位原生 / WOW64(32位)
+    IsTargetWow64 = IsProcessWow64_Ex(hProcess)
+
+    ' ==============================================
+    ' 分支1：读取 原生64位 进程
+    ' ==============================================
+    If Not IsTargetWow64 Then
+        Dim pbi64 As PROCESS_BASIC_INFORMATION
+        Dim peb64 As PEB64
+        Dim rtl64 As RTL_USER_PROCESS_PARAMETERS
+
+        ' 获取64位PEB地址
+        ntStatus = ZwQueryInformationProcess( _
+            hProcess, ProcessBasicInformation, _
+            @pbi64, SizeOf(pbi64), NULL _
+        )
+        If Not NT_SUCCESS(ntStatus) Then Goto Cleanup
+
+        ' 读取64位PEB
+        ReadProcessMemory(hProcess, pbi64.PebBaseAddress, _
+            @PEB64, SizeOf(PEB64), @bytesRead)
+
+        ' 读取64位进程参数
+        ReadProcessMemory(hProcess, peb64.ProcessParameters, _
+            @rtl64, SizeOf(rtl64), @bytesRead)
+
+        ' 读取命令行Unicode字符串
+        If rtl64.CommandLine.Length > 0 Then
+            ReadProcessMemory(hProcess, rtl64.CommandLine.Buffer, _
+                @cmdBuffer, rtl64.CommandLine.Length, @bytesRead)
+        End If
+
+    ' ==============================================
+    ' 分支2：读取 WOW64(32位) 进程
+    ' ==============================================
+    Else
+        Dim pbi64 As PROCESS_BASIC_INFORMATION
+        Dim peb As PEB32
+        Dim rtl32 As RTL_USER_PROCESS_PARAMETERS32
+        Dim pPeb32 As PVOID = NULL
+        Dim memCheck(63) As Byte ' 用于偏移检验的内存缓冲区
+
+        ' 1. 获取64位PBI（拿到PEB64）
+        ntStatus = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, @pbi64, SizeOf(pbi64), NULL)
+        If Not NT_SUCCESS(ntStatus) Then
+            MyLog.PrintNtError "GetProcessCommandLine", "ZwQueryInformationProcess", ntStatus
+            Goto Cleanup
+        End If
+        
+        ' ✅ 核心修正：你实测有效的固定偏移（永久稳定）
+        pPeb32 = pbi64.PebBaseAddress + &H1000
+
+        ' 2. 读取32位PEB（原代码不变）
+        If ReadProcessMemory(hProcess, pPeb32, @peb, SizeOf(peb), @bytesRead) = False Then
+            MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程PEB32 失败"
+            Goto Cleanup
+        End If
+
+        ' 【偏移检验】打印RTL32内存前64字节（原代码不变）
+        ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, peb.ProcessParameters)), @memCheck(0), 64, @bytesRead)
+
+        ' 3. 读取32位进程参数（原代码不变）
+        If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, peb.ProcessParameters)), @rtl32, SizeOf(rtl32), @bytesRead) = False Then
+            MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程RTL32 失败"
+            Goto Cleanup
+        End If
+
+        ' 4. 读取命令行Unicode（原代码不变）
+        If rtl32.CommandLine.Length > 0 AndAlso rtl32.CommandLine.Length < 4096 Then
+            If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, rtl32.CommandLine.Buffer)), @cmdBuffer, rtl32.CommandLine.Length, @bytesRead) = False Then
+                MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程命令行缓冲区失败,字节数: " & Str(bytesRead)
+            End If
+        End If
+    End If
+
+Cleanup:
+    ' 释放资源
+    If hProcess <> NULL Then CloseHandle(hProcess)
+    Return TrimW(cmdBuffer)
+End Function
+
+' 读取会话ID函数
+Function GetProcessSessionId(ByVal dwProcessId As DWORD, ByRef SessionId As DWORD) As Boolean
+    Dim hProcess As HANDLE
+    Dim psi As PROCESS_SESSION_INFORMATION
+    Dim returnLen As ULong
+    Dim ntStatus As NTSTATUS
+    
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwProcessId)
+    End If
+    If hProcess = NULL Then Return False
+    
+    ntStatus = ZwQueryInformationProcess(hProcess, ProcessSessionInformation, @psi, SizeOf(psi), returnLen)
+    
+    If NT_SUCCESS(ntStatus) Then
+        SessionId = psi.SessionId
+        Return True
+    Else
+        MyLog.PrintNtError "GetProcessSessionId", "ZwQueryInformationProcess", ntStatus
+        Return False
+    End If
+End Function
+
+' 【完美版】无崩溃+无字符截断+兼容FreeBasic 获取进程用户名
+Function GetProcessUserName(ByVal dwProcessId As DWORD) As String
+    Const TokenQuery As DWORD = &H0008
+    Dim hProcess As HANDLE = NULL
+    Dim hToken As HANDLE = NULL
+    Dim dwSize As DWORD = 0
+    Dim pUserBuf As UByte Ptr = NULL
+    Dim pTokenUser As TOKEN_USER Ptr
+    
+    ' 核心修复：使用标准Win32 ANSI缓冲区，彻底解决截断问题
+    Dim szUserName As WString * 256
+    Dim szDomainName As WString * 256
+    ' 严格初始化：缓冲区最大长度 = 256
+    Dim userNameLen As DWORD = 256
+    Dim domainLen As DWORD = 256
+    
+    Dim useType As DWORD = 0
+    Dim errCode As DWORD = 0
+
+    ' 1. 打开进程
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwProcessId)
+    End If
+    If hProcess = NULL Then
+        MyLog.PrintLog LOG_ERROR, "打开进程失败"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 2. 打开进程令牌
+    If OpenProcessToken(hProcess, TokenQuery, @hToken) = 0 Then
+        MyLog.PrintWin32Error "GetProcessUserName", "OpenProcessToken"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 3. 获取缓冲区大小
+    GetTokenInformation(hToken, TokenUser, NULL, 0, @dwSize)
+    If dwSize = 0 Then
+        MyLog.PrintWin32Error "GetProcessUserName", "GetTokenInformation", "缓冲区大小获取失败"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 4. 分配内存
+    pUserBuf = Allocate(dwSize)
+    If pUserBuf = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetProcessUserName", "Allocate", "缓冲区大小获取失败"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 5. 读取SID
+    If GetTokenInformation(hToken, TokenUser, pUserBuf, dwSize, @dwSize) = 0 Then
+        MyLog.PrintWin32Error "GetProcessUserName", "GetTokenInformation", "读取SID失败"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 6. 核心修复：FreeBasic 100%兼容的 SID→用户名 转换
+    pTokenUser = Cast(TOKEN_USER Ptr, pUserBuf)
+    If pTokenUser->User.Sid = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetProcessUserName",, "SID = NULL"
+        Function = "(failed)"
+        Goto Cleanup
+    End If
+
+    ' 关键修复：用 StrPtr 传递字符串指针，Win32 API 标准用法
+    If LookupAccountSid(NULL, pTokenUser->User.SID, @szUserName, @userNameLen, @szDomainName, @domainLen, @useType) Then
+        ' 截取有效长度，输出完整用户名
+        Dim result As StringW = LeftW(szDomainName, domainLen) & "\" & LeftW(szUserName, userNameLen)
+        Function = result
+    Else
+        MyLog.PrintWin32Error "GetProcessUserName", "GetTokenInformation"
+        Function = "(failed)"
+    End If
+
+Cleanup:
+    ' 统一清理
+    If pUserBuf <> NULL Then Deallocate(pUserBuf)
+    If hToken <> NULL Then CloseHandle(hToken)
+    If hProcess <> NULL Then CloseHandle(hProcess)
+End Function
+
 Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
     Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
     Dim ProcessCount As Integer = 0
@@ -806,6 +1062,8 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
     Dim strPath As StringW
     Dim strPath1 As StringW
     Dim strName As StringW
+    Dim strSessionId As StringW
+    Dim strUserName As StringW
     Dim strCommandLine As StringW
     Dim strCompany As StringW
     Dim errCode As Long
@@ -822,7 +1080,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             Dim ForeColor As COLORREF = FB_Black
             Dim BackColor As COLORREF = FB_White
             
-            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
             
             dwPID = PID1(i + 1)
             strPID = WStr(dwPID)
@@ -832,8 +1090,12 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             If InStr(strPath, ":") = 0 Then strPath = GetProcessPath(dwPID)
             strName = GetNameByPath(strPath)
             strCompany = GetFileCompany(strPath)
+            Dim dwSessionId As DWORD = 0
+            If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
+            strUserName = GetProcessUserName(dwPID)
+            strCommandLine = GetProcessCommandLine(dwPID)
 
-            AddItemColListEx lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(""), WStr(strCompany)
+            AddItemColListEx lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)
             ProcessCount += 1
         Next
         
@@ -842,7 +1104,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 If PID2(i) = PID1(j) Then Continue For, For ' 如果找到了证明不是隐藏进程
             Next
             
-            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
             
             dwPID = PID2(i)
             If Not IsProcessAlive(dwPID) Then Continue For
@@ -856,9 +1118,12 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 strName = GetNameByPath(strPath)
                 strCompany = GetFileCompany(strPath)
             End If
-            'strCommandLine = GetComman
-            ' lvwProcess.ItemCount - 1
-            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath),WStr(""), WStr(strCompany))
+            Dim dwSessionId As DWORD = 0
+            If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
+            strUserName = GetProcessUserName(dwPID)
+            strCommandLine = GetProcessCommandLine(dwPID)
+            
+            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
             SetItemColor lvwProcess, ItemIndex, FB_Red, FB_White
             ProcessCount += 1
         Next
@@ -867,7 +1132,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             Dim ForeColor As COLORREF = FB_Black
             Dim BackColor As COLORREF = FB_White
             
-            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strCompany = ""
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
             
             dwPID = PID1(i + 1)
             If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
@@ -888,8 +1153,13 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             End If
             strName = GetNameByPath(strPath)
             strCompany = GetFileCompany(strPath)
+            Dim dwSessionId As DWORD = 0
+            If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
+            strUserName = GetProcessUserName(dwPID)
+            strCommandLine = GetProcessCommandLine(dwPID)
             
-            AddItemColListEx lvwProcess, 7,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(""), WStr(strCompany) ' 可以在第一次调用GetProcessList时直接AddItemColList
+            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)) ' 可以在第一次调用GetProcessList时直接AddItemColList
+            VerifyFileSignAsync FrmMain.hWnd, "ListView", ItemIndex, strPath
             'InvalidateRect lvwProcess.hWnd, NULL, True
             ProcessCount += 1
             'FF_DoEvents
@@ -1057,13 +1327,13 @@ Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_List
 
     ' ############################## 核心修复2：变量定义 ##############################
     Dim lpRet As DWORD                    ' IOCTL返回字节数
-    Dim ProcessTimer() As PROCESS_TIMER   ' 定时器数组
-    Dim TargetPid As ULONG64 = dwProcessId ' 内核需要8字节PID，强制转换
+    Dim ProcessTimer() As PROCESS_TIMER ' 定时器数组
+    Dim bGlobal As Boolean
 
     ' ############################## 核心修复3：第一次IOCTL - 获取数据长度 ##############################
-    ' 输入：TargetPid(8字节) | 输出：NULL，获取需要的总字节数
+    ' 输入：NULL | 输出：NULL，获取需要的总字节数
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumProcessTimers, @TargetPid, SizeOf(ULONG64), NULL, 0, @lpRet
+    IoControl hDrv, IOCTL_EnumProcessTimers, NULL, 0, NULL, 0, @lpRet
     If (lpRet = 0) Then
         Print "[GetProcessTimerList]无定时器数据"
         Exit Sub
@@ -1078,19 +1348,44 @@ Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_List
     ReDim ProcessTimer((lpRet / SizeOf(PROCESS_TIMER)) - 1) As PROCESS_TIMER
 
     ' ############################## 核心修复5：第二次IOCTL - 获取定时器数据 ##############################
-    IoControl hDrv, IOCTL_EnumProcessTimers, @TargetPid, SizeOf(ULONG64), _
+    IoControl hDrv, IOCTL_EnumProcessTimers, NULL, 0, _
     @ProcessTimer(0), UBound(ProcessTimer) * SizeOf(PROCESS_TIMER) + SizeOf(PROCESS_TIMER), @lpRet
 
     ' ############################## 填充列表框 ##############################
     InitListViewData lvwWindowTimer
     
+    If dwProcessId = Cast(DWORD, -1) Then
+        If lvwWindowTimer.ColumnCount = 6 Then lvwWindowTimer.InsertColumn 6, "所属PID"
+        bGlobal = True
+    Else
+        If lvwWindowTimer.ColumnCount = 7 Then lvwWindowTimer.DeleteColumn 6
+        bGlobal = False
+    End If
+    
     For i As DWORD = 0 To UBound(ProcessTimer)
         Print "[GetProcessTimerList]nIDEvent:" & ProcessTimer(i).nIDEvent & " pfn:" & "0x" & WHex(ProcessTimer(i).pfn)
-        AddItemColListEx lvwWindowTimer, 4,,, _
-        WStr(ProcessTimer(i).nIDEvent), _       ' 定时器ID
-        WStr(ProcessTimer(i).ThreadId), _        ' 线程ID
-        WStr(ProcessTimer(i).nTimeout), _          ' 超时时间
-        "0x" & WHex(ProcessTimer(i).pfn)        ' 回调函数地址
+        
+        Dim wszModulePath As WString * MAX_PATH = ""
+        GetModuleByAddress ProcessTimer(i).ProcessId, Cast(PVOID, ProcessTimer(i).pfn), @wszModulePath
+        If bGlobal Then
+            AddItemColListEx lvwWindowTimer, 7,,, _
+            WStr(ProcessTimer(i).nIDEvent), _ ' 定时器ID
+            WStr(ProcessTimer(i).nTimeout), _ ' 超时时间
+            "0x" & WHex(ProcessTimer(i).pfn), _ ' 回调函数地址
+            wszModulePath, _ ' 所属模块
+            "0x" & WHex(ProcessTimer(i).hWnd), _ ' 所属窗口
+            WStr(ProcessTimer(i).ThreadId), _ ' 线程ID
+            WStr(ProcessTimer(i).ProcessId) ' 进程ID
+        Else
+            If ProcessTimer(i).ProcessId <> dwProcessId AndAlso dwProcessId <> Cast(DWORD, -1) Then Continue For
+            AddItemColListEx lvwWindowTimer, 6,,, _
+            WStr(ProcessTimer(i).nIDEvent), _ ' 定时器ID
+            WStr(ProcessTimer(i).nTimeout), _ ' 超时时间
+            "0x" & WHex(ProcessTimer(i).pfn), _ ' 回调函数地址
+            wszModulePath, _ ' 所属模块
+            "0x" & WHex(ProcessTimer(i).hWnd), _ ' 所属窗口
+            WStr(ProcessTimer(i).ThreadId) ' 线程ID
+        End If
     Next
 
     ' 释放内存

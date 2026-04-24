@@ -98,8 +98,143 @@ NTSTATUS InitializeTimerContext() {
 }
 
 // ====================== 【终极修复】复刻旧版正确解析逻辑 ======================
+//NTSTATUS EnumProcessTimers(
+//    _Out_ PWINDOW_TIMER* pArray,
+//    _Out_ PULONG pCount
+//) {
+//    NTSTATUS status = STATUS_SUCCESS;
+//    PVOID hashBase = NULL;
+//    ULONG timerCount = 0;
+//    PWINDOW_TIMER pResultArray = NULL;
+//
+//    if (!pArray || !pCount) {
+//        DbgPrint("[TIMER_ENUM] 输入参数无效！\n");
+//        return STATUS_INVALID_PARAMETER;
+//    }
+//    *pArray = NULL;
+//    *pCount = 0;
+//
+//    DbgPrint("[TIMER_ENUM] === 开始枚举进程定时器 ===");
+//
+//    status = InitializeTimerContext();
+//    if (!NT_SUCCESS(status)) {
+//        DbgPrint("[TIMER_ENUM] 初始化上下文失败！0x%X\n", status);
+//        return status;
+//    }
+//
+//    __try {
+//        g_TimerCtx.EnterCrit(0, 0);
+//        DbgPrint("[TIMER_ENUM] 已进入临界区\n");
+//
+//        __try {
+//            // 哈希表基址（和旧版完全一致）
+//            if (g_TimerCtx.isV2) {
+//                hashBase = (PVOID)((PUCHAR)g_TimerCtx.W32GetUserSessionState() + 16 * 3850);
+//            }
+//            else {
+//                hashBase = g_TimerCtx.gTimerHashTable;
+//            }
+//
+//            if (!hashBase || !MmIsAddressValid(hashBase)) {
+//                status = STATUS_INVALID_ADDRESS;
+//                goto EXIT_LABEL;
+//            }
+//
+//            DbgPrint("[TIMER_ENUM] 哈希表基址: %p\n", hashBase);
+//            DbgPrint("[TIMER_ENUM] 开始遍历 64 个哈希桶...\n");
+//            
+//            // 遍历桶（和旧版一致）
+//            for (UCHAR bucket = 0; bucket < 64; bucket++) {
+//                PLIST_ENTRY* bucketPtr = (PLIST_ENTRY*)((PUCHAR)hashBase + 16 * bucket);
+//                if (!MmIsAddressValid(bucketPtr)) continue;
+//                PLIST_ENTRY head = *bucketPtr;
+//                if (!head || !MmIsAddressValid(head)) continue;
+//
+//                // 遍历链表（和旧版一致）
+//                for (PLIST_ENTRY entry = head; entry != (PLIST_ENTRY)bucketPtr; entry = entry->Flink) {
+//                    if (!MmIsAddressValid(entry) || !MmIsAddressValid(entry->Flink)) break;
+//
+//                    PTIMER_ENTRY pTimer = g_TimerCtx.isV2 ? CONTAINING_RECORD(entry, TIMER_ENTRY_WIN11, HashListEntry) : CONTAINING_RECORD(entry, TIMER_ENTRY_WIN10, HashListEntry);
+//                    if (!MmIsAddressValid(pTimer) || (g_TimerCtx.isV2 ? pTimer->Win11->flags : pTimer->Win10->flags & 0x1000)) continue;
+//
+//                    // ====================== 【修复】1:1 复刻旧版正确的 PID 解析逻辑！======================
+//                    PVOID pti = g_TimerCtx.isV2 ? pTimer->Win11->threadInfo : pTimer->Win10->head.threadInfo;  // 旧版原版：直接取 threadInfo +0x18
+//                    if (!pti) continue;
+//
+//                    // Win10/11 偏移（旧版原版逻辑）
+//                    ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
+//                    PVOID ProcessInfo = *(PVOID*)((PUCHAR)pti + processOffset); // 第一层解引用
+//                    PEPROCESS pEprocess = *(PEPROCESS*)ProcessInfo;            // 第二层解引用（新版之前漏了这行！）
+//                    HANDLE currentPid = PsGetProcessId(pEprocess);
+//
+//                    // 线程ID（旧版原版逻辑）
+//                    PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
+//                    HANDLE dwThreadId = PsGetThreadId(pEthread);
+//
+//                    DbgPrint("[TIMER_ENUM] 找到定时器！PID=%llu, TID=%llu, nIDEvent=%lld\n", (ULONG64)currentPid, (ULONG64)dwThreadId, g_TimerCtx.isV2 ? pTimer->Win11->nIDEvent : pTimer->Win10->nIDEvent);
+//
+//                    // PID匹配过滤
+//                    /*if (currentPid != ProcessId && ProcessId != (HANDLE)-1) {
+//                        continue;
+//                    }*/
+//
+//                    // ====================== 匹配成功，分配内存 ======================
+//                    PWINDOW_TIMER pNewArray = (PWINDOW_TIMER)ExAllocatePool2(
+//                        POOL_FLAG_NON_PAGED,
+//                        sizeof(WINDOW_TIMER) * (timerCount + 1),
+//                        'meT'
+//                    );
+//                    if (!pNewArray) {
+//                        status = STATUS_NO_MEMORY;
+//                        goto EXIT_LABEL;
+//                    }
+//
+//                    if (pResultArray) {
+//                        memcpy(pNewArray, pResultArray, sizeof(WINDOW_TIMER) * timerCount);
+//                        ExFreePoolWithTag(pResultArray, 'meT');
+//                    }
+//
+//                    // 填充数据
+//                    pNewArray[timerCount].pfn = g_TimerCtx.isV2 ? pTimer->Win11->pfn : pTimer->Win10->pfn;
+//                    pNewArray[timerCount].nTimeout = g_TimerCtx.isV2 ? pTimer->Win11->nTimeout : pTimer->Win10->nTimeout;
+//                    pNewArray[timerCount].nIDEvent = g_TimerCtx.isV2 ? pTimer->Win11->nIDEvent : pTimer->Win10->nIDEvent;
+//                    pNewArray[timerCount].ThreadId = dwThreadId;
+//                    pNewArray[timerCount].ProcessId = currentPid;
+//                    pNewArray[timerCount].hWnd = *(PVOID*)(g_TimerCtx.isV2 ? pTimer->Win11->windowPtr : pTimer->Win10->nIDEvent);
+//                    //pNewArray[timerCount].param = 0;
+//
+//                    pResultArray = pNewArray;
+//                    timerCount++;
+//                    DbgPrint("[TIMER_ENUM] 匹配成功！总数：%lu\n", timerCount);
+//                }
+//            }
+//
+//            *pArray = pResultArray;
+//            *pCount = timerCount;
+//            DbgPrint("[TIMER_ENUM] 遍历完成，总匹配数量: %lu\n", timerCount);
+//
+//        EXIT_LABEL:;
+//        }
+//        __except (EXCEPTION_EXECUTE_HANDLER) {
+//            status = GetExceptionCode();
+//            DbgPrint("[TIMER_ENUM] 异常！代码: 0x%X\n", status);
+//        }
+//    }
+//    __finally {
+//        g_TimerCtx.UserSessionSwitchLeaveCrit();
+//        DbgPrint("[TIMER_ENUM] 已退出临界区\n");
+//
+//        if (!NT_SUCCESS(status) && pResultArray) {
+//            ExFreePoolWithTag(pResultArray, 'meT');
+//            *pArray = NULL;
+//            *pCount = 0;
+//        }
+//    }
+//
+//    return status;
+//}
+
 NTSTATUS EnumProcessTimers(
-    _In_ HANDLE ProcessId,
     _Out_ PWINDOW_TIMER* pArray,
     _Out_ PULONG pCount
 ) {
@@ -108,14 +243,14 @@ NTSTATUS EnumProcessTimers(
     ULONG timerCount = 0;
     PWINDOW_TIMER pResultArray = NULL;
 
-    if (!pArray || !pCount || !ProcessId) {
+    if (!pArray || !pCount) {
         DbgPrint("[TIMER_ENUM] 输入参数无效！\n");
         return STATUS_INVALID_PARAMETER;
     }
     *pArray = NULL;
     *pCount = 0;
 
-    DbgPrint("[TIMER_ENUM] === 开始枚举进程定时器，目标PID: %llu ===", (ULONG64)ProcessId);
+    DbgPrint("[TIMER_ENUM] === 开始枚举进程定时器 ===");
 
     status = InitializeTimerContext();
     if (!NT_SUCCESS(status)) {
@@ -128,7 +263,7 @@ NTSTATUS EnumProcessTimers(
         DbgPrint("[TIMER_ENUM] 已进入临界区\n");
 
         __try {
-            // 哈希表基址（和旧版完全一致）
+            // 哈希表基址（和旧版完全一致，不修改）
             if (g_TimerCtx.isV2) {
                 hashBase = (PVOID)((PUCHAR)g_TimerCtx.W32GetUserSessionState() + 16 * 3850);
             }
@@ -144,42 +279,65 @@ NTSTATUS EnumProcessTimers(
             DbgPrint("[TIMER_ENUM] 哈希表基址: %p\n", hashBase);
             DbgPrint("[TIMER_ENUM] 开始遍历 64 个哈希桶...\n");
 
-            // 遍历桶（和旧版一致）
+            // ==============================================
+            // 【重要】你的 Win10 遍历哈希桶逻辑 → 完全不动！
+            // ==============================================
             for (UCHAR bucket = 0; bucket < 64; bucket++) {
                 PLIST_ENTRY* bucketPtr = (PLIST_ENTRY*)((PUCHAR)hashBase + 16 * bucket);
                 if (!MmIsAddressValid(bucketPtr)) continue;
                 PLIST_ENTRY head = *bucketPtr;
                 if (!head || !MmIsAddressValid(head)) continue;
 
-                // 遍历链表（和旧版一致）
+                // 遍历链表（原有逻辑完全保留）
                 for (PLIST_ENTRY entry = head; entry != (PLIST_ENTRY)bucketPtr; entry = entry->Flink) {
                     if (!MmIsAddressValid(entry) || !MmIsAddressValid(entry->Flink)) break;
 
-                    PTIMER_ENTRY pTimer = CONTAINING_RECORD(entry, TIMER_ENTRY, HashListEntry);
-                    if (!MmIsAddressValid(pTimer) || (pTimer->flags & 0x1000)) continue;
-
-                    // ====================== 【修复】1:1 复刻旧版正确的 PID 解析逻辑！======================
-                    PVOID pti = pTimer->head.threadInfo;  // 旧版原版：直接取 threadInfo +0x18
-                    if (!pti) continue;
-
-                    // Win10/11 偏移（旧版原版逻辑）
-                    ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
-                    PVOID ProcessInfo = *(PVOID*)((PUCHAR)pti + processOffset); // 第一层解引用
-                    PEPROCESS pEprocess = *(PEPROCESS*)ProcessInfo;            // 第二层解引用（新版之前漏了这行！）
-                    HANDLE currentPid = PsGetProcessId(pEprocess);
-
-                    // 线程ID（旧版原版逻辑）
-                    PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
-                    HANDLE dwThreadId = PsGetThreadId(pEthread);
-
-                    DbgPrint("[TIMER_ENUM] 找到定时器！PID=%llu, TID=%llu, nIDEvent=%lld\n", (ULONG64)currentPid, (ULONG64)dwThreadId, pTimer->nIDEvent);
-
-                    // PID匹配过滤
-                    if (currentPid != ProcessId) {
-                        continue;
+                    // ====================== 核心修复：统一联合体指针 ======================
+                    TIMER_ENTRY pTimer = { 0 };
+                    if (g_TimerCtx.isV2) {
+                        // Win11：使用修正后的结构体
+                        pTimer.Win11 = CONTAINING_RECORD(entry, TIMER_ENTRY_WIN11, HashListEntry);
+                        if (!MmIsAddressValid(pTimer.Win11)) continue;
+                        // 跳过已删除的定时器
+                        if ((pTimer.Win11->flags & 0x1000)) continue;
+                    }
+                    else {
+                        // Win10：完全保留你的原有代码，不修改任何逻辑
+                        pTimer.Win10 = CONTAINING_RECORD(entry, TIMER_ENTRY_WIN10, HashListEntry);
+                        if (!MmIsAddressValid(pTimer.Win10)) continue;
+                        if ((pTimer.Win10->flags & 0x1000)) continue;
                     }
 
-                    // ====================== 匹配成功，分配内存 ======================
+                    // ====================== PID/TID 解析（你的原有逻辑完全保留）======================
+                    PVOID pti = NULL;
+                    if (g_TimerCtx.isV2) {
+                        pti = pTimer.Win11->threadInfo;
+                    }
+                    else {
+                        pti = pTimer.Win10->head.threadInfo;
+                    }
+                    if (!pti) continue;
+
+                    // Win10/11 偏移（你的原有逻辑）
+                    ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
+                    if (!MmIsAddressValid((PUCHAR)pti + processOffset)) continue;
+                    PVOID ProcessInfo = *(PVOID*)((PUCHAR)pti + processOffset);
+                    if (!ProcessInfo || !MmIsAddressValid(ProcessInfo)) continue;
+                    PEPROCESS pEprocess = *(PEPROCESS*)ProcessInfo;
+                    if (!pEprocess) continue;
+                    HANDLE currentPid = PsGetProcessId(pEprocess);
+
+                    // 线程ID（你的原有逻辑）
+                    PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
+                    if (!pEthread) continue;
+                    HANDLE dwThreadId = PsGetThreadId(pEthread);
+
+                    // 打印日志（保留）
+                    DbgPrint("[TIMER_ENUM] 找到定时器！PID=%llu, TID=%llu, nIDEvent=%lld\n",
+                        (ULONG64)currentPid, (ULONG64)dwThreadId,
+                        g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent);
+
+                    // ====================== 内存分配（你的原有逻辑完全保留）======================
                     PWINDOW_TIMER pNewArray = (PWINDOW_TIMER)ExAllocatePool2(
                         POOL_FLAG_NON_PAGED,
                         sizeof(WINDOW_TIMER) * (timerCount + 1),
@@ -195,12 +353,17 @@ NTSTATUS EnumProcessTimers(
                         ExFreePoolWithTag(pResultArray, 'meT');
                     }
 
-                    // 填充数据
-                    pNewArray[timerCount].pfn = pTimer->pfn;
-                    pNewArray[timerCount].nTimeout = pTimer->nTimeout;
-                    pNewArray[timerCount].nIDEvent = pTimer->nIDEvent;
+                    // ====================== 填充数据（修复致命hWnd笔误）======================
+                    pNewArray[timerCount].pfn = g_TimerCtx.isV2 ? pTimer.Win11->pfn : pTimer.Win10->pfn;
+                    pNewArray[timerCount].nTimeout = g_TimerCtx.isV2 ? pTimer.Win11->nTimeout : pTimer.Win10->nTimeout;
+                    pNewArray[timerCount].nIDEvent = g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent;
                     pNewArray[timerCount].ThreadId = dwThreadId;
-                    //pNewArray[timerCount].param = 0;
+                    pNewArray[timerCount].ProcessId = currentPid;
+                    // ✅ 修复你原代码的致命错误：hWnd 错误写成 nIDEvent
+                    PVOID pWnd = g_TimerCtx.isV2 ? pTimer.Win11->windowPtr : pTimer.Win10->windowPtr;
+                    pNewArray[timerCount].hWnd = NULL;
+                    if (pWnd && MmIsAddressValid(pWnd))
+                        pNewArray[timerCount].hWnd = *(PVOID*)pWnd;
 
                     pResultArray = pNewArray;
                     timerCount++;
@@ -543,7 +706,7 @@ NTSTATUS EnumerateHooksFromPti(
         // ==========================================
         PVOID* pHookHeadArray = (PVOID*)((PUCHAR)pContext + GLOBAL_HOOK_ARRAY_BASE);
 
-        DbgPrint("[调试] 全局钩子容器: 0x%p, 数组基址: 0x%p\n", pContext, pHookHeadArray);
+        //DbgPrint("[调试] 全局钩子容器: 0x%p, 数组基址: 0x%p\n", pContext, pHookHeadArray);
 
         for (ULONG hookTypeIdx = 0; hookTypeIdx < MAX_HOOK_TYPES; hookTypeIdx++)
         {
@@ -599,14 +762,14 @@ NTSTATUS EnumerateHooksFromPti(
                         GetHookOwnerId(pCurrentHook, &pEntry->ProcessId, &pEntry->ThreadId);
                         pEntry->HookHandle = *(HANDLE*)(pHookBase + WIN11_HOOK_OFFSET_HHOOK);
 
-                        DbgPrint("[Global] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
+                        /*DbgPrint("[Global] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
                             GetHookTypeName(pEntry->HookType),
                             pEntry->HookType,
                             pEntry->HookFlags,
                             (PVOID)pEntry->HookProc,
                             pEntry->HookHandle,
                             ihmod,
-                            pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");
+                            pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");*/
 
                         (*puFoundHookCount)++;
                     }
@@ -685,14 +848,14 @@ NTSTATUS EnumerateHooksFromPti(
                     pEntry->ThreadId = (ULONG)(ULONG_PTR)hTid;
                     pEntry->HookHandle = *(HANDLE*)(pHookBase + WIN11_HOOK_OFFSET_HHOOK);
 
-                    DbgPrint("[Thread] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
+                    /*DbgPrint("[Thread] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
                         GetHookTypeName(pEntry->HookType),
                         pEntry->HookType,
                         pEntry->HookFlags,
                         (PVOID)pEntry->HookProc,
 						pEntry->HookHandle,
                         ihmod,
-                        pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");
+                        pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");*/
 
                     (*puFoundHookCount)++;
                 }
@@ -948,7 +1111,7 @@ EnumerateMsgHook_Win10(
         HANDLE hHookHandle = (HANDLE)(i | ((ULONG)TableIndex << 16));
         pCurHook->HookHandle = hHookHandle;
 
-        DbgPrint("找到消息钩子，索引=%d，TableIndex=%d\n", i, TableIndex);
+        //DbgPrint("找到消息钩子，索引=%d，TableIndex=%d\n", i, TableIndex);
 
         PVOID pHookObject = HMValidateHandle(hHookHandle, TYPE_HOOK);
         if (!pHookObject) {
@@ -960,11 +1123,11 @@ EnumerateMsgHook_Win10(
             continue;
         }
         // 打印钩子对象内存布局（保留调试用）
-        for (int j = 0; j < 128; j += 8) {
+        /*for (int j = 0; j < 128; j += 8) {
             if (MmIsAddressValid((PUCHAR)pHookObject + j)) {
                 DbgPrint("  offset %02X: %016llX\n", j, *(PULONG64)((PUCHAR)pHookObject + j));
             }
-        }
+        }*/
 
         // ====================== 偏移读取（原有逻辑） ======================
         ULONG offsetFlags, offsetType, offsetHookProc;
@@ -1012,32 +1175,32 @@ EnumerateMsgHook_Win10(
         // ✅ 严格判断：有效模块索引（仅这里需要查原子表）
         if (low32 == 0 && ihmod > 0 && ihmod <= 32)
         {
-            DbgPrint("  → 真模块索引 ihmod=%lu\n", ihmod);
+            //DbgPrint("  → 真模块索引 ihmod=%lu\n", ihmod);
             if (NT_SUCCESS(GetModuleNameFromihMod(FALSE, (int)ihmod, pCurHook->ModulePath)))
             {
-                DbgPrint("  → 模块名: %ws\n", pCurHook->ModulePath);
+                //DbgPrint("  → 模块名: %ws\n", pCurHook->ModulePath);
             }
         }
         // ❌ 全局/低级钩子（0xFFFFFFFF 或 0xFFFF 开头）→ 不查原子表
         else if ((hModValue & 0xFFFF00000000) == 0xFFFF00000000)
         {
-            DbgPrint("  → 全局钩子，无模块索引\n");
+            //DbgPrint("  → 全局钩子，无模块索引\n");
         }
         // ❌ 无效值 → 跳过
         else
         {
-            DbgPrint("  → 无效hMod值: %llx\n", hModValue);
+            //DbgPrint("  → 无效hMod值: %llx\n", hModValue);
         }
 
         // ====================== 原有打印保留 ======================
-        DbgPrint("消息钩子：Type=%s(%d), 标志=%d, 句柄=0x%p, 范围=%s, Proc=0x%llX, PID=%d, TID=%d\n",
+        /*DbgPrint("消息钩子：Type=%s(%d), 标志=%d, 句柄=0x%p, 范围=%s, Proc=0x%llX, PID=%d, TID=%d\n",
             GetHookTypeName(pCurHook->HookType),
             pCurHook->HookType,
             pCurHook->HookFlags,
             pCurHook->HookHandle,
             pCurHook->IsGlobal ? "全局钩子" : "线程钩子",
             pCurHook->HookProc,
-            pCurHook->ProcessId, pCurHook->ThreadId);
+            pCurHook->ProcessId, pCurHook->ThreadId);*/
     }
 
     // ====================== 返回结果 ======================
@@ -1178,24 +1341,24 @@ NTSTATUS EnumerateEventHook_Win11(
     {
         PWIN32K_EVENT_HOOK_INFO pCurrentInfo = &pHookList[currentIndex];
 
-        DbgPrint("\n=============================================\n");
-        DbgPrint("钩子 [%lu] 地址: 0x%p\n", currentIndex, pCurrentHook);
-        DbgPrint("=============================================\n");
+        //DbgPrint("\n=============================================\n");
+        //DbgPrint("钩子 [%lu] 地址: 0x%p\n", currentIndex, pCurrentHook);
+        //DbgPrint("=============================================\n");
 
-        // 打印pCurrentHook附近的内存以验证结构体
-        DbgPrint("\n--- 钩子结构体内存转储 ---\n");
-        DumpMemoryHex(pCurrentHook, 0x100);
+        //// 打印pCurrentHook附近的内存以验证结构体
+        //DbgPrint("\n--- 钩子结构体内存转储 ---\n");
+        //DumpMemoryHex(pCurrentHook, 0x100);
 
-        // 打印各个字段的原始值
-        DbgPrint("\n--- 原始字段值解析 ---\n");
-        DbgPrint("[0x00] hHandle:             0x%p\n", pCurrentHook->HookHandle);
-        DbgPrint("[0x20] EventMin:            0x%X\n", pCurrentHook->EventMin);
-        DbgPrint("[0x24] EventMax:            0x%X\n", pCurrentHook->EventMax);
-        DbgPrint("[0x28] Flags:               0x%X\n", pCurrentHook->Flags);
-        DbgPrint("[0x30] TargetProcessId:     0x%p (%lu)\n", (PVOID)pCurrentHook->TargetProcessId, (ULONG)pCurrentHook->TargetProcessId);
-        DbgPrint("[0x38] TargetThreadId:      0x%p (%lu)\n", (PVOID)pCurrentHook->TargetThreadId, (ULONG)pCurrentHook->TargetThreadId);
-        DbgPrint("[0x40] pfnWinEventProc:     0x%p\n", pCurrentHook->pfnWinEventProc);
-        DbgPrint("[0x48] hmodWinEventProc:    0x%llx\n", pCurrentHook->Unknown48);
+        //// 打印各个字段的原始值
+        //DbgPrint("\n--- 原始字段值解析 ---\n");
+        //DbgPrint("[0x00] hHandle:             0x%p\n", pCurrentHook->HookHandle);
+        //DbgPrint("[0x20] EventMin:            0x%X\n", pCurrentHook->EventMin);
+        //DbgPrint("[0x24] EventMax:            0x%X\n", pCurrentHook->EventMax);
+        //DbgPrint("[0x28] Flags:               0x%X\n", pCurrentHook->Flags);
+        //DbgPrint("[0x30] TargetProcessId:     0x%p (%lu)\n", (PVOID)pCurrentHook->TargetProcessId, (ULONG)pCurrentHook->TargetProcessId);
+        //DbgPrint("[0x38] TargetThreadId:      0x%p (%lu)\n", (PVOID)pCurrentHook->TargetThreadId, (ULONG)pCurrentHook->TargetThreadId);
+        //DbgPrint("[0x40] pfnWinEventProc:     0x%p\n", pCurrentHook->pfnWinEventProc);
+        //DbgPrint("[0x48] hmodWinEventProc:    0x%llx\n", pCurrentHook->Unknown48);
 
         HANDLE hInstallerPid = NULL, hInstallerTid = NULL;
 
@@ -1207,13 +1370,13 @@ NTSTATUS EnumerateEventHook_Win11(
             hInstallerPid = PsGetThreadProcessId(*pCurrentHook->pInstallerThread);
             hInstallerTid = PsGetThreadId(*pCurrentHook->pInstallerThread);
 
-            DbgPrint("安装者 PETHREAD: 0x%p\n", *pCurrentHook->pInstallerThread);
+            /*DbgPrint("安装者 PETHREAD: 0x%p\n", *pCurrentHook->pInstallerThread);
             DbgPrint("安装者 PID: %d\n", (ULONG)(ULONG_PTR)hInstallerPid);
-            DbgPrint("安装者 TID: %d\n", (ULONG)(ULONG_PTR)hInstallerTid);
+            DbgPrint("安装者 TID: %d\n", (ULONG)(ULONG_PTR)hInstallerTid);*/
         }
         else
         {
-            DbgPrint("安装者 ETHREAD: 无效或为空\n");
+            //DbgPrint("安装者 ETHREAD: 无效或为空\n");
         }
 
         // 填充基础信息
@@ -1237,13 +1400,13 @@ NTSTATUS EnumerateEventHook_Win11(
             NTSTATUS modStatus = GetModuleNameFromihMod(TRUE, idx, pCurrentInfo->ModulePath);
             if (NT_SUCCESS(modStatus))
             {
-                DbgPrint(" -> 模块名: %ws\n", pCurrentInfo->ModulePath);
+                //DbgPrint(" -> 模块名: %ws\n", pCurrentInfo->ModulePath);
             }
         }
         // 情况2：跨进程钩子
         else if ((ULONG)(ULONG_PTR)pCurrentInfo->hmodWinEventProc == (ULONG)-1)
         {
-            DbgPrint("  跨进程钩子，hmod=0x%p\n", pCurrentInfo->hmodWinEventProc);
+            //DbgPrint("  跨进程钩子，hmod=0x%p\n", pCurrentInfo->hmodWinEventProc);
         }
         // 情况3：有效回调地址
         else if ((ULONG_PTR)pCurrentInfo->pfnWinEventProc >= 0x10000)
@@ -1375,7 +1538,7 @@ EnumerateEventHook_Win10(
         HANDLE hEventHook = (HANDLE)(i | ((ULONG)TableIndex << 16));
         pCurHook->HookHandle = hEventHook;
 
-        DbgPrint("[%d] 找到事件钩子，TableIndex=%d\n", uFoundHookCount, TableIndex);
+        //DbgPrint("[%d] 找到事件钩子，TableIndex=%d\n", uFoundHookCount, TableIndex);
 
         // 验证句柄
         PVOID pEventHookObj = HMValidateHandle(hEventHook, TYPE_WINEVENTHOOK);
@@ -1391,6 +1554,8 @@ EnumerateEventHook_Win10(
         pCurHook->Flags = *(PULONG)((PUCHAR)pEventHookObj + EVENTHOOK_OFFSET_FLAGS);
         pCurHook->hmodWinEventProc = *(PVOID*)((PUCHAR)pEventHookObj + EVENTHOOK_OFFSET_HMOD);
         pCurHook->pfnWinEventProc = *(PVOID*)((PUCHAR)pEventHookObj + EVENTHOOK_OFFSET_PFN);
+        pCurHook->TargetProcessId = *(PULONG)((PUCHAR)pEventHookObj + EVENTHOOK_OFFSET_TARGET_PID);
+        pCurHook->TargetThreadId = *(PULONG)((PUCHAR)pEventHookObj + EVENTHOOK_OFFSET_TARGET_TID);
 
         // 读取进程/线程ID
         ULONG idProcess = 0, idThread = 0;
@@ -1401,6 +1566,7 @@ EnumerateEventHook_Win10(
             PKPROCESS pProcess = IoThreadToProcess(pThread);
             idProcess = (ULONG)(ULONG_PTR)PsGetProcessId(pProcess);
             idThread = (ULONG)(ULONG_PTR)PsGetThreadId(pThread);
+			DbgPrint("  → 关联线程有效，PID=%d, TID=%d\n", idProcess, idThread);
         }
         pCurHook->ProcessId = idProcess;
         pCurHook->ThreadId = idThread;
@@ -1419,14 +1585,14 @@ EnumerateEventHook_Win10(
                 if (NT_SUCCESS(modStatus))
                 {
                     resolved = TRUE;
-                    DbgPrint(" -> 模块名: %ws\n", pCurHook->ModulePath);
+                    //DbgPrint(" -> 模块名: %ws\n", pCurHook->ModulePath);
                 }
             }
         }
         // 情况2：跨进程钩子
         else if ((ULONG_PTR)pCurHook->hmodWinEventProc == (ULONG)-1)
         {
-            DbgPrint("  跨进程钩子，hmod=0x%p\n", pCurHook->hmodWinEventProc);
+            //DbgPrint("  跨进程钩子，hmod=0x%p\n", pCurHook->hmodWinEventProc);
             resolved = TRUE;
         }
         // 情况3：有效回调地址
@@ -1651,7 +1817,7 @@ static NTSTATUS EnumerateHotkey_Win10(
                     PID = PsGetProcessId(IoThreadToProcess(pEthread));
                 }
             }
-                __except (EXCEPTION_EXECUTE_HANDLER)
+            __except (EXCEPTION_EXECUTE_HANDLER)
             {
                 DbgPrint("[Win10] Exception at read pThreadInfo\n");
             }
@@ -1661,7 +1827,7 @@ static NTSTATUS EnumerateHotkey_Win10(
             {
                 hWnd = *(_HWND*)((PUCHAR)pHotkey->hWnd + 0x0);
             }
-                __except (EXCEPTION_EXECUTE_HANDLER)
+            __except (EXCEPTION_EXECUTE_HANDLER)
             {
                 DbgPrint("[Win10] Exception at read hWnd\n");
             }
@@ -1675,9 +1841,9 @@ static NTSTATUS EnumerateHotkey_Win10(
             pHotkeyArray[index].ProcessId = (ULONG)(ULONG_PTR)PID;
             pHotkeyArray[index].ThreadId = (ULONG)(ULONG_PTR)TID;
 
-            DbgPrint("[Win10][%03d] hWnd=0x%p, vk=0x%02X, mod=0x%04X, id=0x%x, PID=%Iu, TID=%Iu\n",
+            /*DbgPrint("[Win10][%03d] hWnd=0x%p, vk=0x%02X, mod=0x%04X, id=0x%x, PID=%Iu, TID=%Iu\n",
                 index, hWnd, pHotkey->vk, pHotkey->fsModifiers, pHotkey->id,
-                (ULONG_PTR)PID, (ULONG_PTR)TID);
+                (ULONG_PTR)PID, (ULONG_PTR)TID);*/
 
             index++;
             pHotkey = pHotkey->pNext;
@@ -1774,7 +1940,7 @@ static NTSTATUS EnumerateHotkey_Win11(
                         // 【可选】调试输出，匹配你之前的日志格式
             __try
             {
-                DbgPrint("HOTKEY=%p\n", pHotkey);
+                /*DbgPrint("HOTKEY=%p\n", pHotkey);
                 DbgPrint("  q0=%p\n", *(PVOID*)((PUCHAR)pHotkey + 0x00));
                 DbgPrint("  q1=%p\n", *(PVOID*)((PUCHAR)pHotkey + 0x08));
                 DbgPrint("  q2=%p\n", *(PVOID*)((PUCHAR)pHotkey + 0x10));
@@ -1786,14 +1952,14 @@ static NTSTATUS EnumerateHotkey_Win11(
                 DbgPrint("  q28=%p q30=%p q38=%p\n",
                     *(PVOID*)((PUCHAR)pHotkey + 0x28),
                     *(PVOID*)((PUCHAR)pHotkey + 0x30),
-                    *(PVOID*)((PUCHAR)pHotkey + 0x38));
+                    *(PVOID*)((PUCHAR)pHotkey + 0x38));*/
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
                 DbgPrint("[Win11] 热键信息读取异常: %p\n", pHotkey);
             }
-            DbgPrint("[Win11][%03d] HOTKEY=%p, vk=0x%02X, mod=0x%04X, id=0x%p, hWnd=%p\n",
-                index, pHotkey, vk, mod, (PVOID)id, hWnd);
+            /*DbgPrint("[Win11][%03d] HOTKEY=%p, vk=0x%02X, mod=0x%04X, id=0x%p, hWnd=%p\n",
+                index, pHotkey, vk, mod, (PVOID)id, hWnd);*/
 
             // 填充数据
             pHotkeyArray[index].HotkeyHandle = pHotkey;

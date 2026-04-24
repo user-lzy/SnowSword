@@ -143,12 +143,11 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
         window_Class = Wstring(MAX_PATH, 0)
         GetClassName hWindows(i), @window_Class, MAX_PATH
         window_Class = Left(window_Class, MAX_PATH - 1)
-        Print "0x" & WHex(hWindows(i)) & " " & window_Title & " " & window_Class
+        'Print "0x" & WHex(hWindows(i)) & " " & window_Title & " " & window_Class
         '获取TID和所属模块
         Dim dwProcessId As DWORD
         Dim dwThreadId As DWORD = GetWindowThreadProcessId(hWIndows(i), @dwProcessId)
-        Print dwProcessId & " " & dwThreadId
-        Print ""
+        'Print dwProcessId & " " & dwThreadId
         'Dim ThreadStartAddress As PVOID = GetThreadStartAddr(dwThreadId)
         Dim strModulePath As WString * MAX_PATH
         'PID = GetPIDFromHWND(hWindows(i))
@@ -174,11 +173,11 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
             window_Class = Wstring(MAX_PATH, 0)
             GetClassName hChildWindows(j), @window_Class, MAX_PATH
             window_Class = Left(window_Class, MAX_PATH - 1)
-            Print "0x" & WHex(hChildWindows(j)) & " " & window_Title & " " & window_Class
+            'Print "0x" & WHex(hChildWindows(j)) & " " & window_Title & " " & window_Class
             '获取TID和所属模块
             dwThreadId = GetWindowThreadProcessId(hChildWindows(j), @dwProcessId)
-            Print dwProcessId & " " & dwThreadId
-            Print ""
+            'Print dwProcessId & " " & dwThreadId
+            'Print ""
             'Dim ThreadStartAddress As PVOID = GetThreadStartAddr(dwThreadId)
             Dim strModulePath As WString * MAX_PATH
             'GetModuleByAddress dwProcessId, ThreadStartAddress, @strModulePath
@@ -186,7 +185,7 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
             strModulePath = GetProcessPath(dwProcessId)
             'GetWindowModuleFileName hChildWindows(j), @strModulePath, MAX_PATH
             
-            AddItemColListEx lvwWindow, 5,,, WStr("0x" & WHex(hChildWindows(j))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
+            AddItemColListEx lvwWindow, 6,,, WStr("0x" & WHex(hChildWindows(j))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         Next
     Next
     CommitListViewView lvwWindow

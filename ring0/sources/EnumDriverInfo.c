@@ -30,19 +30,24 @@ VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
 	if (!pDriverInfo) return;
 	RtlZeroMemory(pDriverInfo, sizeof(DRIVER_INFO));
 	pDriverInfo->DriverObjectAddr = pDriverObject;
-	DbgPrint("DriverObjectAddr: 0x%p,TrueDriverObjectAddr: 0x%p", pDriverInfo->DriverObjectAddr, pDriverObject);
+	DbgPrint("DriverObjectAddr: 0x%p", pDriverInfo->DriverObjectAddr);
 	pDriverInfo->DriverInitAddr = (PVOID)pDriverObject->DriverInit;
-	DbgPrint("DriverInitAddr: 0x%p, TrueDriverInitAddr: 0x%p", pDriverInfo->DriverInitAddr, pDriverObject->DriverInit);
+	DbgPrint("DriverInitAddr: 0x%p", pDriverInfo->DriverInitAddr);
 	pDriverInfo->DriverStartIoAddr = (PVOID)pDriverObject->DriverStartIo;
-	DbgPrint("DriverStartIoAddr: 0x%p, TrueDriverStartIoAddr: 0x%p", pDriverInfo->DriverStartIoAddr, pDriverObject->DriverStartIo);
+	DbgPrint("DriverStartIoAddr: 0x%p", pDriverInfo->DriverStartIoAddr);
 	pDriverInfo->FastIoDispatchAddr = (PVOID)pDriverObject->FastIoDispatch;
-	DbgPrint("FastIoDispatchAddr: 0x%p, TrueFastIoDispatchAddr: 0x%p", pDriverInfo->FastIoDispatchAddr, pDriverObject->FastIoDispatch);
+	DbgPrint("FastIoDispatchAddr: 0x%p", pDriverInfo->FastIoDispatchAddr);
 	pDriverInfo->DriverUnloadAddr = (PVOID)pDriverObject->DriverUnload;
-	DbgPrint("DriverUnloadAddr: 0x%p, TrueDriverUnloadAddr: 0x%p", pDriverInfo->DriverUnloadAddr, pDriverObject->DriverUnload);
-	for (int i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; i++) {
+	DbgPrint("DriverUnloadAddr: 0x%p", pDriverInfo->DriverUnloadAddr);
+	for (int i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
 		pDriverInfo->MajorFunctionAddr[i] = (PVOID)pDriverObject->MajorFunction[i];
-		DbgPrint("MajorFunctionAddr[%d]: 0x%p, TrueMajorFunctionAddr[%d]: 0x%p", i, pDriverInfo->MajorFunctionAddr[i], i, pDriverObject->MajorFunction[i]);
+		DbgPrint("MajorFunctionAddr[%d]: 0x%p", i, pDriverInfo->MajorFunctionAddr[i]);
 	}
+    if (pDriverObject->FastIoDispatch) {
+        for (int i = 0; i < FAST_IO_MAX_COUNT; i++) {
+            pDriverInfo->FastIOFunctionAddr[i] = *(PVOID*)((PUCHAR)pDriverObject->FastIoDispatch + sizeof(PVOID) * (i + 1));
+        }
+    }
 }
 
 // 辅助函数：安全获取对象类型（避免直接访问对象头）
@@ -300,6 +305,25 @@ VOID GetDriverFilePath(PDRIVER_OBJECT DriverObject, WCHAR* PathBuffer, SIZE_T Bu
     {
         PathBuffer[0] = L'\0';
     }
+}
+
+PVOID FindIopInvalidDeviceRequest() {
+	PVOID IoCreateDriverAddr = KernelGetProcAddress("ntoskrnl.exe", "IoCreateDriver");
+    if (!IoCreateDriverAddr) {
+        DbgPrint("Failed to get IoCreateDriver address!");
+        return NULL;
+	}
+
+	UCHAR pSpecialCode[3] = { 0x48, 0x8D, 0x05 }; // lea rax, [rip+offset]
+	PVOID result = SearchSpecialCode(IoCreateDriverAddr, 0x200, pSpecialCode, sizeof(pSpecialCode));
+    if (!result) {
+		DbgPrint("Failed to find special code in IoCreateDriver!");
+        return NULL;
+    }
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
+	PVOID IopInvalidDeviceRequestAddr = (PVOID)((PUCHAR)result + 7 + offset);
+    DbgPrint("Found IopInvalidDeviceRequest at: 0x%p", IopInvalidDeviceRequestAddr);
+	return IopInvalidDeviceRequestAddr;
 }
 
 // ============================================================================

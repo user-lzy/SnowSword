@@ -3047,6 +3047,7 @@ Cleanup:
 // 支持：CreateThread/CreateThreadEx/CreateProcess/LoadImage
 //       通用Ex回调 (\Callback\xxx) / 注册表回调 / 对象回调 / BugCheck回调
 // ==============================
+#define _countof(_Array) (sizeof(_Array) / sizeof((_Array)[0]))
 NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 {
 	// 1. 入参合法性校验
@@ -3069,76 +3070,226 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 	DbgPrint("[DeleteCallback] 尝试删除回调：%ws | 地址：0x%p\n",
 		pCallbackInfo->Type, pCallbackInfo->Func);
 
-	// 3. 根据类型名称自动分发删除API
-	// --------------------------------- 线程/进程/镜像回调 ---------------------------------
-	if (_wcsicmp(pCallbackInfo->Type, L"CreateThread") == 0 ||
-		_wcsicmp(pCallbackInfo->Type, L"CreateThreadEx") == 0) {
-		status = PsRemoveCreateThreadNotifyRoutine(
-			(PCREATE_THREAD_NOTIFY_ROUTINE)pCallbackInfo->Func);
-	}
-	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcess") == 0){
-		status = PsSetCreateProcessNotifyRoutine(
-			(PCREATE_PROCESS_NOTIFY_ROUTINE)pCallbackInfo->Func, TRUE);
-	}
-	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcessEx") == 0) {
-		status = PsSetCreateProcessNotifyRoutineEx(
-			(PCREATE_PROCESS_NOTIFY_ROUTINE_EX)pCallbackInfo->Func, TRUE);
-	}
-	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcessEx2") == 0) {
-		status = PsSetCreateProcessNotifyRoutineEx2(
-			PsCreateProcessNotifySubsystems, (PVOID)&pCallbackInfo->Func, TRUE);
-	}
-	else if (_wcsicmp(pCallbackInfo->Type, L"LoadImage") == 0) {
-		status = PsRemoveLoadImageNotifyRoutine(
-			(PLOAD_IMAGE_NOTIFY_ROUTINE)pCallbackInfo->Func);
-	}
-	// --------------------------------- 通用 Ex 回调（\Callback\*） ---------------------------------
-	else if (_wcsnicmp(pCallbackInfo->Type, L"\\Callback\\", 10) == 0){
-		if (pCallbackInfo->Context) {
-			ExUnregisterCallback((PCALLBACK_OBJECT)pCallbackInfo->Others[0]);
-			status = STATUS_SUCCESS;
-		}
-		else {
-			status = STATUS_INVALID_HANDLE;
-		}
-	}
-	// --------------------------------- 注册表回调 ---------------------------------
-	else if (_wcsicmp(pCallbackInfo->Type, L"CmpCallback") == 0) {
-		if (pCallbackInfo->Context) {
-			LARGE_INTEGER cookie;
-			cookie.QuadPart = (LONGLONG)pCallbackInfo->Context;
-			status = CmUnRegisterCallback(cookie);
-		}
-		else {
-			status = STATUS_INVALID_HANDLE;
-		}
-	}
-	// --------------------------------- 对象回调（ObXxxCallback） ---------------------------------
-	else if (wcsstr(pCallbackInfo->Type, L"ObThreadCallback") != NULL ||
-		wcsstr(pCallbackInfo->Type, L"ObProcessCallback") != NULL) {
-		if (pCallbackInfo->Context) {
+	// 3. 严格按照指定顺序判断回调类型
+	// =========================================================================
+	// 1. 进程回调 (ObProcessCallback)
+	// =========================================================================
+	if (_wcsnicmp(pCallbackInfo->Type, L"ObProcessCallback", _countof(L"ObProcessCallback") - 1) == 0)
+	{
+		if (pCallbackInfo->Others[0])
+		{
 			ObUnRegisterCallbacks((PVOID)pCallbackInfo->Others[0]);
 			status = STATUS_SUCCESS;
 		}
-		else {
+		else
+		{
 			status = STATUS_INVALID_HANDLE;
 		}
 	}
-	// --------------------------------- BugCheck 回调 ---------------------------------
-	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheck") == 0) {
+	// =========================================================================
+	// 3. 线程回调 (ObThreadCallback)
+	// =========================================================================
+	else if (_wcsnicmp(pCallbackInfo->Type, L"ObThreadCallback", _countof(L"ObThreadCallback") - 1) == 0)
+	{
+		if (pCallbackInfo->Others[0])
+		{
+			ObUnRegisterCallbacks((PVOID)pCallbackInfo->Others[0]);
+			status = STATUS_SUCCESS;
+		}
+		else
+		{
+			status = STATUS_INVALID_HANDLE;
+		}
+	}
+	// =========================================================================
+	// 5. 创建进程 (CreateProcess)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcess") == 0)
+	{
+		status = PsSetCreateProcessNotifyRoutine(
+			(PCREATE_PROCESS_NOTIFY_ROUTINE)pCallbackInfo->Func, TRUE);
+	}
+	// =========================================================================
+	// 6. 创建进程Ex (CreateProcessEx)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcessEx") == 0)
+	{
+		status = PsSetCreateProcessNotifyRoutineEx(
+			(PCREATE_PROCESS_NOTIFY_ROUTINE_EX)pCallbackInfo->Func, TRUE);
+	}
+	// =========================================================================
+	// 7. 创建进程Ex2 (CreateProcessEx2)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"CreateProcessEx2") == 0)
+	{
+		status = PsSetCreateProcessNotifyRoutineEx2(
+			PsCreateProcessNotifySubsystems, (PVOID)&pCallbackInfo->Func, TRUE);
+	}
+	// =========================================================================
+	// 8. 创建线程 (CreateThread)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"CreateThread") == 0)
+	{
+		status = PsRemoveCreateThreadNotifyRoutine(
+			(PCREATE_THREAD_NOTIFY_ROUTINE)pCallbackInfo->Func);
+	}
+	// =========================================================================
+	// 9. 加载镜像 (LoadImage)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"LoadImage") == 0)
+	{
+		status = PsRemoveLoadImageNotifyRoutine(
+			(PLOAD_IMAGE_NOTIFY_ROUTINE)pCallbackInfo->Func);
+	}
+	// =========================================================================
+	// 10. 未知加载镜像 (LoadImageUnknown) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"LoadImageUnknown") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：LoadImageUnknown\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 11. 注册表回调 (CmpCallback) → 修复Bug：使用Others[0]存储Cookie
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"CmpCallback") == 0)
+	{
+		if (pCallbackInfo->Others[0] != 0)
+		{
+			LARGE_INTEGER cookie;
+			cookie.QuadPart = (LONGLONG)pCallbackInfo->Others[0];
+			status = CmUnRegisterCallback(cookie);
+		}
+		else
+		{
+			status = STATUS_INVALID_HANDLE;
+		}
+	}
+	// =========================================================================
+	// 12. Lego回调 (Lego) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"Lego") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：Lego回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 13. 普通关机通知 (Shutdown(IRP_MJ_SHUTDOWN)) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"Shutdown(IRP_MJ_SHUTDOWN)") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：关机通知回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 14. 最终机会关机通知 (LastChanceShutdown(IRP_MJ_SHUTDOWN)) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"LastChanceShutdown(IRP_MJ_SHUTDOWN)") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：最终机会关机通知回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 15. 登录会话终止 (LogonSessionTerminated(Normal)) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"LogonSessionTerminated(Normal)") == 0)
+	{
+		status = SeUnregisterLogonSessionTerminatedRoutine((PSE_LOGON_SESSION_TERMINATED_ROUTINE)pCallbackInfo->Func);
+	}
+	// =========================================================================
+	// 16. 登录会话终止Ex (LogonSessionTerminatedEx) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"LogonSessionTerminatedEx") == 0)
+	{
+		status = SeUnregisterLogonSessionTerminatedRoutineEx((PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX)pCallbackInfo->Func, pCallbackInfo->Context);
+	}
+	// =========================================================================
+	// 17. 文件系统变更通知 (FsNotifyChange) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"FsNotifyChange") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：文件系统变更通知\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 18. PNP设备类通知 (PnpDeviceClass) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"PnpDeviceClass") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：PNP设备类通知\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 19. PNP硬件配置文件通知 (PnpHwProfile) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"PnpHwProfile") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：PNP硬件配置文件通知\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 20. 系统崩溃回调 (BugCheck)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheck") == 0)
+	{
 		BOOLEAN ret = KeDeregisterBugCheckCallback((PKBUGCHECK_CALLBACK_RECORD)pCallbackInfo->Others[0]);
 		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 	}
-	// --------------------------------- BugCheckReason 回调 ---------------------------------
-	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheckReason") == 0) {
+	// =========================================================================
+	// 21. 系统崩溃原因回调 (BugCheckReason)
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"BugCheckReason") == 0)
+	{
 		BOOLEAN ret = KeDeregisterBugCheckReasonCallback((PKBUGCHECK_REASON_CALLBACK_RECORD)pCallbackInfo->Others[0]);
 		status = ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 	}
-	// --------------------------------- 其他未支持的类型 ---------------------------------
-	else {
+	// =========================================================================
+	// 22. NMI不可屏蔽中断回调 (KeRegisterNmiCallback) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"KeRegisterNmiCallback") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：NMI中断回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 23. DbgPrint输出回调 (DbgPrintCallback) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"DbgPrintCallback") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：DbgPrint回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 24. 边界异常回调 (KeRegisterBoundCallback) → 不支持删除
+	// =========================================================================
+	else if (_wcsicmp(pCallbackInfo->Type, L"KeRegisterBoundCallback") == 0)
+	{
+		DbgPrint("[DeleteCallback] 不支持删除：边界检查回调\n");
+		status = STATUS_NOT_SUPPORTED;
+	}
+	// =========================================================================
+	// 通用Ex回调 (\Callback\xxx)
+	// =========================================================================
+	else if (_wcsnicmp(pCallbackInfo->Type, L"\\Callback\\", 10) == 0)
+	{
+		if (pCallbackInfo->Others[0])
+		{
+			ExUnregisterCallback((PCALLBACK_OBJECT)pCallbackInfo->Others[0]);
+			status = STATUS_SUCCESS;
+		}
+		else
+		{
+			status = STATUS_INVALID_HANDLE;
+		}
+	}
+	// =========================================================================
+	// 未知类型
+	// =========================================================================
+	else
+	{
 		DbgPrint("[DeleteCallback] 不支持的回调类型：%ws\n", pCallbackInfo->Type);
 	}
-	
+
 	// 4. 打印执行结果
 	if (NT_SUCCESS(status)) {
 		DbgPrint("[DeleteCallback] 删除成功！%ws | 0x%p\n",

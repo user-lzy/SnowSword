@@ -284,3 +284,29 @@ Sub GetWinsockSPIList(lvwSPI As Class_ListView)
     Print "Winsock SPI 枚举完成，总数："; count
     CommitListViewView lvwSPI
 End Sub
+
+' ==============================================
+' 核心函数：移除指定 Winsock SPI 提供者 (对齐ETW代码风格)
+' ==============================================
+Function RemoveWinsockSPI(wszProviderId As String) As Boolean
+    Dim ProviderId As GUID
+    Dim lResult As Long
+    Dim dwError As DWORD
+    Dim nErrno As Long  ' 【必需】API要求的错误码输出参数
+    
+    ' 字符串GUID 转回 GUID结构体
+    CLSIDFromString(wszProviderId, @ProviderId)
+    
+    ' 【修复】调用API：传满2个参数（GUID地址 + 错误码地址）
+    lResult = WSCDeinstallProvider(@ProviderId, @nErrno)
+    
+    ' 错误处理
+    If lResult = SOCKET_ERROR Then
+        dwError = nErrno  ' 错误码从API输出的nErrno获取
+        Print "移除SPI " & wszProviderId & " 失败，错误码："; Hex(dwError)
+        Return False
+    Else
+        Print "移除SPI " & wszProviderId & " 成功！"
+        Return True
+    End If
+End Function

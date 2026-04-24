@@ -14,49 +14,17 @@ Type WINTRUST_CATALOG_INFO_EX Field = 8
     pcCatalogContext As Any Ptr
 End Type
 
-/'Type WINTRUST_FILE_INFO
-    cbStruct As DWORD
-    pcwszFilePath As LPCWSTR
-    HFILE As HANDLE
-    pgKnownSubject As GUID Ptr
-End Type'/
-
-/'Type WINTRUST_CATALOG_INFO
-    cbStruct As DWORD
-    dwCatalogVersion As DWORD
-    pcwszCatalogFilePath As WString Ptr
-    pcwszMemberTag As Wstring Ptr
-    pcwszMemberFilePath As WString Ptr
-    hMemberFile As HANDLE
-    pbCalculatedFileHash As Byte Ptr
-    cbCalculatedFileHash As DWORD
-    pcCatalogContext As Any Ptr
-End Type'/
-
-'Type WINTRUST_DATA
-'    cbStruct As DWORD
-'    pPolicyCallbackData As LPVOID
-'    pSIPClientData As LPVOID
-'    dwUIChoice as DWORD
-'    fdwRevocationChecks As DWORD
-'    dwUnionChoice As DWORD
-'    Union
-'        pFile As WINTRUST_FILE_INFO Ptr
-'        pCatalog As WINTRUST_CATALOG_INFO Ptr
-'        'pBlob As WINTRUST_BLOB_INFO_ Ptr
-'        'pSgnr As WINTRUST_SGNR_INFO_ Ptr
-'        'pCert As WINTRUST_CERT_INFO_ Ptr
-'    End Union
-'    dwStateAction As DWORD
-'    hWVTStateData As HANDLE
-'    pwszURLReference As Wstring Ptr
-'    dwProvFlags As DWORD
-'    dwUIContext As DWORD
-'End Type
-
 Type CATALOG_INFO
     cbStruct As DWORD
     wszCatalogFile As Wstring * 260 'MAX_PATH
+End Type
+
+Type AsyncTaskParam
+    hWndForm As hWnd
+    ctrlType    As Wstring * 20      ' 控件类型
+    rowIndex    As Long          ' 行索引
+    filePath As Wstring * 202 ' MAX_PATH ' 要验证签名的文件路径（你的耗时数据）
+    'CompanyName As StringW ' 公司名称
 End Type
 
 Type COPY_PATH
@@ -105,6 +73,19 @@ Const WTD_USE_DEFAULT_OSVER_CHECK = &H00000400
 CONST WTD_REVOCATION_CHECK_NONE = &H00000010
 CONST WTD_STATEACTION_IGNORE = &H00000000
 CONST WTD_SAFER_FLAG = &H00000100
+
+Const TRUST_E_BAD_SIGNATURE As Long = &H800B010F ' 签名无效/哈希不匹配
+Const TRUST_E_EXPIRED As Long = &H800B0101       ' 证书过期/未生效
+Const TRUST_E_CERT_SUSPENDED As Long = &H800B010C ' 证书被吊销
+
+' ===============================
+' 全局变量
+' ===============================
+Dim Shared TaskQueue() As AsyncTaskParam Ptr
+Dim Shared QueueMutex As HANDLE
+Dim Shared TaskEvent As HANDLE
+Dim Shared Threads() As HANDLE
+Const ThreadCount As Integer = 4
 
 Public Sub GetDriveList(treFolder As Class_TreeView)
     treFolder.DeleteAllItems
@@ -409,314 +390,314 @@ Function GetVerifyErrorString(ByVal errorCode As Long) As String
     End Select
 End Function
 
-Function VerifyFileByCatalog(ByVal pwszFilePath As LPCWSTR) As BOOL
-    Dim hCatAdmin As Any Ptr = NULL
-    Dim hCatInfo As Any Ptr = NULL
-    Dim hFile As HANDLE = INVALID_HANDLE_VALUE
-    Dim fVerified As BOOL = FALSE
-    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE}) 
-    
-    Dim rgbHash(0 To 99) As Byte ' 预留100字节的哈希缓冲区
-    Dim cbHash As DWORD = SizeOf(Byte) * 100
-    
-    Dim catalogInfo As CATALOG_INFO
-    Dim pszMemberTag As WString Ptr = NULL
-    
-    ' 1. 获取目录管理员上下文
-    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = False Then
-        Print "CryptCATAdminAcquireContext failed: " & WinErrorMsg(GetLastError) & GetLastError
-        Return False
-    End If
-    
-    ' 2. 打开文件并计算哈希
-    hFile = CreateFileW(pwszFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then
-        Print "CreateFile failed: " & WinErrorMsg(GetLastError) & GetLastError
-        Goto cleanup
-    End If
-    
-    If CryptCATAdminCalcHashFromFileHandle(hFile, @cbHash, @rgbHash(0), 0) = False Then
-        Print "CryptCATAdminCalcHashFromFileHandle failed: " & WinErrorMsg(GetLastError) & GetLastError
-        Goto cleanup
-    End If
-    
-    pszMemberTag = malloc(cbHash * 2 + 1)
-    For dw As DWORD = 0 To cbHash - 1
-        wsprintfW(@pszMemberTag[dw * 2], StrPtrW("%02X"), rgbHash(dw))
-    Next
-    
-    CloseHandle(hFile)
-    hFile = INVALID_HANDLE_VALUE
-    
-    ' 3. 根据哈希查找目录
-    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @rgbHash(0), cbHash, 0, NULL)
-    If hCatInfo = NULL Then
-        Print "CryptCATAdminEnumCatalogFromHash failed. No catalog found for the file." & WinErrorMsg(GetLastError) & GetLastError
-        Goto cleanup
-    End If
-    
-    ' 4. 获取目录文件信息
-    'memset @catalogInfo, 0, SizeOf(CATALOG_INFO)
-    catalogInfo.cbStruct = SizeOf(catalogInfo)
-    /'Print "WINTRUST_CATALOG_INFO size: " & SizeOf(WINTRUST_CATALOG_INFO)
-    Print "CATALOG_INFO size: " & SizeOf(CATALOG_INFO)
-    Print "cbHash: " & cbHash'/
-    If CryptCATCatalogInfoFromContext(hCatInfo, @catalogInfo, 0) Then
-        Print catalogInfo.wszCatalogFile
-        ' 准备WINTRUST_CATALOG_INFO结构
-        Dim wti As WINTRUST_CATALOG_INFO
-        'memset @wti, 0, SizeOf(WINTRUST_CATALOG_INFO)
-        wti.cbStruct = SizeOf(wti)
-        'wti.dwCatalogVersion = 0 ' 使用默认值
-        
-        wti.pcwszMemberTag = pszMemberTag
-        wti.pcwszMemberFilePath = pwszFilePath
-        wti.pcwszCatalogFilePath = @catalogInfo.wszCatalogFile
-        wti.pbCalculatedFileHash = @rgbHash(0)
-        wti.cbCalculatedFileHash = cbHash
-        'wti.hMemberFile = 0 ' INVALID_HANDLE_VALUE
-        
-        ' 准备WINTRUST_DATA结构
-        Dim wtd As WINTRUST_DATA
-        'memset @wtd, 0, SizeOf(WINTRUST_DATA)
-        wtd.cbStruct = SizeOf(wtd)
-        wtd.dwUIChoice = WTD_UI_NONE
-        wtd.fdwRevocationChecks = WTD_REVOKE_NONE
-        wtd.dwUnionChoice = WTD_CHOICE_CATALOG
-        wtd.pCatalog = @wti
-        wtd.dwStateAction = WTD_STATEACTION_IGNORE ' WTD_STATEACTION_VERIFY
-        'wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-        wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-        
-        ' 5. 调用WinVerifyTrust验证目录签名
-        Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
-        fVerified = (Status = ERROR_SUCCESS)
-        Print wtd.fdwRevocationChecks & " " & wtd.dwStateAction & " " & wtd.dwProvFlags
-        If Status = ERROR_SUCCESS Then Print "有效!" Else Print "WinVerifyTrust失败:" & Hex(Status)
-        
-        ' 关闭验证状态
-        wtd.dwStateAction = WTD_STATEACTION_CLOSE
-        WinVerifyTrust(NULL, @wvtGUID, @wtd)
-    Else
-        Print "CryptCATCatalogInfoFromContext failed: " & WinErrorMsg(GetLastError) & GetLastError
-    End If
-    
-cleanup:
-    ' 6. 清理资源
-    If hCatInfo Then
-        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
-    End If
-    If hCatAdmin Then
-        CryptCATAdminReleaseContext(hCatAdmin, 0)
-    End If
-    If hFile <> INVALID_HANDLE_VALUE Then
-        CloseHandle(hFile)
-    End If
-    If pszMemberTag <> NULL Then
-        free pszMemberTag
-    End If
-    
-    Return fVerified
-End Function
-
-Function CheckFileTrust(ByVal lpFileName As LPCWSTR) As Integer
-    ' 初始化返回值（默认失败）
-    Dim bRet As Integer = FALSE
-    
-    ' 初始化所有结构体和句柄
-    Dim wd As WINTRUST_DATA = Any
-    Dim wfi As WINTRUST_FILE_INFO = Any
-    Dim wci As WINTRUST_CATALOG_INFO = Any
-    Dim ci As CATALOG_INFO = Any
-    
-    Dim hCatAdmin As Any Ptr = NULL
-    Dim hFile As Any Ptr = NULL
-    Dim hCatInfo As Any Ptr = NULL
-    Dim pszMemberTag As WString Ptr = NULL ' 哈希的十六进制字符串（动态分配）
-    
-    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE})
-    
-    Dim dwCnt As ULong = 100
-    Dim byHash(0 To 99) As Byte ' 哈希缓冲区（100字节）
-    
-    Dim hr As Long
-    
-    ' ==========================================================================
-    ' 步骤1：获取CAT目录管理员上下文
-    ' ==========================================================================
-    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = 0 Then
-        Print "CryptCATAdminAcquireContext failed:" & WinErrorMsg(GetLastError) & GetLastError
-        Goto Cleanup ' 获取失败，直接清理资源
-    End If
-    
-    ' ==========================================================================
-    ' 步骤2：打开文件（只读模式，共享读）
-    ' ==========================================================================
-    hFile = CreateFileW(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then
-        Print "CreateFileW failed:" & WinErrorMsg(GetLastError) & GetLastError
-        Goto Cleanup ' 打开失败，清理资源
-    End If
-    
-    ' ==========================================================================
-    ' 步骤3：计算文件哈希（缓冲区大小100字节，与原C++一致）
-    ' ==========================================================================
-    ' 调用API计算哈希（忽略返回值，原C++未判断此处失败）
-    CryptCATAdminCalcHashFromFileHandle(hFile, @dwCnt, @byHash(0), 0)
-    CloseHandle(hFile) ' 计算完成后关闭文件句柄
-    hFile = INVALID_HANDLE_VALUE ' 标记句柄已关闭
-    
-    ' ==========================================================================
-    ' 步骤4：将哈希字节数组转换为十六进制宽字符串（pszMemberTag）
-    ' ==========================================================================
-    If dwCnt > 0 Then
-        ' 分配字符串内存：每个字节占2个字符 + 1个终止符（\0）
-        pszMemberTag = malloc((dwCnt * 2 + 1) * SizeOf(Wstring * 1))
-        If pszMemberTag = NULL Then
-            Print "Allocate failed"
-            Goto Cleanup ' 内存分配失败，清理资源
-        End If
-        
-        ' 逐个字节转换为十六进制（%02X格式）
-        For dw As ULong = 0 To dwCnt - 1
-            wsprintfW(@pszMemberTag[dw * 2], !"\%02X", byHash(dw))
-        Next
-        pszMemberTag[dwCnt * 2] = 0 ' 手动添加字符串终止符
-        Print *pszMemberTag
-    End If
-    
-    ' ==========================================================================
-    ' 步骤5：根据哈希查找CAT目录
-    ' ==========================================================================
-    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @byHash(0), dwCnt, 0, NULL)
-    
-    ' ==========================================================================
-    ' 步骤6：初始化验证参数（分两种情况：有CAT目录 / 无CAT目录）
-    ' ==========================================================================
-    If hCatInfo = NULL Then
-        ' 情况1：无CAT目录 → 直接验证文件（WTD_CHOICE_FILE）
-        With wfi
-            .cbStruct = SizeOf(WINTRUST_FILE_INFO) ' 必须初始化结构体大小
-            .pcwszFilePath = lpFileName            ' 待验证文件路径
-            .hFile = NULL                          ' 不使用文件句柄
-            .pgKnownSubject = NULL                 ' 无已知主题
-        End With
-        
-        With wd
-            .cbStruct = SizeOf(WINTRUST_DATA)      ' 必须初始化结构体大小
-            .dwUnionChoice = WTD_CHOICE_FILE       ' 验证类型：文件
-            .pFile = @wfi                          ' 关联文件验证结构体
-            .dwUIChoice = WTD_UI_NONE              ' 不显示UI
-            .fdwRevocationChecks = WTD_REVOKE_NONE ' 不检查吊销
-            .dwStateAction = WTD_STATEACTION_VERIFY
-            .dwProvFlags = WTD_SAFER_FLAG          ' 启用SAFER模式
-            .hWVTStateData = NULL                  ' 无状态数据
-            .pwszURLReference = NULL               ' 无URL参考
-        End With
-    Else
-        ' 情况2：有CAT目录 → 通过CAT验证（WTD_CHOICE_CATALOG）
-        ' 先获取CAT目录信息
-        ci.cbStruct = SizeOf(CATALOG_INFO) ' 必须初始化结构体大小
-        'Dim wszCatalogPath As WString * MAX_PATH ' 栈上分配260个宽字符的缓冲区
-        'ci.wszCatalogFile = Wstring(MAX_PATH, 0)      ' 将缓冲区地址赋值给结构体指针
-        If CryptCATCatalogInfoFromContext(hCatInfo, @ci, 0) Then
-            Print ci.wszCatalogFile
-            With wci
-                .cbStruct = SizeOf(WINTRUST_CATALOG_INFO) ' 必须初始化结构体大小
-                .pcwszCatalogFilePath = StrPtr(ci.wszCatalogFile) ' CAT文件路径
-                .pcwszMemberFilePath = lpFileName         ' 待验证文件路径
-                .pcwszMemberTag = pszMemberTag            ' 哈希十六进制字符串
-                .hMemberFile = INVALID_HANDLE_VALUE                       ' 不使用文件句柄
-            End With
-            
-            With wd
-                .cbStruct = SizeOf(WINTRUST_DATA)       ' 必须初始化结构体大小
-                .dwUnionChoice = WTD_CHOICE_CATALOG     ' 验证类型：目录
-                .pCatalog = @wci                         ' 关联目录验证结构体
-                .dwUIChoice = WTD_UI_NONE               ' 不显示UI
-                .fdwRevocationChecks = WTD_REVOKE_NONE ' 原C++此处参数值（保持一致）
-                .dwStateAction = WTD_STATEACTION_VERIFY
-                .dwProvFlags = 0 ' WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-                .hWVTStateData = NULL                   ' 无状态数据
-                .pwszURLReference = NULL                ' 无URL参考
-            End With
-        Else
-            Print "CryptCATCatalogInfoFromContext failed: " & GetLastError
-            Goto Cleanup '获取CAT信息失败，直接退出，避免后续崩溃
-        End If
-    End If
-    ' ==========================================================================
-    ' 步骤7：执行信任验证
-    ' ==========================================================================
-    For i As Integer = 0 To 1
-        hr = WinVerifyTrust(NULL, @wvtGUID, @wd)
-        If hr = S_OK Then Exit For
-        Print lpFileName & " WinVerifyTrust failed:" & WinErrorMsg(GetLastError) & GetLastError
-        bRet = (hr = S_OK) ' 验证成功的条件：HRESULT == S_OK
-    Next
-
-' ==========================================================================
-' 步骤8：清理资源（避免内存泄漏，与原C++逻辑一致）
-' ==========================================================================
-Cleanup : 
-    ' 释放CAT目录上下文
-    If hCatInfo <> NULL Then
-        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
-    End If
-    ' 释放CAT管理员上下文
-    If hCatAdmin <> NULL Then
-        CryptCATAdminReleaseContext(hCatAdmin, 0)
-    End If
-    ' 关闭未关闭的文件句柄
-    If hFile <> INVALID_HANDLE_VALUE Then
-        CloseHandle(hFile)
-    End If
-    ' 释放哈希字符串内存（避免内存泄漏）
-    If pszMemberTag <> NULL Then
-        free pszMemberTag
-    End If
-    ' 返回验证结果
-    Return bRet
-End Function
-
-' 改进后的签名验证函数：静默模式（不弹窗），并返回具体错误码
-Function VerifyPeSignature(ByVal filePath As StringW, ByRef outError As Long) As Boolean
-    Dim fileInfo As WINTRUST_FILE_INFO
-    Dim wtd As WINTRUST_DATA
-    Dim wvtGuid As GUID = Type<GUID>(&h00AAC56B, &hCD44, &h11d0, {&h8C, &hC2, &h00, &hC0, &h4F, &hC2, &h95, &hEE}) ' WINTRUST_ACTION_GENERIC_VERIFY_V2
-    Dim result As Long
-    
-    ' 初始化文件信息
-    With fileInfo
-        .cbStruct = SizeOf(WINTRUST_FILE_INFO)
-        .pcwszFilePath = filePath.WstrPtr
-        .hFile = NULL
-        .pgKnownSubject = NULL
-    End With
-    
-    ' 初始化信任数据（关键：配置UI策略为静默模式）
-    ZeroMemory(@wtd, SizeOf(WINTRUST_DATA))  ' 清空结构
-    With wtd
-        .cbStruct = SizeOf(WINTRUST_DATA)
-        .pPolicyCallbackData = NULL
-        .pSIPClientData = NULL
-        .dwUIChoice = WTD_UI_NONE  ' 静默验证，不弹窗
-        .fdwRevocationChecks = WTD_REVOKE_NONE  ' 不检查证书吊销（可选）
-        .dwUnionChoice = WTD_CHOICE_FILE  ' 验证文件
-        .pFile = @fileInfo  ' 关联文件信息
-        .dwStateAction = 0
-        .hWVTStateData = NULL
-        .pwszURLReference = NULL
-        .dwProvFlags = WTD_USE_DEFAULT_OSVER_CHECK' Or 
-        .dwUIContext = 0
-    End With
-    
-    ' 执行验证
-    result = WinVerifyTrust(NULL, @wvtGuid, @wtd)
-    outError = result ' 传出具体错误码
-    ' 检查结果（仅ERROR_SUCCESS表示完全有效）
-    Return (result = ERROR_SUCCESS)
-End Function
+'Function VerifyFileByCatalog(ByVal pwszFilePath As LPCWSTR) As BOOL
+'    Dim hCatAdmin As Any Ptr = NULL
+'    Dim hCatInfo As Any Ptr = NULL
+'    Dim hFile As HANDLE = INVALID_HANDLE_VALUE
+'    Dim fVerified As BOOL = FALSE
+'    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE}) 
+'    
+'    Dim rgbHash(0 To 99) As Byte ' 预留100字节的哈希缓冲区
+'    Dim cbHash As DWORD = SizeOf(Byte) * 100
+'    
+'    Dim catalogInfo As CATALOG_INFO
+'    Dim pszMemberTag As WString Ptr = NULL
+'    
+'    ' 1. 获取目录管理员上下文
+'    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = False Then
+'        Print "CryptCATAdminAcquireContext failed: " & WinErrorMsg(GetLastError) & GetLastError
+'        Return False
+'    End If
+'    
+'    ' 2. 打开文件并计算哈希
+'    hFile = CreateFileW(pwszFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+'    If hFile = INVALID_HANDLE_VALUE Then
+'        Print "CreateFile failed: " & WinErrorMsg(GetLastError) & GetLastError
+'        Goto cleanup
+'    End If
+'    
+'    If CryptCATAdminCalcHashFromFileHandle(hFile, @cbHash, @rgbHash(0), 0) = False Then
+'        Print "CryptCATAdminCalcHashFromFileHandle failed: " & WinErrorMsg(GetLastError) & GetLastError
+'        Goto cleanup
+'    End If
+'    
+'    pszMemberTag = malloc(cbHash * 2 + 1)
+'    For dw As DWORD = 0 To cbHash - 1
+'        wsprintfW(@pszMemberTag[dw * 2], StrPtrW("%02X"), rgbHash(dw))
+'    Next
+'    
+'    CloseHandle(hFile)
+'    hFile = INVALID_HANDLE_VALUE
+'    
+'    ' 3. 根据哈希查找目录
+'    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @rgbHash(0), cbHash, 0, NULL)
+'    If hCatInfo = NULL Then
+'        Print "CryptCATAdminEnumCatalogFromHash failed. No catalog found for the file." & WinErrorMsg(GetLastError) & GetLastError
+'        Goto cleanup
+'    End If
+'    
+'    ' 4. 获取目录文件信息
+'    'memset @catalogInfo, 0, SizeOf(CATALOG_INFO)
+'    catalogInfo.cbStruct = SizeOf(catalogInfo)
+'    /'Print "WINTRUST_CATALOG_INFO size: " & SizeOf(WINTRUST_CATALOG_INFO)
+'    Print "CATALOG_INFO size: " & SizeOf(CATALOG_INFO)
+'    Print "cbHash: " & cbHash'/
+'    If CryptCATCatalogInfoFromContext(hCatInfo, @catalogInfo, 0) Then
+'        Print catalogInfo.wszCatalogFile
+'        ' 准备WINTRUST_CATALOG_INFO结构
+'        Dim wti As WINTRUST_CATALOG_INFO
+'        'memset @wti, 0, SizeOf(WINTRUST_CATALOG_INFO)
+'        wti.cbStruct = SizeOf(wti)
+'        'wti.dwCatalogVersion = 0 ' 使用默认值
+'        
+'        wti.pcwszMemberTag = pszMemberTag
+'        wti.pcwszMemberFilePath = pwszFilePath
+'        wti.pcwszCatalogFilePath = @catalogInfo.wszCatalogFile
+'        wti.pbCalculatedFileHash = @rgbHash(0)
+'        wti.cbCalculatedFileHash = cbHash
+'        'wti.hMemberFile = 0 ' INVALID_HANDLE_VALUE
+'        
+'        ' 准备WINTRUST_DATA结构
+'        Dim wtd As WINTRUST_DATA
+'        'memset @wtd, 0, SizeOf(WINTRUST_DATA)
+'        wtd.cbStruct = SizeOf(wtd)
+'        wtd.dwUIChoice = WTD_UI_NONE
+'        wtd.fdwRevocationChecks = WTD_REVOKE_NONE
+'        wtd.dwUnionChoice = WTD_CHOICE_CATALOG
+'        wtd.pCatalog = @wti
+'        wtd.dwStateAction = WTD_STATEACTION_IGNORE ' WTD_STATEACTION_VERIFY
+'        'wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
+'        wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
+'        
+'        ' 5. 调用WinVerifyTrust验证目录签名
+'        Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
+'        fVerified = (Status = ERROR_SUCCESS)
+'        Print wtd.fdwRevocationChecks & " " & wtd.dwStateAction & " " & wtd.dwProvFlags
+'        If Status = ERROR_SUCCESS Then Print "有效!" Else Print "WinVerifyTrust失败:" & Hex(Status)
+'        
+'        ' 关闭验证状态
+'        wtd.dwStateAction = WTD_STATEACTION_CLOSE
+'        WinVerifyTrust(NULL, @wvtGUID, @wtd)
+'    Else
+'        Print "CryptCATCatalogInfoFromContext failed: " & WinErrorMsg(GetLastError) & GetLastError
+'    End If
+'    
+'cleanup:
+'    ' 6. 清理资源
+'    If hCatInfo Then
+'        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
+'    End If
+'    If hCatAdmin Then
+'        CryptCATAdminReleaseContext(hCatAdmin, 0)
+'    End If
+'    If hFile <> INVALID_HANDLE_VALUE Then
+'        CloseHandle(hFile)
+'    End If
+'    If pszMemberTag <> NULL Then
+'        free pszMemberTag
+'    End If
+'    
+'    Return fVerified
+'End Function
+'
+'Function CheckFileTrust(ByVal lpFileName As LPCWSTR) As Integer
+'    ' 初始化返回值（默认失败）
+'    Dim bRet As Integer = FALSE
+'    
+'    ' 初始化所有结构体和句柄
+'    Dim wd As WINTRUST_DATA = Any
+'    Dim wfi As WINTRUST_FILE_INFO = Any
+'    Dim wci As WINTRUST_CATALOG_INFO = Any
+'    Dim ci As CATALOG_INFO = Any
+'    
+'    Dim hCatAdmin As Any Ptr = NULL
+'    Dim hFile As Any Ptr = NULL
+'    Dim hCatInfo As Any Ptr = NULL
+'    Dim pszMemberTag As WString Ptr = NULL ' 哈希的十六进制字符串（动态分配）
+'    
+'    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE})
+'    
+'    Dim dwCnt As ULong = 100
+'    Dim byHash(0 To 99) As Byte ' 哈希缓冲区（100字节）
+'    
+'    Dim hr As Long
+'    
+'    ' ==========================================================================
+'    ' 步骤1：获取CAT目录管理员上下文
+'    ' ==========================================================================
+'    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = 0 Then
+'        Print "CryptCATAdminAcquireContext failed:" & WinErrorMsg(GetLastError) & GetLastError
+'        Goto Cleanup ' 获取失败，直接清理资源
+'    End If
+'    
+'    ' ==========================================================================
+'    ' 步骤2：打开文件（只读模式，共享读）
+'    ' ==========================================================================
+'    hFile = CreateFileW(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+'    If hFile = INVALID_HANDLE_VALUE Then
+'        Print "CreateFileW failed:" & WinErrorMsg(GetLastError) & GetLastError
+'        Goto Cleanup ' 打开失败，清理资源
+'    End If
+'    
+'    ' ==========================================================================
+'    ' 步骤3：计算文件哈希（缓冲区大小100字节，与原C++一致）
+'    ' ==========================================================================
+'    ' 调用API计算哈希（忽略返回值，原C++未判断此处失败）
+'    CryptCATAdminCalcHashFromFileHandle(hFile, @dwCnt, @byHash(0), 0)
+'    CloseHandle(hFile) ' 计算完成后关闭文件句柄
+'    hFile = INVALID_HANDLE_VALUE ' 标记句柄已关闭
+'    
+'    ' ==========================================================================
+'    ' 步骤4：将哈希字节数组转换为十六进制宽字符串（pszMemberTag）
+'    ' ==========================================================================
+'    If dwCnt > 0 Then
+'        ' 分配字符串内存：每个字节占2个字符 + 1个终止符（\0）
+'        pszMemberTag = malloc((dwCnt * 2 + 1) * SizeOf(Wstring * 1))
+'        If pszMemberTag = NULL Then
+'            Print "Allocate failed"
+'            Goto Cleanup ' 内存分配失败，清理资源
+'        End If
+'        
+'        ' 逐个字节转换为十六进制（%02X格式）
+'        For dw As ULong = 0 To dwCnt - 1
+'            wsprintfW(@pszMemberTag[dw * 2], !"\%02X", byHash(dw))
+'        Next
+'        pszMemberTag[dwCnt * 2] = 0 ' 手动添加字符串终止符
+'        Print *pszMemberTag
+'    End If
+'    
+'    ' ==========================================================================
+'    ' 步骤5：根据哈希查找CAT目录
+'    ' ==========================================================================
+'    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @byHash(0), dwCnt, 0, NULL)
+'    
+'    ' ==========================================================================
+'    ' 步骤6：初始化验证参数（分两种情况：有CAT目录 / 无CAT目录）
+'    ' ==========================================================================
+'    If hCatInfo = NULL Then
+'        ' 情况1：无CAT目录 → 直接验证文件（WTD_CHOICE_FILE）
+'        With wfi
+'            .cbStruct = SizeOf(WINTRUST_FILE_INFO) ' 必须初始化结构体大小
+'            .pcwszFilePath = lpFileName            ' 待验证文件路径
+'            .hFile = NULL                          ' 不使用文件句柄
+'            .pgKnownSubject = NULL                 ' 无已知主题
+'        End With
+'        
+'        With wd
+'            .cbStruct = SizeOf(WINTRUST_DATA)      ' 必须初始化结构体大小
+'            .dwUnionChoice = WTD_CHOICE_FILE       ' 验证类型：文件
+'            .pFile = @wfi                          ' 关联文件验证结构体
+'            .dwUIChoice = WTD_UI_NONE              ' 不显示UI
+'            .fdwRevocationChecks = WTD_REVOKE_NONE ' 不检查吊销
+'            .dwStateAction = WTD_STATEACTION_VERIFY
+'            .dwProvFlags = WTD_SAFER_FLAG          ' 启用SAFER模式
+'            .hWVTStateData = NULL                  ' 无状态数据
+'            .pwszURLReference = NULL               ' 无URL参考
+'        End With
+'    Else
+'        ' 情况2：有CAT目录 → 通过CAT验证（WTD_CHOICE_CATALOG）
+'        ' 先获取CAT目录信息
+'        ci.cbStruct = SizeOf(CATALOG_INFO) ' 必须初始化结构体大小
+'        'Dim wszCatalogPath As WString * MAX_PATH ' 栈上分配260个宽字符的缓冲区
+'        'ci.wszCatalogFile = Wstring(MAX_PATH, 0)      ' 将缓冲区地址赋值给结构体指针
+'        If CryptCATCatalogInfoFromContext(hCatInfo, @ci, 0) Then
+'            Print ci.wszCatalogFile
+'            With wci
+'                .cbStruct = SizeOf(WINTRUST_CATALOG_INFO) ' 必须初始化结构体大小
+'                .pcwszCatalogFilePath = StrPtr(ci.wszCatalogFile) ' CAT文件路径
+'                .pcwszMemberFilePath = lpFileName         ' 待验证文件路径
+'                .pcwszMemberTag = pszMemberTag            ' 哈希十六进制字符串
+'                .hMemberFile = INVALID_HANDLE_VALUE                       ' 不使用文件句柄
+'            End With
+'            
+'            With wd
+'                .cbStruct = SizeOf(WINTRUST_DATA)       ' 必须初始化结构体大小
+'                .dwUnionChoice = WTD_CHOICE_CATALOG     ' 验证类型：目录
+'                .pCatalog = @wci                         ' 关联目录验证结构体
+'                .dwUIChoice = WTD_UI_NONE               ' 不显示UI
+'                .fdwRevocationChecks = WTD_REVOKE_NONE ' 原C++此处参数值（保持一致）
+'                .dwStateAction = WTD_STATEACTION_VERIFY
+'                .dwProvFlags = 0 ' WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
+'                .hWVTStateData = NULL                   ' 无状态数据
+'                .pwszURLReference = NULL                ' 无URL参考
+'            End With
+'        Else
+'            Print "CryptCATCatalogInfoFromContext failed: " & GetLastError
+'            Goto Cleanup '获取CAT信息失败，直接退出，避免后续崩溃
+'        End If
+'    End If
+'    ' ==========================================================================
+'    ' 步骤7：执行信任验证
+'    ' ==========================================================================
+'    For i As Integer = 0 To 1
+'        hr = WinVerifyTrust(NULL, @wvtGUID, @wd)
+'        If hr = S_OK Then Exit For
+'        Print lpFileName & " WinVerifyTrust failed:" & WinErrorMsg(GetLastError) & GetLastError
+'        bRet = (hr = S_OK) ' 验证成功的条件：HRESULT == S_OK
+'    Next
+'
+'' ==========================================================================
+'' 步骤8：清理资源（避免内存泄漏，与原C++逻辑一致）
+'' ==========================================================================
+'Cleanup : 
+'    ' 释放CAT目录上下文
+'    If hCatInfo <> NULL Then
+'        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
+'    End If
+'    ' 释放CAT管理员上下文
+'    If hCatAdmin <> NULL Then
+'        CryptCATAdminReleaseContext(hCatAdmin, 0)
+'    End If
+'    ' 关闭未关闭的文件句柄
+'    If hFile <> INVALID_HANDLE_VALUE Then
+'        CloseHandle(hFile)
+'    End If
+'    ' 释放哈希字符串内存（避免内存泄漏）
+'    If pszMemberTag <> NULL Then
+'        free pszMemberTag
+'    End If
+'    ' 返回验证结果
+'    Return bRet
+'End Function
+'
+'' 改进后的签名验证函数：静默模式（不弹窗），并返回具体错误码
+'Function VerifyPeSignature(ByVal filePath As StringW, ByRef outError As Long) As Boolean
+'    Dim fileInfo As WINTRUST_FILE_INFO
+'    Dim wtd As WINTRUST_DATA
+'    Dim wvtGuid As GUID = Type<GUID>(&h00AAC56B, &hCD44, &h11d0, {&h8C, &hC2, &h00, &hC0, &h4F, &hC2, &h95, &hEE}) ' WINTRUST_ACTION_GENERIC_VERIFY_V2
+'    Dim result As Long
+'    
+'    ' 初始化文件信息
+'    With fileInfo
+'        .cbStruct = SizeOf(WINTRUST_FILE_INFO)
+'        .pcwszFilePath = filePath.WstrPtr
+'        .hFile = NULL
+'        .pgKnownSubject = NULL
+'    End With
+'    
+'    ' 初始化信任数据（关键：配置UI策略为静默模式）
+'    ZeroMemory(@wtd, SizeOf(WINTRUST_DATA))  ' 清空结构
+'    With wtd
+'        .cbStruct = SizeOf(WINTRUST_DATA)
+'        .pPolicyCallbackData = NULL
+'        .pSIPClientData = NULL
+'        .dwUIChoice = WTD_UI_NONE  ' 静默验证，不弹窗
+'        .fdwRevocationChecks = WTD_REVOKE_NONE  ' 不检查证书吊销（可选）
+'        .dwUnionChoice = WTD_CHOICE_FILE  ' 验证文件
+'        .pFile = @fileInfo  ' 关联文件信息
+'        .dwStateAction = 0
+'        .hWVTStateData = NULL
+'        .pwszURLReference = NULL
+'        .dwProvFlags = WTD_USE_DEFAULT_OSVER_CHECK' Or 
+'        .dwUIContext = 0
+'    End With
+'    
+'    ' 执行验证
+'    result = WinVerifyTrust(NULL, @wvtGuid, @wtd)
+'    outError = result ' 传出具体错误码
+'    ' 检查结果（仅ERROR_SUCCESS表示完全有效）
+'    Return (result = ERROR_SUCCESS)
+'End Function
 
 '040904B0
 Function GetFileCompany(FileName As StringW) As StringW
@@ -730,7 +711,9 @@ Function GetFileCompany(FileName As StringW) As StringW
     Dim nQuerySize As DWORD
     Dim langCharset As DWORD
     Dim subBlock As StringW
-    Dim i As Integer  ' 声明循环变量
+    Dim i As Integer ' 声明循环变量
+    
+    If FileExists(Str(FileName)) = 0 Then Return "-"
 
     ' 获取文件版本信息的大小
     dwSize = GetFileVersionInfoSizeW(FileName, @dwDummy)
@@ -769,24 +752,24 @@ Function GetFileCompany(FileName As StringW) As StringW
             End If
             'Next
             ' 遍历所有语言后仍未找到
-            Print "未找到有效的CompanyName信息"
+            MyLog.PrintLog LOG_INFO, "GetFileCompany", "VerQueryValueW", "未找到有效的CompanyName信息, Path=" & FileName
+            Return ""
         Else
-            Print "VerQueryValueW (Translation) 失败, 错误代码: " & GetLastError
+            MyLog.PrintWin32Error "GetFileCompany", "VerQueryValueW", "Translation失败, Path=" & FileName
         End If
     Else
-        'Print "GetFileVersionInfoW 失败, 错误代码: " & GetLastError
+            MyLog.PrintWin32Error "GetFileCompany", "GetFileVersionInfoW", "Path=" & FileName
     End If
 
     ' 释放缓冲区
     Deallocate pBuffer
-    Return ""
+    Return "-"
 End Function
 
-Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
+Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Long
     Dim hCatAdmin As Any Ptr = NULL
     Dim hCatInfo As Any Ptr = NULL
     Dim hFile As HANDLE = INVALID_HANDLE_VALUE
-    Dim fVerified As BOOL = FALSE
     Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE}) 
     
     Dim rgbHash(0 To 99) As Byte ' 预留100字节的哈希缓冲区
@@ -796,7 +779,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
     
     Dim szMemberTag As WString * MAX_PATH
     
-    Dim RevocationChecks As Long = WTD_REVOKE_NONE ' , WTD_REVOKE_WHOLECHAIN}
+    Dim RevocationChecks As Long = WTD_REVOKE_WHOLECHAIN ' , WTD_REVOKE_WHOLECHAIN}
     'Dim StateAction(3) As Long = {WTD_STATEACTION_IGNORE, WTD_STATEACTION_VERIFY, WTD_STATEACTION_AUTO_CACHE, WTD_STATEACTION_AUTO_CACHE_FLUSH}
     Dim StateAction As Long = WTD_STATEACTION_IGNORE
     'Dim ProvFlags(9) As Long = {16, 32, 64, 128, 512, 1024, 2048, 4096, 8192}
@@ -805,6 +788,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
     'Dim ProvFlags As Long = 16 + 1024
     Dim count As Integer = 0
     Dim buffer As String
+    Dim Status As Long
     
     ' 1. 获取目录管理员上下文
     If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = False Then
@@ -845,18 +829,6 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
     ' 4. 获取目录文件信息
     catalogInfo.cbStruct = SizeOf(catalogInfo)
     If CryptCATCatalogInfoFromContext(hCatInfo, @catalogInfo, 0) Then
-        'Print catalogInfo.wszCatalogFile
-        ' 准备WINTRUST_CATALOG_INFO结构
-        /'Dim wti As WINTRUST_CATALOG_INFO
-        wti.cbStruct = SizeOf(wti)
-        'wti.dwCatalogVersion = 0 ' 使用默认值
-        
-        wti.pcwszMemberTag = pszMemberTag
-        wti.pcwszMemberFilePath = pwszFilePath
-        wti.pcwszCatalogFilePath = @catalogInfo.wszCatalogFile
-        wti.pbCalculatedFileHash = @rgbHash(0)
-        wti.cbCalculatedFileHash = cbHash'/
-        'wti.hMemberFile = 0 ' INVALID_HANDLE_VALUE
         Dim wti As WINTRUST_CATALOG_INFO = Type<WINTRUST_CATALOG_INFO>( _
             SizeOf(WINTRUST_CATALOG_INFO), _ ' cbStruct
             0, _                              ' dwCatalogVersion
@@ -882,10 +854,6 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Bool
             
             ' 5. 调用WinVerifyTrust验证目录签名
             Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
-            'Print "WinVerifyTrust:" & Hex(Status)
-            fVerified = (Status = ERROR_SUCCESS)
-            'Print RevocationChecks(a1) & " " & StateAction & " " & wtd.dwProvFlags
-            'If Status = ERROR_SUCCESS Then Print "有效!" Else Print Hex(Status)
             ' 关闭验证状态
             wtd.dwStateAction = WTD_STATEACTION_CLOSE
             WinVerifyTrust(NULL, @wvtGUID, @wtd)
@@ -913,11 +881,7 @@ CheckFileSign:
             .pwszURLReference = NULL               ' 无URL参考
         End With
         ' 5. 调用WinVerifyTrust验证文件签名
-        Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
-        'Print "WinVerifyTrust:" & Hex(Status)
-        fVerified = (Status = ERROR_SUCCESS)
-        'Print RevocationChecks(a1) & " " & StateAction & " " & wtd.dwProvFlags
-        'If Status = ERROR_SUCCESS Then Print "有效!" Else Print Hex(Status)
+        Status = WinVerifyTrust(NULL, @wvtGUID, @wtd)
         ' 关闭验证状态
         wtd.dwStateAction = WTD_STATEACTION_CLOSE
         WinVerifyTrust(NULL, @wvtGUID, @wtd)
@@ -935,8 +899,147 @@ cleanup:
         CloseHandle(hFile)
     End If
     
-    Return fVerified
+    Return Status
 End Function
+
+' ===============================
+' 从队列取任务（线程安全）
+' ===============================
+Function PopTask() As AsyncTaskParam Ptr
+    Dim task As AsyncTaskParam Ptr = 0
+    WaitForSingleObject QueueMutex, INFINITE
+    
+    If UBound(TaskQueue) >= 0 Then
+        task = TaskQueue(0)
+        Dim n As Integer = UBound(TaskQueue)
+        If n > 0 Then
+            For i As Integer = 0 To n - 1
+                TaskQueue(i) = TaskQueue(i + 1)
+            Next
+            ReDim Preserve TaskQueue(n - 1)
+        Else
+            ReDim TaskQueue(-1)
+        End If
+    End If
+
+    ReleaseMutex QueueMutex
+    Return task
+End Function
+
+' ===============================
+' 提交任务
+' ===============================
+Sub EnqueueTask(task As AsyncTaskParam Ptr)
+    WaitForSingleObject QueueMutex, INFINITE
+    Dim n As Integer = UBound(TaskQueue)
+    ReDim Preserve TaskQueue(n + 1)
+    TaskQueue(n + 1) = task
+    ReleaseMutex QueueMutex
+
+    ' 唤醒等待线程
+    SetEvent TaskEvent
+End Sub
+
+' ===============================
+' 工作线程
+' ===============================
+Sub WorkerThread(ByVal lpParam As LPVOID)
+    Dim task As AsyncTaskParam Ptr
+
+    Do While True
+        ' 从队列取任务
+        task = PopTask()
+        If task = 0 Then
+            ' 队列空时等待事件
+            WaitForSingleObject(TaskEvent, INFINITE)
+            ' 重置事件（自动重置或手动 ResetEvent，取决于 CreateEvent 参数）
+            Continue Do
+        End If
+
+        ' 执行签名验证
+        ' 初始化：默认前景色=黑色（所有状态统一）
+        Dim ForeColor As COLORREF = FB_Black
+        Dim BackColor As COLORREF = FB_White ' 默认正常色
+        
+        ' 执行签名验证
+        If task->filePath <> "" AndAlso FileExists(Str(task->filePath)) <> 0 Then
+            Dim verifyResult As Long = VerifyFileSign(@task->filePath)
+            ' 2. 根据验证结果 → 匹配你的5种状态 + 对应颜色
+            Select Case verifyResult
+                ' ==============================================
+                ' 状态1：可信 → 浅绿（微软/知名厂商有效签名）
+                ' ==============================================
+                Case ERROR_SUCCESS
+                    /'If IsMicrosoftOrTrustedVendor(@task->filePath) Then
+                        backColor = FB_LightGreen
+                    Else'/
+                        ' ==============================================
+                        ' 状态2：正常 → 白色（普通第三方有效签名）
+                        ' ==============================================
+                        BackColor = FB_White
+                    'End If
+
+                ' ==============================================
+                ' 状态3：警告 → 金黄（无签名）
+                ' ==============================================
+                Case TRUST_E_NOSIGNATURE
+                    BackColor = FB_GoldenYellow
+
+                ' ==============================================
+                ' 状态4：可疑 → 浅红（签名无效/过期/吊销）
+                ' ==============================================
+                Case TRUST_E_BAD_SIGNATURE, TRUST_E_EXPIRED, TRUST_E_CERT_SUSPENDED
+                    BackColor = FB_LightRed
+
+                ' ==============================================
+                ' 状态5：危险 → 纯红（确认恶意/伪造签名）
+                ' ==============================================
+                Case Else
+                    ' 其他所有异常 → 判定为危险
+                    Print "状态:0x" & WHex(verifyResult) & "(" & verifyResult & ")" & " TRUST_E_EXPIRED:0x" & WHex(TRUST_E_EXPIRED) & "(" & TRUST_E_EXPIRED & ")"
+                    'ForeColor = FB_Red
+            End Select
+            
+            Dim msg As SIGNVERIFY_MSG Ptr = Callocate(SizeOf(SIGNVERIFY_MSG))
+            If msg <> 0 Then
+                msg->ctrlType = task->ctrlType
+                msg->rowIndex = task->rowIndex
+                msg->ForeColor = ForeColor
+                msg->BackColor = BackColor
+                PostMessage task->hWndForm, WM_SignVerify, 0, Cast(LPARAM, msg)
+            End If
+        End If
+
+        Deallocate task
+    Loop
+End Sub
+
+' ===============================
+' 初始化线程池
+' ===============================
+Sub InitThreadPool()
+    QueueMutex = CreateMutex(NULL, FALSE, NULL)
+    TaskEvent = CreateEvent(NULL, FALSE, FALSE, NULL) ' 自动重置事件
+
+    ReDim Threads(ThreadCount - 1)
+    For i As Integer = 0 To ThreadCount - 1
+        Threads(i) = ThreadCreate(@WorkerThread, NULL, 0)
+        Threaddetach Threads(i)
+    Next
+End Sub
+
+' ===============================
+' 启动异步验证
+' ===============================
+Sub VerifyFileSignAsync(hWndForm As hWnd, ctrlType As StringW, rowIndex As Long, filePath As StringW)
+    Dim task As AsyncTaskParam Ptr = Callocate(1, SizeOf(AsyncTaskParam))
+    If task = 0 Then Exit Sub
+    task->hWndForm = hWndForm
+    task->ctrlType = ctrlType
+    task->rowIndex = rowIndex
+    task->filePath = filePath
+    EnqueueTask(task)
+End Sub
 
 Function ForceCopyFolder(SourcePath As StringW, TargetPath As StringW) As Boolean
     Dim pCopyPath As COPY_PATH Ptr = Allocate(SizeOf(COPY_PATH))

@@ -9,6 +9,16 @@ typedef struct _ENUM_THREAD_CONTEXT {
     ULONG ThreadCount;
 }ENUM_THREAD_CONTEXT, * PENUM_THREAD_CONTEXT;
 
+typedef struct _WORKER_THREAD_INFO {
+    PVOID        Thread;         // KTHREAD 内核地址
+    ULONG64      ThreadId;       // 线程ID (TID)
+    KPRIORITY    Priority;       // 线程优先级
+    //ULONG        NumaNode;       // NUMA 节点
+    WCHAR        PoolType[8];    // 队列类型: ExPool/IoPool
+    PVOID        QueueAddress;   // 工作队列 EX_WORK_QUEUE 地址
+	PVOID        StartAddress;    // 线程入口地址
+} WORKER_THREAD_INFO, * PWORKER_THREAD_INFO;
+
 typedef VOID(*PKNORMAL_ROUTINE)(
     IN PVOID NormalContext,
     IN PVOID SystemArgument1,
@@ -65,6 +75,12 @@ NTKERNELAPI UCHAR* PsGetProcessImageFileName(__in PEPROCESS Process);
 
 extern HANDLE MyProcessId;
 extern PVOID ObHandle2;
+
+// 枚举工作队列线程
+NTSTATUS EnumWorkItemThread(
+    __out PWORKER_THREAD_INFO* ppThreadArray,
+    __out ULONG* pCount
+);
 
 VOID RemoveThreadHandleAccess(PACCESS_MASK pDesiredAccess);
 

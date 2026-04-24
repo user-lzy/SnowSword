@@ -2,6 +2,58 @@
 ' 核心逻辑：先匹配 MOV 指令，再向前回溯对应 LEA 指令，彻底解决地址错配
 ' 修复：索引覆盖、无效偏移过滤、SIB字节解析、地址计算精度
 
+' ==================== FastIO 结果结构体 ====================
+' ==================== 核心配置 ====================
+' Windows 官方 FAST_IO_DISPATCH 总函数数量(x64)
+#define FAST_IO_MAX_COUNT 27
+' 每个函数指针大小(x64)
+Const FAST_IO_PTR_SIZE = 8
+
+' ==================== FastIO 连续存储结构体 ====================
+' 内存布局：纯连续指针数组，与内核 FAST_IO_DISPATCH 完全一致
+Type FAST_IO_DISPATCH_ORIGINAL
+    Functions(0 To FAST_IO_MAX_COUNT - 1) As Any Ptr  ' 按初始化顺序连续存储
+    HitCount      As ULong
+    Confidence    As ULong
+End Type
+
+' ==================== FastIO 索引 → 名称映射表（唯一需要的语义表） ====================
+Function FastIoIndexToName(ByVal index As ULong) As String
+    ' 顺序 = 你提供的 FAST_IO_DISPATCH 结构体顺序（无任何自定义/错位）
+    Dim NameTable(0 To FAST_IO_MAX_COUNT - 1) As String = { _
+        "FastIoCheckIfPossible", _        ' 0
+        "FastIoRead", _                   ' 1
+        "FastIoWrite", _                  ' 2
+        "FastIoQueryBasicInfo", _         ' 3
+        "FastIoQueryStandardInfo", _      ' 4  修正：原名错写为 FastIoQueryStdInfo
+        "FastIoLock", _                   ' 5
+        "FastIoUnlockSingle", _           ' 6
+        "FastIoUnlockAll", _              ' 7
+        "FastIoUnlockAllByKey", _         ' 8
+        "FastIoDeviceControl", _          ' 9  补全：官方缺失的核心函数
+        "AcquireFileForNtCreateSection", _' 10
+        "ReleaseFileForNtCreateSection", _ ' 11
+        "FastIoDetachDevice", _           ' 12
+        "FastIoQueryNetworkOpenInfo", _   ' 13
+        "AcquireForModWrite", _           ' 14 修正：官方标准名称
+        "MdlRead", _                      ' 15
+        "MdlReadComplete", _              ' 16
+        "PrepareMdlWrite", _              ' 17
+        "MdlWriteComplete", _             ' 18
+        "FastIoReadCompressed", _         ' 19
+        "FastIoWriteCompressed", _        ' 20
+        "MdlReadCompleteCompressed", _    ' 21
+        "MdlWriteCompleteCompressed", _   ' 22
+        "FastIoQueryOpen", _              ' 23
+        "ReleaseForModWrite", _           ' 24 修正：官方标准名称
+        "AcquireForCcFlush", _            ' 25
+        "ReleaseForCcFlush" _             ' 26
+    }
+    
+    If index > FAST_IO_MAX_COUNT - 1 Then Return "Unknown"
+    Return NameTable(index)
+End Function
+
 Type RECOVERED_DISPATCH
     MajorFunction(0 To IRP_MJ_MAXIMUM_FUNCTION) As Any Ptr
     HitCount As ULong
@@ -253,11 +305,79 @@ Function RecoverDispatchFromDump( _
     Return hitCount > 0
 End Function
 
+' ==================== 核心：扫描 FastIO 原始地址 ====================
+' ==================== 核心：FastIO 顺序解析（按获取顺序连续写入） ====================
+Function RecoverFastIoFromDump( _
+    ByVal pDump As UByte Ptr, _
+    ByVal fileSize As ULong, _
+    ByVal outResult As FAST_IO_DISPATCH_ORIGINAL Ptr) As Boolean
+
+    Const SCAN_RANGE = &H2000
+    ' 初始化：清空所有指针
+    outResult->HitCount = 0
+    outResult->Confidence = 0
+    For i As ULong = 0 To FAST_IO_MAX_COUNT - 1
+        outResult->Functions(i) = 0
+    Next
+    
+    ' 获取 DriverEntry 扫描范围
+    Dim entryRva As ULong = GetDriverEntryRVA(pDump)
+    Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
+    If entryFoa = 0 Then Return False
+
+    Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
+    Dim scanEnd As ULong = entryFoa + SCAN_RANGE
+    If scanEnd > fileSize Then scanEnd = fileSize
+
+    Dim pc As ULong = scanStart
+    Dim currentIndex As ULong = 0 ' 顺序索引：自动递增，无手动分配
+
+    Print "==================== FastIO 顺序扫描 ===================="
+
+    While pc < scanEnd And currentIndex < FAST_IO_MAX_COUNT
+        If pc + 7 > fileSize Then Exit While
+
+        ' 匹配 FastIO 专属指令：MOV CS:qword, RAX → 48 89 05
+        Dim b0 As Integer = GetByte(pDump, pc, fileSize)
+        Dim b1 As Integer = GetByte(pDump, pc+1, fileSize)
+        Dim b2 As Integer = GetByte(pDump, pc+2, fileSize)
+
+        If b0 = &H48 And b1 = &H89 And b2 = &H05 Then
+            Dim funcRva As ULong = 0
+            ' 复用你原有的 LEA 回溯函数（无需修改）
+            If FindLeaForMov(pDump, pc, fileSize, funcRva) Then
+                ' ==================== 核心：按顺序直接写入 ====================
+                outResult->Functions(currentIndex) = Cast(Any Ptr, Cast(ULONG_PTR, funcRva))
+                ' 打印日志（索引+名称+地址）
+                Print "[顺序写入] Index:"; currentIndex; _
+                      " 名称:"; FastIoIndexToName(currentIndex); _
+                      " RVA:0x"; Hex(funcRva)
+                
+                currentIndex += 1
+                outResult->HitCount = currentIndex
+            End If
+            pc += 7 ' 固定7字节指令
+            Continue While
+        End If
+
+        pc += 1
+    Wend
+
+    ' 计算置信度
+    outResult->Confidence = IIf(outResult->HitCount >= 15, 100, outResult->HitCount * 7)
+    Print "=========================================================="
+    Print "FastIO 扫描完成，总恢复数："; outResult->HitCount; " 置信度："; outResult->Confidence; "%"
+    Return outResult->HitCount > 0
+End Function
+
 ' ==================== 测试入口 ====================
-Public Sub Test()
+Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverInfo As DRIVER_INFO) As Boolean
     Dim bytDump() As Byte
-    Dim filePath As String = "C:\Windows\System32\drivers\ntfs.sys"
-    Dim imageBase As ULONG_PTR = &HFFFFF8035C6F0000 ' 从你的截图中获取的 ntfs.sys 加载基址
+    Dim filePath As String = DriverPath
+    Dim fileName As String = GetNameByPath(filePath)
+    Dim imageSize As ULong
+    Print "fileName:" & fileName
+    Dim imageBase As ULONG_PTR = Cast(ULONG_PTR, GetKernelModuleBase(fileName, imageSize)) ' &HFFFFF8035C6F0000 ' 从你的截图中获取的 ntfs.sys 加载基址
 
     ' 读取驱动文件
     On Error GoTo FileError
@@ -269,8 +389,9 @@ Public Sub Test()
 
     Dim fileSize As ULong = UBound(bytDump) + 1
     Dim pDump As UByte Ptr = Cast(UByte Ptr, @bytDump(0))
-
+    'Print "DriverPath:" & DriverPath
     Dim rd As RECOVERED_DISPATCH
+    Dim fastIo As FAST_IO_DISPATCH_ORIGINAL ' 新增
     If RecoverDispatchFromDump(pDump, fileSize, @rd) Then
         Print "==================== 最终恢复结果 ===================="
         Print "IRP_MJ 序号 | 函数 RVA | 虚拟地址(VA)"
@@ -278,16 +399,53 @@ Public Sub Test()
         For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
             If rd.MajorFunction(i) <> 0 Then
                 Dim va As ULONG_PTR = imageBase + CUInt(rd.MajorFunction(i))
-                Print IRP_MJ_ToString(i); " | 0x"; Hex(rd.MajorFunction(i)); " | 0x"; Hex(va)
+                Print IRP_MJ_ToString(i) ; " | 0x"; Hex(rd.MajorFunction(i)) ; " | 0x"; Hex(va)
+                OriginalDriverInfo.MajorFunctionAddr(i) = va
             Else
-                Print "IRP_MJ_"; i; " | 未恢复（" & GetKernelProcAddress("ntoskrnl.exe", "IopInvalidDeviceRequest ") & "）"
+                Dim IopInvalidDeviceRequestAddr As UInteger = NULL
+                SetLastError 0
+                If IoControl(hDrv, IOCTL_GetIopInvalidDeviceRequest, NULL, 0, @IopInvalidDeviceRequestAddr, SizeOf(IopInvalidDeviceRequestAddr)) = 0 Then
+                    Print "[GetNtfsOriginalDispatchFunctionAddr]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
+                    OriginalDriverInfo.MajorFunctionAddr(i) = NULL
+                Else
+                    OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
+                End If
+                Print IRP_MJ_ToString(i); " | 未恢复（" & IopInvalidDeviceRequestAddr & "）"
             End If
         Next
     Else
-        Print "恢复失败，请检查文件权限和PE格式"
+        Print "恢复Dispatch失败，请检查文件权限和PE格式"
+        Return False
     End If
-    Exit Sub
+    
+    If RecoverFastIoFromDump(pDump, fileSize, @fastIo) Then ' 新增
+        Print "==================== 最终恢复结果 ===================="
+        Print "FastIO | 函数 RVA | 虚拟地址(VA)"
+        Print "-----------------------------------------"
+        For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
+            If fastIo.Functions(i) <> 0 Then
+                Dim va As ULONG_PTR = imageBase + CUInt(fastIo.Functions(i))
+                Print FastIoIndexToName(i) ; " | 0x"; Hex(fastIo.Functions(i)) ; " | 0x"; Hex(va)
+                OriginalDriverInfo.FastIOFunctionAddr(i) = va
+            Else
+                /'Dim IopInvalidDeviceRequestAddr As UInteger = NULL
+                SetLastError 0
+                If IoControl(hDrv, IOCTL_GetIopInvalidDeviceRequest, NULL, 0, @IopInvalidDeviceRequestAddr, SizeOf(IopInvalidDeviceRequestAddr)) = 0 Then
+                    Print "[GetNtfsOriginalDispatchFunctionAddr]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
+                    OriginalDriverInfo.MajorFunctionAddr(i) = NULL
+                Else
+                    OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
+                End If'/
+                Print FastIoIndexToName(i); " | 未恢复（0）"
+            End If
+        Next
+    Else
+        Print "恢复FastIO失败，请检查文件权限和PE格式"
+        Return False
+    End If
+    Return True
 
 FileError:
     Print "文件读取失败！请以管理员权限运行，或检查文件路径是否正确"
-End Sub
+    Return True
+End Function

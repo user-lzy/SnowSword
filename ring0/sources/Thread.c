@@ -3,6 +3,93 @@
 #include "Thread.h"
 #include "SSDT.h"
 
+// 前向声明
+struct _EPARTITION;
+typedef struct _EPARTITION* PEPARTITION;
+
+// Windows 内核标准头文件已定义的基础结构
+// 无需重复定义，仅用于编译兼容性：
+// typedef struct _LIST_ENTRY LIST_ENTRY, *PLIST_ENTRY;
+// typedef struct _WORK_QUEUE_ITEM WORK_QUEUE_ITEM, *PWORK_QUEUE_ITEM;
+// typedef struct _EX_PUSH_LOCK EX_PUSH_LOCK, *PEX_PUSH_LOCK;
+// typedef struct _EPROCESS EPROCESS, *PEPROCESS;
+
+// 核心结构体：_EPARTITION (严格匹配 WinDbg 偏移/字段)
+typedef struct _EPARTITION {
+    // +0x000 内存管理器分区句柄
+    PVOID MmPartition;
+    // +0x008 缓存管理器分区句柄
+    PVOID CcPartition;
+    // +0x010 执行体分区句柄 (核心：工作队列所属的 EX_PARTITION)
+    PVOID ExPartition;
+    // +0x018 会话管理器分区句柄
+    PVOID SmPartition;
+    // +0x020 页面文件分区句柄
+    PVOID PfPartition;
+
+    // +0x028 强引用计数 (Int8B = 64位有符号整数)
+    INT64 HardReferenceCount;
+    // +0x030 打开的句柄计数
+    INT64 OpenHandleCount;
+
+    // +0x038 活动分区链表节点
+    LIST_ENTRY ActivePartitionLinks;
+
+    // +0x048 父分区指针
+    PEPARTITION ParentPartition;
+
+    // +0x050 分区销毁工作项
+    WORK_QUEUE_ITEM TeardownWorkItem;
+
+    // +0x070 销毁操作同步锁
+    EX_PUSH_LOCK TeardownLock;
+
+    // +0x078 分区关联的系统进程 (System 进程)
+    PEPROCESS SystemProcess;
+    // +0x080 系统进程句柄
+    PVOID SystemProcessHandle;
+
+    // +0x088 分区标志位 (Uint4B = 32位无符号整数)
+    union {
+        ULONG PartitionFlags;
+        // 位域定义：严格匹配 WinDbg (Pos 0, 1 Bit)
+        struct {
+            ULONG PairedWithJob : 1;  // 第0位：是否与作业关联
+            ULONG Reserved : 31;      // 保留位
+        };
+    };
+} EPARTITION, * PEPARTITION;
+
+typedef struct _KPRIQUEUE {
+    // +0x000
+    UCHAR      Header[0x18];          // _DISPATCHER_HEADER
+    // +0x018 32个优先级工作项队列
+    LIST_ENTRY EntryListHead[32];
+    // +0x218
+    INT32      CurrentCount[32];
+    // +0x298
+    ULONG      MaximumCount;
+    // +0x2A0 【核心】工作线程链表头（你系统的真实偏移）
+    LIST_ENTRY ThreadListHead;
+} KPRIQUEUE, * PKPRIQUEUE;
+
+// 【修正】EX_WORK_QUEUE 严格匹配 WinDbg
+typedef struct _EX_WORK_QUEUE {
+    // +0x000 内嵌优先级队列
+    KPRIQUEUE  WorkPriQueue;
+    // 后续字段无需关注，不影响遍历
+    UCHAR      Reserved[0x2B0 - 0x2A8];
+} EX_WORK_QUEUE, * PEX_WORK_QUEUE;
+
+// 【修正】EX_PARTITION：WorkQueues 改为二维指针
+typedef struct _EX_PARTITION {
+    PVOID              PartitionObject;
+    // 【关键修复】二维数组 [NUMA][PoolType] -> EX_WORK_QUEUE*
+    PEX_WORK_QUEUE** WorkQueues;
+    PVOID* WorkQueueManagers;
+    ULONG              QueueAllocationMask;
+} EX_PARTITION, * PEX_PARTITION;
+
 NTSTATUS NTKERNELAPI PsGetContextThread(
     _In_    PETHREAD  Thread,
     _Inout_ PCONTEXT  Context,        // 输出寄存器上下文
@@ -15,8 +102,205 @@ NTSTATUS NTKERNELAPI PsSetContextThread(
     _In_  ULONG     Flags          // 固定传 0
 );
 
+NTSYSAPI NTSTATUS NTAPI ZwOpenThread(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PCLIENT_ID ClientId
+);
+// 线程信息类 - 获取入口地址
+#define ThreadQuerySetWin32StartAddress 9
+NTSYSAPI NTSTATUS NTAPI ZwQueryInformationThread(
+    _In_ HANDLE ThreadHandle,
+    _In_ THREADINFOCLASS ThreadInformationClass,
+    _Out_ PVOID ThreadInformation,
+    _In_ ULONG ThreadInformationLength,
+    _Out_opt_ PULONG ReturnLength
+);
+
 HANDLE MyProcessId = 0;
 PVOID ObHandle2 = NULL;
+
+PVOID FindPspSystemPartition() {
+    UCHAR pSpecialCode[3] = { 0 };
+    pSpecialCode[0] = 0x4c;
+    pSpecialCode[1] = 0x8b;
+    pSpecialCode[2] = 0x05;
+
+	PVOID result = SearchSpecialCode((PUCHAR)ExQueueWorkItem, 0x100, pSpecialCode, sizeof(pSpecialCode));
+    if (result) {
+        // 计算全局变量地址：指令地址 + 指令长度 + RIP相对偏移
+        PVOID pInstruction = result;
+        ULONG instructionLength = 7; // 4c 8b 05 xx xx xx xx
+        LONG ripOffset = *(PLONG)((PUCHAR)pInstruction + 3);
+        return (PVOID)((ULONG_PTR)pInstruction + instructionLength + ripOffset);; // 解引用获取实际地址
+    }
+
+    pSpecialCode[0] = 0x48;
+    pSpecialCode[1] = 0x8b;
+    pSpecialCode[2] = 0x05;
+
+    result = SearchSpecialCode((PUCHAR)ExQueueWorkItem, 0x100, pSpecialCode, sizeof(pSpecialCode));
+    if (result) {
+        // 计算全局变量地址：指令地址 + 指令长度 + RIP相对偏移
+        PVOID pInstruction = result;
+        ULONG instructionLength = 7; // 48 8b 05 xx xx xx xx
+        LONG ripOffset = *(PLONG)((PUCHAR)pInstruction + 3);
+        return (PVOID)((ULONG_PTR)pInstruction + instructionLength + ripOffset);; // 解引用获取实际地址
+    }
+    return NULL; // 未找到
+}
+
+PVOID GetThreadStartAddress(HANDLE ThreadId) {
+    HANDLE hThread = NULL;
+    PVOID startAddress = NULL;
+	DWORD returnLength = 0;
+    // 打开线程
+    NTSTATUS status = OpenThread(ThreadId, &hThread);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("无法打开线程 %Iu，状态: 0x%X\n", (ULONG_PTR)ThreadId, status);
+        return NULL;
+    }
+    // 查询线程信息获取入口地址
+    status = ZwQueryInformationThread(hThread, ThreadQuerySetWin32StartAddress, &startAddress, sizeof(startAddress), &returnLength);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("查询线程入口地址失败，returnLength = %d, 状态: 0x%X\n", returnLength, status);
+        startAddress = NULL;
+    }
+    // 关闭线程句柄
+    ZwClose(hThread);
+    return startAddress;
+}
+
+// 枚举工作队列线程
+NTSTATUS EnumWorkItemThread(
+    __out PWORKER_THREAD_INFO* ppThreadArray,
+    __out ULONG* pCount
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PWORKER_THREAD_INFO pArray = NULL;
+    ULONG threadCount = 0;
+    ULONG numa, pool;
+
+    // 初始化输出参数
+    *ppThreadArray = NULL;
+    *pCount = 0;
+
+    // 1. 获取系统分区
+    PVOID pPspSystemPartition = FindPspSystemPartition();
+    if (!pPspSystemPartition)
+    {
+        status = STATUS_NOT_FOUND;
+        goto Cleanup;
+    }
+
+    PEPARTITION pEPart = *(PEPARTITION*)pPspSystemPartition;
+    if (!pEPart || !pEPart->ExPartition)
+    {
+        status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    PEX_PARTITION pExPart = (PEX_PARTITION)pEPart->ExPartition;
+    if (!pExPart->WorkQueues)
+    {
+        status = STATUS_NO_MORE_ENTRIES;
+        goto Cleanup;
+    }
+
+    // ==================== 第一步：统计总线程数 ====================
+    for (numa = 0; numa < 1; numa++)
+    {
+        for (pool = 0; pool < 2; pool++)
+        {
+            PEX_WORK_QUEUE pQueue = pExPart->WorkQueues[numa][pool];
+            if (!pQueue) continue;
+
+            PLIST_ENTRY pHead = &pQueue->WorkPriQueue.ThreadListHead;
+            PLIST_ENTRY pNode = pHead->Flink;
+
+            while (pNode != pHead && pNode != NULL)
+            {
+                threadCount++;
+                pNode = pNode->Flink;
+            }
+        }
+    }
+
+    // 无线程
+    if (threadCount == 0)
+    {
+        status = STATUS_NO_MORE_ENTRIES;
+        goto Cleanup;
+    }
+
+    // ==================== 第二步：分配内存 ====================
+    pArray = (PWORKER_THREAD_INFO)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        threadCount * sizeof(WORKER_THREAD_INFO),
+        'WrkE'  // 内存标签: WorkE
+    );
+    if (!pArray)
+    {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(pArray, threadCount * sizeof(WORKER_THREAD_INFO));
+
+    // ==================== 第三步：填充线程数据 ====================
+    ULONG idx = 0;
+    for (numa = 0; numa < 1; numa++)
+    {
+        for (pool = 0; pool < 2; pool++)
+        {
+            PEX_WORK_QUEUE pQueue = pExPart->WorkQueues[numa][pool];
+            if (!pQueue) continue;
+
+            PLIST_ENTRY pHead = &pQueue->WorkPriQueue.ThreadListHead;
+            PLIST_ENTRY pNode = pHead->Flink;
+
+            while (pNode != pHead && pNode != NULL && idx < threadCount)
+            {
+                PKTHREAD pKThread = (PKTHREAD)((PUCHAR)pNode - 0x208);
+                PETHREAD pEThread = (PETHREAD)pKThread;
+                KPRIORITY priority = KeQueryPriorityThread(pKThread);
+                
+                // 填充结构体
+                PWORKER_THREAD_INFO entry = &pArray[idx++];
+                entry->Thread = pKThread;
+                entry->ThreadId = (ULONG64)PsGetThreadId(pEThread);
+                entry->Priority = priority;
+                //entry->NumaNode = numa;
+                RtlStringCbCopyW(entry->PoolType, sizeof(entry->PoolType), (pool == 0 ? L"ExPool" : L"IoPool"));
+                entry->QueueAddress = pQueue;
+				entry->StartAddress = GetThreadStartAddress((HANDLE)entry->ThreadId);
+
+                DbgPrint("[调试] 线程 %Iu: 优先级=%d, 池=%ws, 入口=0x%p\n",
+                    (ULONG_PTR)entry->ThreadId,
+                    entry->Priority,
+                    entry->PoolType,
+                    entry->StartAddress
+				);
+
+                pNode = pNode->Flink;
+            }
+        }
+    }
+
+    // 输出结果
+    *ppThreadArray = pArray;
+    *pCount = threadCount;
+    status = STATUS_SUCCESS;
+
+Cleanup:
+    // 失败时释放内存
+    if (!NT_SUCCESS(status) && pArray)
+    {
+        ExFreePoolWithTag(pArray, 'WrkE');
+    }
+    return status;
+}
 
 PETHREAD GetFirstThreadFromProcess(PEPROCESS TargetProcess)
 {

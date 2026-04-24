@@ -28,3 +28,9 @@ VOID UnloadDriver(PDRIVER_OBJECT pDriverObject)
 		//ZwUn
 	}
 }
+
+BOOLEAN RemoveAttachedDevice(PDEVICE_OBJECT TargetDevice)
+{
+	IoDetachDevice(TargetDevice);
+	return TRUE;
+}

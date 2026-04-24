@@ -1336,6 +1336,10 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Print "错误：路径不存在或无法解析MFT记录 → " & lpFilePath
         Return False
     End If
+    Print ">>> [调试] 卷基础参数:"
+    Print "      ClusterSize: " & ctx->clusterSize
+    Print "      MFT Start LCN: " & ctx->mftStartLCN
+    Print "      MFT Record Size: " & ctx->mftRecordSize
     Print "成功解析路径，对应MFT记录号：" & targetMftRecordNum
     
     ' ========== 步骤2：读取MFT记录（带USA修复） ==========
@@ -1355,6 +1359,11 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Return False
     End If
     
+    Print "      Magic: " & Hex(mrh->magic, 8) & " (期望: 454C4946)"
+    Print "      Flags: " & Hex(mrh->dwFlags, 4) & " (Bit0=InUse, Bit1=IsDir)"
+    Print "      AttrOffset: " & mrh->attrOffset
+    Print "      BytesInUse: " & mrh->bytesInUse
+    
     ' ========== 步骤3：解析DATA属性（类型0x80） ==========
     Dim dataAttr As ATTR_HEADER_NONRESIDENT Ptr = NULL
     Dim attrOff As ULong = mrh->attrOffset
@@ -1362,7 +1371,11 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
     
     ' 遍历MFT记录的所有属性，找到DATA属性
     Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
+        Print ">>> [调试] 检查属性偏移: " & attrOff
         Dim gAttr As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
+        Print "      TypeID: " & Hex(gAttr->typeID, 8) & " (80=DATA, 30=FILENAME)"
+        Print "      TotalLen: " & gAttr->totalLen
+        Print "      NonResident: " & gAttr->nonResident
         
         ' 终止条件：属性类型ID为0xFFFFFFFF
         If gAttr->typeID = &HFFFFFFFF Then Exit Do
@@ -1373,6 +1386,12 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
             Dim dataSize As ULong = 0
             If gAttr->nonResident = 1 Then
                 Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
+                Print ">>> [调试] 非常驻 DATA 属性详情:"
+                Print "      LowVCN: " & nr->lowVCN
+                Print "      HighVCN: " & nr->highVCN
+                Print "      DataSize: " & nr->dataSize
+                Print "      AllocSize: " & nr->allocSize
+                Print "      RunOff: " & nr->runOff
                 dataSize = nr->dataSize
                 Dim allocatedSize As ULongLong = nr->allocSize ' 已分配大小
                 
@@ -1409,14 +1428,15 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
                 
                 Print "    开始解析RunList..."
                 Dim runIndex As Integer = 0
-                
+                Dim baseVCN As ULongLong = nr->lowVCN  ' 新增：保存该属性的起始 VCN
+
                 While runPtr <> NULL And runPtr[0] <> 0
                     Dim runLen As ULongLong
                     runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen)
                     
                     If runPtr = NULL Then Exit While
                     
-                    Print "      Run " & runIndex & ": LCN=" & currentLCN & " 长度=" & runLen & " 簇"
+                    Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
                     
                     If runLen = 0 Or runLen > 1000000 Then
                         Print "    [!] 无效的run长度: " & runLen
@@ -1425,8 +1445,13 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
                     
                     For i As ULong = 0 To runLen - 1
                         Dim lcn As ULongLong = currentLCN + i
-                        'Dim offsetInData As ULongLong = (vcn + i) * clusterSize
-                        Dim offsetInData As ULongLong = bytesWritten  ' ← 用已写字节数作为偏移
+                        
+                        ' ============== 核心修改开始 ==============
+                        ' 错误写法：Dim offsetInData As ULongLong = bytesWritten
+                        ' 正确写法：基于 (当前VCN - 起始VCN) 计算文件偏移
+                        Dim currentVCN As ULongLong = vcn + i
+                        Dim offsetInData As ULongLong = (currentVCN - baseVCN) * ctx->clusterSize
+                        ' ============== 核心修改结束 ==============
                         
                         ' 边界检查
                         If offsetInData >= dataSize Then 
@@ -1442,7 +1467,7 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
                         If bytesToRead = 0 Then Exit For
                         
                         If lcn = 0 Then
-                            ' 稀疏运行：已初始化为0，跳过读取
+                            ' 稀疏运行：保持为0（已初始化）
                             bytesWritten += bytesToRead
                         Else
                             ' 正常运行：读取数据
@@ -1451,12 +1476,11 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
                                 bytesWritten += bytesToRead
                             Else
                                 Print "      [!] 读取簇失败: LCN=" & lcn
-                                ' 保持为0（已初始化）
                             End If
                         End If
                     Next
                     
-                    vcn += runLen
+                    vcn += runLen  ' 正确跟踪下一个 Run 的起始 VCN
                     runIndex += 1
                 Wend
                 

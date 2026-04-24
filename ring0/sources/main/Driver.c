@@ -85,6 +85,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
 
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
+
+    //EnumWorkerThreads();
     
     return STATUS_SUCCESS;
 }
@@ -657,9 +659,9 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         DbgPrint("[IOCTL_TIMER] 进入IOCTL，Input=%lu, Output=%lu, 缓存数量=%lu\n",
             InputDataLength, OutputDataLength, ulTimerCount);
 
-        HANDLE TargetProcessId = NULL;
+        //HANDLE TargetProcessId = NULL;
         // 读取PID
-        if (pInputData != NULL && InputDataLength >= sizeof(HANDLE))
+        /*if (pInputData != NULL && InputDataLength >= sizeof(HANDLE))
         {
             TargetProcessId = *(PHANDLE)pInputData;
             DbgPrint("[IOCTL_TIMER] 目标PID: %llu\n", (ULONG64)TargetProcessId);
@@ -670,7 +672,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             status = STATUS_INVALID_PARAMETER;
             Information = 0;
             break;
-        }
+        }*/
 
         // ====================== 【修复】强制判断：只有输出缓冲区有效 才是第二次调用 ======================
         if (pOutputData != NULL && OutputDataLength > 0 && ulTimerCount > 0)
@@ -717,7 +719,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
 
             // 枚举定时器
-            NTSTATUS enumStatus = EnumProcessTimers(TargetProcessId, &pTimerArray, &ulTimerCount);
+            NTSTATUS enumStatus = EnumProcessTimers(&pTimerArray, &ulTimerCount);
             DbgPrint("[IOCTL_TIMER] 枚举完成，数量=%lu, 状态=0x%X\n", ulTimerCount, enumStatus);
 
             // 失败处理
@@ -734,7 +736,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             // 返回长度（核心！第一次调用必须返回）
             Information = sizeof(WINDOW_TIMER) * ulTimerCount;
             status = STATUS_SUCCESS;
-            DbgPrint("[IOCTL_TIMER] 第一次调用完成，返回总长度=%lu\n", Information);
+            DbgPrint("[IOCTL_TIMER] 第一次调用完成，返回总长度=%Iu\n", Information);
         }
         break;
     case IOCTL_DeleteCallback:
@@ -1171,6 +1173,71 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         status = STATUS_SUCCESS;
         break;
     }
+
+    // 在你的 IOCTL 分发函数中添加
+    case IOCTL_EnumWorkItemThread:
+    {
+        // 静态缓存（和 WFP 逻辑一致）
+        static PWORKER_THREAD_INFO pThreadCache = NULL;
+        static ULONG threadCount = 0;
+        ULONG totalSize = 0;
+
+        // 初始化
+        Information = 0;
+        status = STATUS_SUCCESS;
+
+        // 无缓存 → 重新枚举
+        if (pThreadCache == NULL || threadCount == 0)
+        {
+            // 释放旧缓存
+            if (pThreadCache)
+            {
+                ExFreePoolWithTag(pThreadCache, 'WrkE');
+                pThreadCache = NULL;
+                threadCount = 0;
+            }
+
+            // 枚举工作线程
+            status = EnumWorkItemThread(&pThreadCache, &threadCount);
+            if (!NT_SUCCESS(status))
+            {
+                DbgPrint("EnumWorkerThreads failed: %08X\n", status);
+                pThreadCache = NULL;
+                threadCount = 0;
+                break;
+            }
+        }
+
+        // 计算总数据大小
+        totalSize = sizeof(WORKER_THREAD_INFO) * threadCount;
+        Information = totalSize;
+        DbgPrint("[IOCTL] 枚举到 %lu 个工作线程，总大小: %lu bytes\n", threadCount, totalSize);
+
+        // 缓冲区不足/为空 → 返回所需大小
+        if (pOutputData == NULL || OutputDataLength < totalSize)
+        {
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        // 拷贝数据到用户态
+        if (pThreadCache != NULL && totalSize > 0)
+        {
+            memcpy(pOutputData, pThreadCache, totalSize);
+
+            DbgPrint("[IOCTL] 拷贝成功，首线程地址: 0x%llx\n",
+                pThreadCache[0].Thread);
+
+            // 释放缓存
+            ExFreePoolWithTag(pThreadCache, 'WrkE');
+            pThreadCache = NULL;
+            threadCount = 0;
+        }
+
+        status = STATUS_SUCCESS;
+        break;
+    }
+
     // ====================== 消息钩子枚举 IOCTL ======================
     case IOCTL_EnumMsgHook:
     {
@@ -1341,7 +1408,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 break;
             }
         }
-
+        
         // 计算总数据长度
         totalSize = sizeof(WIN32K_HOTKEY_INFO) * hotkeyCount;
         Information = totalSize;
@@ -1370,6 +1437,24 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         status = STATUS_SUCCESS;
         break;
     }
+
+    case IOCTL_GetIopInvalidDeviceRequest:
+        if (pOutputData != NULL && OutputDataLength >= sizeof(PVOID)) {
+            PVOID FuncAddr = (PVOID)FindIopInvalidDeviceRequest();
+            memcpy(pOutputData, &FuncAddr, sizeof(PVOID));
+            Information = sizeof(PVOID);
+            status = STATUS_SUCCESS;
+        }
+        else {
+            Information = 0;
+            status = STATUS_INSUFFICIENT_RESOURCES;
+		}
+
+    case IOCTL_RemoveAttachedDevice:
+        if (pInputData != NULL && InputDataLength > 0) {
+            PDEVICE_OBJECT DeviceObject = *(PDEVICE_OBJECT*)pInputData;
+            status = RemoveAttachedDevice(DeviceObject) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+		}
 
     default: 
         break;

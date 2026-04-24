@@ -17,6 +17,8 @@ Enum Interface
     
     KernelModule
     KernelThread
+    WorkItemThread
+    
     File
     Callbacks
     WfpCallout
@@ -28,7 +30,7 @@ Enum Interface
     IOFunction
     IPScan
     Sniffer
-    WindowTimer
+    ProcessTimer
     GDT
     IDT
     SSDT
@@ -43,6 +45,8 @@ Enum Interface
     EtwProvider
     WinsockSPI
     TaskScheduler
+    
+    MaxInterfaceCount
 End Enum
 
 Type CurrentDriverInfo
@@ -66,6 +70,10 @@ Type CURRENT_INFORMATION
     CurrentDriver As CurrentDriverInfo
 End Type
 
+Type TempTextNode
+    Buf As WCHAR Ptr
+End Type
+
 Type LVRow
     ColCount As Long
     Cols As Wstring Ptr Ptr   ' 指向 Wstring* 数组
@@ -78,10 +86,6 @@ Type ListViewSnapshot
     RowCount As Long
 End Type
 
-Type TempTextNode
-    Buf As WCHAR Ptr
-End Type
-
 Type ListViewContext
     hLV As HWND
 
@@ -91,7 +95,25 @@ Type ListViewContext
     VisibleCount As Long
 
     Filter As Wstring Ptr
+    
+    SortedColumn As Long       ' 当前排序列索引
+    SortAscending As Boolean ' 升降序标记
+    
+    ' ===================== 新增：列类型缓存（性能优化核心） =====================
+    ColumnIsNumber(Any) As Boolean  ' 缓存列是否为纯数字列
 End Type
+
+' 2. 模块缓存核心结构体：存储单个模块的所有状态
+Type ViewModuleCache
+    IsCached As Boolean          ' 标记：是否已缓存数据
+    pSnap As ListViewSnapshot Ptr ' 【新增】深拷贝的列表数据快照
+    SelectedIndex As Long        ' 选中项索引
+    TopVisibleIndex As Long      ' 列表滚动顶部位置（恢复滚动条）
+    ItemCount As Long            ' 项数量
+End Type
+
+' 3. 全局缓存数组：为每个模块分配独立缓存（核心）
+Dim Shared g_ViewCache(MaxInterfaceCount - 1) As ViewModuleCache
 
 Const FB_Red As COLORREF = BGR(255, 0, 0)
 Const FB_LightPinkRed As COLORREF = BGR(240, 210, 210)
@@ -109,7 +131,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
     ListView.DeleteAllItems ' 此处是否有问题
     TreeView.DeleteAllItems
     TreeList.DeleteItem MC_TLI_ROOT
-    For i As Integer = TreeList.GetColumnCount - 1 To 1 Step -1
+    For i As Integer = TreeList.GetColumnCount - 1 To 0 Step -1
         TreeList.DeleteColumn i
     Next
     'Print "CurrentType:" & CurrentType & __FUNCTION__
@@ -125,6 +147,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "EPROCESS",, 270
                 .AddColumn "名称",, 200
                 .AddColumn "路径",, 500
+                .AddColumn "会话-用户名",, 200
                 .AddColumn "命令行参数",, 500
                 .AddColumn "公司名",, 200
             Case Module
@@ -133,6 +156,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "基址",, 230
                 .AddColumn "大小",, 150
                 .AddColumn "路径",, 500
+                .AddColumn "公司名",, 200
             Case Thread
                 '.AddColumn "序号",, 50
                 .AddColumn "TID",, 100
@@ -143,12 +167,43 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "Teb",, 150
                 '.AddColumn "大小",, 50
                 .AddColumn "所属模块",, 1000
+                .AddColumn "公司名",, 200
+            Case Memory
+                .AddColumn "地址",, 250
+                .AddColumn "大小",, 100
+                .AddColumn "属性",, 150
+                .AddColumn "状态",, 150
+                .AddColumn "类型",, 150
+                .AddColumn "基址",, 250
+                .AddColumn "对应模块",, 400
+                '.AddColumn "公司名",, 200
+            Case Windows
+                .AddColumn "句柄",, 150
+                .AddColumn "名称",, 300
+                .AddColumn "类名",, 300
+                .AddColumn "TID",, 100
+                .AddColumn "所属模块",, 400
+                '.AddColumn "公司名",, 200
+            Case Handles
+                .AddColumn "类型",, 200
+                .AddColumn "名称",, 300
+                .AddColumn "值",, 100
+                .AddColumn "访问权限",, 150
+                .AddColumn "对象地址",, 200
             Case Privilege
                 .AddColumn "LUID",, 100
                 .AddColumn "名称",, 400
                 .AddColumn "状态",, 200
                 .AddColumn "描述",, 400
                 .AddColumn "属性",, 100
+            Case ProcessTimer
+                .AddColumn "定时器ID",, 150
+                .AddColumn "超时时间",, 150
+                .AddColumn "回调地址",, 250
+                .AddColumn "所属模块",, 250
+                .AddColumn "所属窗口",, 150
+                .AddColumn "所属TID",, 100
+                .AddColumn "所属PID",, 100
             Case MsgHook
                 .AddColumn "hHook",, 100
                 .AddColumn "类型",, 150
@@ -189,6 +244,13 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "ETHREAD",, 270
                 .AddColumn "线程入口",, 150
                 .AddColumn "所属模块",, 500
+            Case WorkItemThread
+                .AddColumn "TID",, 100
+                .AddColumn "ETHREAD",, 200
+                .AddColumn "优先级",, 100
+                .AddColumn "状态",, 100
+                .AddColumn "入口地址",, 200
+                .AddColumn "所属模块",, 250
             Case SSDT
                 .AddColumn "序号",, 100
                 .AddColumn "索引",, 100
@@ -202,11 +264,11 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "当前地址",, 250
                 .AddColumn "所属模块",, 500
             Case GDT
-                If TreeList.GetColumnCount = 0 Then
+                'If TreeList.GetColumnCount = 0 Then
                     TreeList.AddColumn "CPU", 100
-                Else
+                /'Else
                     TreeList.SetColumn 1, "CPU", 100
-                End If
+                End If'/
                 TreeList.AddColumn "GDT Entry/Base", 250
                 TreeList.AddColumn "Limit", 100
                 TreeList.AddColumn "SEL", 100
@@ -217,11 +279,11 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 TreeList.AddColumn "Granularity", 100
                 TreeList.AddColumn "Description", 300
             Case IDT
-                If TreeList.GetColumnCount = 0 Then
+                'If TreeList.GetColumnCount = 0 Then
                     TreeList.AddColumn "CPU", 100
-                Else
+                /'Else
                     TreeList.SetColumn 1, "CPU", 100
-                End If
+                End If'/
                 TreeList.AddColumn "ID", 100
                 TreeList.AddColumn "函数名称", 250
                 TreeList.AddColumn "当前函数地址", 250
@@ -235,21 +297,21 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "回调函数上下文",, 300
                 .AddColumn "备注",, 300
             Case Minifilter
-                If TreeList.GetColumnCount = 0 Then
+                'If TreeList.GetColumnCount = 0 Then
                     TreeList.AddColumn "名称", 250
-                Else
-                    TreeList.SetColumn 1, "名称", 250
-                End If
+                /'Else
+                    TreeList.SetColumn 0, "名称", 250
+                End If'/
                 TreeList.AddColumn "回调函数地址", 280
                 TreeList.AddColumn "所属模块", 500
                 TreeList.AddColumn "PFLT_FILTER", 280
                 TreeList.AddColumn "Altitude", 150
             Case FilterDriver
-                If TreeList.GetColumnCount = 0 Then
+                'If TreeList.GetColumnCount = 0 Then
                     TreeList.AddColumn "驱动名称", 250
-                Else
+                /'Else
                     TreeList.SetColumn 1, "驱动名称", 250
-                End If
+                End If'/
                 TreeList.AddColumn "驱动对象地址", 250
                 TreeList.AddColumn "路径", 500
                 TreeList.AddColumn "设备名称", 250
@@ -277,31 +339,6 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "文件路径",, 300
                 .AddColumn "进程路径",, 300
                 .AddColumn "文件句柄",, 150
-            Case Memory
-                .AddColumn "地址",, 250
-                .AddColumn "大小",, 100
-                .AddColumn "属性",, 150
-                .AddColumn "状态",, 150
-                .AddColumn "类型",, 150
-                .AddColumn "基址",, 250
-                .AddColumn "对应模块",, 400
-            Case Windows
-                .AddColumn "句柄",, 150
-                .AddColumn "名称",, 300
-                .AddColumn "类名",, 300
-                .AddColumn "TID",, 100
-                .AddColumn "所属模块",, 400
-            Case WindowTimer
-                .AddColumn "定时器ID",, 150
-                .AddColumn "所属TID",, 100
-                .AddColumn "超时时间",, 150
-                .AddColumn "回调地址",, 250
-            Case Handles
-                .AddColumn "类型",, 200
-                .AddColumn "名称",, 300
-                .AddColumn "值",, 100
-                .AddColumn "访问权限",, 150
-                .AddColumn "对象地址",, 200
             Case Registry
                 .AddColumn "名称",, 200
                 .AddColumn "类型",, 100
@@ -341,9 +378,11 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "所属模块",, 300
             Case IOFunction
                 .AddColumn "名称",, 250
-                .AddColumn "地址",, 300
+                .AddColumn "当前地址",, 300
                 .AddColumn "所属模块",, 600
-                .AddColumn "AddressReference",, 300
+                .AddColumn "原始地址",, 300
+                .AddColumn "所属模块",, 600
+                ' .AddColumn "AddressReference",, 300
             Case IPScan
                 .AddColumn "IP",, 250
                 .AddColumn "主机名",, 300
@@ -399,12 +438,46 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
     End With
 End Sub
 
-Function GetIndexByListViewHwnd(ByVal hListView As HWND) As Integer
-    For i As Integer = 0 To UBound(CurrentInformationArray)
-        If CurrentInformationArray(i).hListView = hListView Then Return i
+Private Sub FreeLVRow(row As LVRow Ptr)
+    If row = 0 Then Exit Sub
+
+    Dim i As Long
+    For i = 0 To row->ColCount - 1
+        If row->Cols[i] <> 0 Then
+            Deallocate row->Cols[i]
+        End If
     Next
-    Return -1
-End Function
+
+    Deallocate row->Cols
+    Deallocate row
+End Sub
+
+Private Sub FreeListViewSnapshot(ByVal snap As ListViewSnapshot Ptr)
+    If snap = 0 Then Exit Sub
+
+    Dim i As Long
+    If snap->RowCount > 0 Then
+        For i = 0 To snap->RowCount - 1
+            If snap->Rows(i) <> 0 Then FreeLVRow snap->Rows(i)
+        Next
+        Erase snap->Rows
+    End If
+
+    Deallocate snap
+End Sub
+
+Sub InitAllModuleCache()
+    For i As Long = 0 To MaxInterfaceCount - 1
+        g_ViewCache(i).IsCached = False
+        g_ViewCache(i).SelectedIndex = -1
+        g_ViewCache(i).TopVisibleIndex = 0
+        g_ViewCache(i).ItemCount = 0
+        If g_ViewCache(i).pSnap <> 0 Then
+            FreeListViewSnapshot g_ViewCache(i).pSnap
+            g_ViewCache(i).pSnap = 0
+        End If
+    Next
+End Sub
 
 Private Function DupWStr(ByVal src As WCHAR Ptr) As WCHAR Ptr
     If src = 0 Then Return 0
@@ -425,9 +498,295 @@ Private Function DupFromStringW(ByRef s As StringW) As WCHAR Ptr
     Return buf
 End Function
 
+Private Function CloneListViewSnapshot(ByVal src As ListViewSnapshot Ptr) As ListViewSnapshot Ptr
+    If src = 0 Then Return 0
+    If src->RowCount <= 0 Then Return 0
+
+    Dim dst As ListViewSnapshot Ptr = Callocate(1, SizeOf(ListViewSnapshot))
+    dst->RowCount = src->RowCount
+    ReDim dst->Rows(dst->RowCount - 1)
+
+    Dim i As Long, c As Long
+    For i = 0 To src->RowCount - 1
+        Dim srow As LVRow Ptr = src->Rows(i)
+        If srow = 0 Then Continue For
+
+        Dim drow As LVRow Ptr = Callocate(1, SizeOf(LVRow))
+        drow->ColCount = srow->ColCount
+        drow->Fore = srow->Fore
+        drow->Back = srow->Back
+
+        If drow->ColCount > 0 Then
+            drow->Cols = Callocate(drow->ColCount, SizeOf(WString Ptr))
+            For c = 0 To drow->ColCount - 1
+                If srow->Cols[c] <> 0 Then
+                    drow->Cols[c] = DupWStr(srow->Cols[c])
+                End If
+            Next
+        End If
+
+        dst->Rows(i) = drow
+    Next
+
+    Return dst
+End Function
+
+Sub Cache_AddRow(ByVal moduleType As Interface, ByVal row As LVRow Ptr)
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache->pSnap = 0 Then Exit Sub
+
+    Dim snap As ListViewSnapshot Ptr = cache->pSnap
+
+    Dim idx As Long = snap->RowCount
+    snap->RowCount += 1
+    ReDim Preserve snap->Rows(idx)
+
+    ' 深拷贝一行（避免指针共享）
+    Dim newRow As LVRow Ptr = Callocate(1, SizeOf(LVRow))
+    newRow->ColCount = row->ColCount
+    newRow->Fore = row->Fore
+    newRow->Back = row->Back
+    newRow->Cols = Callocate(newRow->ColCount, SizeOf(WString Ptr))
+
+    Dim i As Long
+    For i = 0 To newRow->ColCount - 1
+        If row->Cols[i] <> 0 Then
+            newRow->Cols[i] = DupWStr(row->Cols[i])
+        End If
+    Next
+
+    snap->Rows(idx) = newRow
+End Sub
+
+Sub Cache_DeleteRow(ByVal moduleType As Interface, ByVal index As Long)
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache->pSnap = 0 Then Exit Sub
+
+    Dim snap As ListViewSnapshot Ptr = cache->pSnap
+    If index < 0 Or index >= snap->RowCount Then Exit Sub
+
+    ' 释放该行
+    FreeLVRow snap->Rows(index)
+
+    ' 前移数组
+    Dim i As Long
+    For i = index To snap->RowCount - 2
+        snap->Rows(i) = snap->Rows(i + 1)
+    Next
+
+    snap->RowCount -= 1
+
+    If snap->RowCount > 0 Then
+        ReDim Preserve snap->Rows(snap->RowCount - 1)
+    Else
+        Erase snap->Rows
+    End If
+End Sub
+
+
+
+' ==============================================
+' 修正版：保存当前模块状态（深拷贝数据，无指针冲突）
+' ==============================================
+Sub SaveCurrentModuleState(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
+    If ctx = 0 Then Exit Sub
+    If ctx->Snap = 0 Then Exit Sub
+
+    ' 释放旧缓存
+    If g_ViewCache(moduleType).pSnap <> 0 Then
+        FreeListViewSnapshot g_ViewCache(moduleType).pSnap
+        g_ViewCache(moduleType).pSnap = 0
+    End If
+
+    ' 深拷贝当前快照
+    g_ViewCache(moduleType).pSnap = CloneListViewSnapshot(ctx->Snap)
+    If g_ViewCache(moduleType).pSnap = 0 Then Exit Sub
+
+    g_ViewCache(moduleType).IsCached = True
+    g_ViewCache(moduleType).SelectedIndex = lvw.SelectedItem
+    Print "moduleType:" & moduleType & " lvw.SelectedItem:" & lvw.SelectedItem
+    g_ViewCache(moduleType).TopVisibleIndex = ListView_GetTopIndex(lvw.hWnd)
+    g_ViewCache(moduleType).ItemCount = ctx->Snap->RowCount
+End Sub
+
+' ==============================================
+' 修正版：从缓存恢复模块（重新填充数据，绝对不冲突）
+' ==============================================
+Sub RestoreModuleFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache = 0 Or cache->IsCached = False Or cache->pSnap = 0 Then Exit Sub
+
+    Dim snap As ListViewSnapshot Ptr = cache->pSnap
+    If snap->RowCount <= 0 Then Exit Sub
+
+    InitListViewData lvw
+
+    Dim i As Long, c As Long
+    For i = 0 To snap->RowCount - 1
+        Dim row As LVRow Ptr = snap->Rows(i)
+        If row = 0 Then Continue For
+        If row->ColCount <= 0 Then Continue For
+
+        Dim rowIdx As Long = AddItemEx(lvw, *row->Cols[0], row->Fore, row->Back)
+
+        For c = 1 To row->ColCount - 1
+            If row->Cols[c] <> 0 Then
+                SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
+            End If
+        Next
+    Next
+    CommitListViewView lvw
+    
+    'Print "moduleType:" & moduleType & " cache->SelectedIndex:" & cache->SelectedIndex & " lvw.ItemCount:" & lvw.ItemCount
+    If cache->SelectedIndex >= 0 And cache->SelectedIndex < lvw.ItemCount Then
+        lvw.SelectedItem = cache->SelectedIndex
+        ListView_EnsureVisible(lvw.hWnd, cache->SelectedIndex + (lvw.CountPerPage - (cache->SelectedIndex - cache->TopVisibleIndex)), True)
+        lvw.SetFocus
+    End If
+End Sub
+
+
+
+Function TreeView_FindChild(tv As HWND, parent As HTREEITEM, ByRef text As WString) As HTREEITEM
+    Dim hItem As HTREEITEM = TreeView_GetChild(tv, parent)
+
+    Do While hItem <> 0
+        Dim buf As WString * 260
+        Dim tvi As TVITEM
+
+        tvi.mask = TVIF_TEXT
+        tvi.hItem = hItem
+        tvi.pszText = @buf
+        tvi.cchTextMax = 260
+
+        TreeView_GetItem(tv, @tvi)
+
+        If buf = text Then Return hItem
+
+        hItem = TreeView_GetNextSibling(tv, hItem)
+    Loop
+
+    Return 0
+End Function
+
+Function InsertNodeByPath(tv As Class_TreeView, path As WString) As HTREEITEM
+
+    Dim hwnd As HWND = tv.hWnd
+    Dim parent As HTREEITEM = TVI_ROOT
+    Dim current As HTREEITEM = 0
+
+    Dim parts() As StringW
+    Dim count As Long = 0
+
+    ' =========================
+    ' 1. 分割路径 A\B\C
+    ' =========================
+    Dim startPos As Long = 1
+    Dim i As Long
+
+    For i = 1 To Len(path)
+        If Mid(path, i, 1) = "\" Then
+            ReDim Preserve parts(count)
+            parts(count) = Mid(path, startPos, i - startPos)
+            count += 1
+            startPos = i + 1
+        End If
+    Next
+
+    ReDim Preserve parts(count)
+    parts(count) = Mid(path, startPos)
+    count += 1
+
+    ' =========================
+    ' 2. 逐级插入 / 查找
+    ' =========================
+    Dim level As Long
+    For level = 0 To count - 1
+
+        Dim strName As StringW = parts(level)
+
+        ' 查找是否已存在
+        current = TreeView_FindChild(hwnd, parent, strName)
+
+        If current = 0 Then
+            ' 不存在 -> 插入
+
+            Dim tvis As TVINSERTSTRUCT
+            Dim item As TVITEM
+
+            item.mask = TVIF_TEXT
+            item.pszText = strName.WstrPtr
+
+            tvis.hParent = parent
+            tvis.hInsertAfter = TVI_LAST
+            tvis.item = item
+
+            current = TreeView_InsertItem(hwnd, @tvis)
+        End If
+
+        parent = current
+    Next
+
+    Return current
+End Function
+
+Function GetIndexByListViewHwnd(ByVal hListView As HWND) As Integer
+    For i As Integer = 0 To UBound(CurrentInformationArray)
+        If CurrentInformationArray(i).hListView = hListView Then Return i
+    Next
+    Return -1
+End Function
+
 Private Function GetCtx(ListView As Class_ListView) As ListViewContext Ptr
     Return Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
 End Function
+
+' 排序：仅对VisibleIndex索引数组排序，不改动原始数据
+' 自动识别：数字按数值排序，文本按字符串排序
+' 【高性能自适应排序】缓存列类型，无重复校验，性能无损
+Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
+    If ctx = NULL Or ctx->VisibleCount <= 1 Then Exit Sub
+    If ctx->SortedColumn < 0 Then Exit Sub
+
+    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    Dim sortCol As Long = ctx->SortedColumn
+    Dim isAsc As Boolean = ctx->SortAscending
+    Dim count As Long = ctx->VisibleCount
+
+    ' 直接用缓存！0校验开销，和硬编码一样快
+    If sortCol > UBound(ctx->ColumnIsNumber) Then Exit Sub
+    Dim isNumber As Boolean = ctx->ColumnIsNumber(sortCol)
+
+    ' 冒泡排序
+    For i As Long = 0 To count - 2
+        For j As Long = 0 To count - 2 - i
+            Dim idx1 As Long = ctx->VisibleIndex(j)
+            Dim idx2 As Long = ctx->VisibleIndex(j + 1)
+            
+            Dim row1 As LVRow Ptr = snap->Rows(idx1)
+            Dim row2 As LVRow Ptr = snap->Rows(idx2)
+            If row1 = NULL Or row2 = NULL Then Continue For
+            If sortCol >= row1->ColCount Or sortCol >= row2->ColCount Then Continue For
+
+            Dim cmp As Long = 0
+            If isNumber Then
+                ' 纯数字列：数值排序
+                Dim val1 As Double = Val(*row1->Cols[sortCol])
+                Dim val2 As Double = Val(*row2->Cols[sortCol])
+                If val1 > val2 Then cmp = 1
+                If val1 < val2 Then cmp = -1
+            Else
+                ' 文本列：字典序排序
+                cmp = lstrcmpW(row1->Cols[sortCol], row2->Cols[sortCol])
+            End If
+
+            If Not isAsc Then cmp = -cmp
+            If cmp > 0 Then Swap ctx->VisibleIndex(j), ctx->VisibleIndex(j + 1)
+        Next j
+    Next i
+End Sub
 
 Sub InitListViewData(ListView As Class_ListView)
     Dim ctx As ListViewContext Ptr = GetCtx(ListView)
@@ -447,6 +806,8 @@ Sub InitListViewData(ListView As Class_ListView)
     ReDim ctx->VisibleIndex(-1)
     ctx->VisibleCount = 0
     ctx->Filter = 0
+    ctx->SortedColumn = -1
+    ctx->SortAscending = True
 
     SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
 
@@ -454,19 +815,6 @@ Sub InitListViewData(ListView As Class_ListView)
     ListView.DeleteAllItems
     ListView_SetUnicodeFormat(ListView.hWnd, True)
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
-End Sub
-
-Private Sub FreeLVRow(row As LVRow Ptr)
-    If row = 0 Then Exit Sub
-
-    For i As Long = 0 To row->ColCount - 1
-        If row->Cols[i] <> 0 Then
-            Deallocate(row->Cols[i])
-        End If
-    Next
-
-    Deallocate(row->Cols)
-    Deallocate(row)
 End Sub
 
 Private Function CreateLVRow( _
@@ -478,7 +826,7 @@ Private Function CreateLVRow( _
 
     Dim r As LVRow Ptr = New LVRow
     r->ColCount = ColCount
-    r->Cols = Callocate(ColCount, SizeOf(StringW))
+    r->Cols = CAllocate(ColCount, SizeOf(StringW))
     r->Fore = Fore
     r->Back = Back
 
@@ -625,6 +973,13 @@ Sub SetItemColor(ListView As Class_ListView, Row As Long, Fore As COLORREF, Back
     ctx->Snap->Rows(Row)->Back = Back
 End Sub
 
+Sub SetItemColorByHwnd(hListView As hWnd, Row As Long, Fore As COLORREF, Back As COLORREF)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(hListView, GWLP_USERDATA))
+    ctx->Snap->Rows(Row)->Fore = Fore
+    ctx->Snap->Rows(Row)->Back = Back
+End Sub
+
 Sub GetItemColor(ListView As Class_ListView, Row As Long, ByRef Fore As COLORREF, ByRef Back As COLORREF)
     Dim r As LVRow Ptr = _
         Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))->Snap->Rows(Row)
@@ -632,9 +987,64 @@ Sub GetItemColor(ListView As Class_ListView, Row As Long, ByRef Fore As COLORREF
     Back = r->Back
 End Sub
 
+Sub GetItemColorByHwnd(hListView As hWnd, Row As Long, ByRef Fore As COLORREF, ByRef Back As COLORREF)
+    Dim r As LVRow Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(hListView, GWLP_USERDATA))->Snap->Rows(Row)
+    Fore = r->Fore
+    Back = r->Back
+End Sub
+
+' 【极简高性能版】基于ValW的纯数字判断（完美解决进程名误判）
+Private Function IsValidNumberW(pwStr As WString Ptr) As Boolean
+    ' 空指针/空字符串 → 不是数字
+    If pwStr = NULL Or *pwStr = WStr("") Then Return False
+    
+    ' 1. 转换为数值
+    Dim num As Double = Val(*pwStr)
+    
+    ' 2. 核心逻辑：
+    '    - 数字≠0 → 必须 原字符串 = 数值的字符串（杜绝360xxx）
+    '    - 数字=0 → 必须 原字符串严格等于 "0"
+    Function = (num <> 0 AndAlso WStr(num) = *pwStr) OrElse (*pwStr = WStr("0"))
+End Function
+
+' 一次性缓存所有列的类型（纯数字/文本），后续直接用，性能拉满
+Private Sub CacheColumnTypes(ctx As ListViewContext Ptr)
+    If ctx = NULL Or ctx->Snap = NULL Or ctx->Snap->RowCount = 0 Then Exit Sub
+    
+    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    If snap->RowCount = 0 Then Exit Sub
+    
+    ' 获取第一行数据（所有列类型固定）
+    Dim firstRow As LVRow Ptr = snap->Rows(0)
+    If firstRow = NULL Then Exit Sub
+    
+    ' 重置缓存数组
+    Redim ctx->ColumnIsNumber(0 To firstRow->ColCount - 1)
+    
+    ' 遍历所有列，一次性判断并缓存
+    For col As Long = 0 To firstRow->ColCount - 1
+        ctx->ColumnIsNumber(col) = IsValidNumberW(firstRow->Cols[col])
+    Next col
+End Sub
+
 Sub CommitListViewView(ListView As Class_ListView)
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    
+    ' 安全校验：上下文/快照为空直接退出
+    If ctx = NULL Then Exit Sub
+    If ctx->Snap = NULL Then Exit Sub
+    If ctx->Snap->RowCount = 0 Then
+        ReDim ctx->VisibleIndex(-1)
+        ctx->VisibleCount = 0
+        SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, 0, 0)
+        InvalidateRect(ListView.hWnd, NULL, True)
+        Exit Sub
+    End If
+
+    ' ===================== 【最佳位置】自动缓存列类型 =====================
+    ' 每次刷新数据时，仅执行1次列类型校验（性能无损耗）
+    CacheColumnTypes(ctx)
 
     ReDim ctx->VisibleIndex(-1)
     ctx->VisibleCount = 0
@@ -694,6 +1104,8 @@ Sub DeleteItemEx(ListView As Class_ListView, VisibleRow As Long, ByVal bCommit A
 
     ctx->Snap->RowCount -= 1
     ReDim Preserve ctx->Snap->Rows(ctx->Snap->RowCount - 1)
+    
+    Cache_DeleteRow(CurrentInformation.intType, VisibleRow) ' 刷新索引
     
     ' 需要重新计算可见索引
     If bCommit Then CommitListViewView(ListView)
@@ -782,24 +1194,36 @@ Function GetMenuText(Menu As Class_Menu, ByVal iditem As Long) As String
 End Function
 
 ' 修改菜单项文本的函数
-Sub SetMenuText(Menu As Class_Menu, ByVal iditem As Long, ByVal newText As StringW)
-    Dim mii As MENUITEMINFO
-    Dim textBuffer(255) As Byte ' 字符串缓冲区
+Sub SetMenuText(ByVal hWndForm As hWnd, Menu As Class_Menu, ByVal iditem As Long, ByVal newText As StringW)
 
-    ' 设置 MENUITEMINFO 结构体
+    Dim mii As MENUITEMINFO
+
+    memset(@mii, SizeOf(MENUITEMINFO), 0)
+
     With mii
         .cbSize = SizeOf(MENUITEMINFO)
-        .fMask = MIIM_TYPE
+
+        ' ✔ 关键修复：只保留 STRING
+        .fMask = MIIM_STRING
+
+        ' ✔ Unicode 安全指针
         .dwTypeData = newText.WstrPtr
-        .cch = newText.WstrLen * 2
+
+        ' ✔ 推荐：交给系统推断
+        .cch = 0
     End With
 
-    ' 修改菜单项信息
-    SetMenuItemInfo Menu.HMENU, iditem, True, @mii
-    Print WinErrorMsg(GetLastError)
+    If SetMenuItemInfo(Menu.HMENU, iditem, FALSE, @mii) = 0 Then
+        Print "SetMenuItemInfo失败: "; GetLastError
+        Print WinErrorMsg(GetLastError)
+    End If
 
-    ' 刷新菜单显示
-    DrawMenuBar Cast(hWnd, Menu.HMENU)
+    ' ✔ 正确：刷新窗口菜单
+    DrawMenuBar hWndForm
+End Sub
+
+Sub SetMenuStatus(Menu As Class_Menu, ByVal iditem As Long, ByVal bStatus As Boolean)
+    EnableMenuItem Menu.HMENU, iditem, IIf(bStatus, MF_ENABLED, MF_GRAYED Or MF_DISABLED)
 End Sub
 
 ' 启用/禁用OwnerDraw的优化设置
@@ -817,4 +1241,45 @@ End Sub
 Sub TreeList_DeleteAllChildItem(TreeList As Class_mCtrlTreeList, Item As MC_HTREELISTITEM)
     Do While TreeList.DeleteItem(TreeList.GetNextItem(Item, MC_TLGN_CHILD)) = True
     Loop
+End Sub
+
+Sub TreeList_SubItemHitTest(TreeList As Class_mCtrlTreeList, ByVal xPos As Long, ByVal yPos As Long, ByRef SelectItem As MC_HTREELISTITEM, ByRef iSubItem As Long, ByVal bIsScreenCoord As Boolean)
+    Dim pp As MC_TLHITTESTINFO
+    Dim pt As Point
+    Dim hWndControl As hWnd = TreeList.hWnd
+    
+    ' 1. 屏幕坐标 -> 客户区坐标
+    pt.x = xPos
+    pt.y = yPos
+    If bIsScreenCoord = True Then
+        ScreenToClient hWndControl, @pt ' 只有屏幕坐标才转
+    End If
+    
+    ' 2. 获取节点（保持不变）
+    pp.pt.x = pt.x
+    pp.pt.y = pt.y
+    pp.flags = MC_TLHT_ONITEM
+    SendMessage hWndControl, MC_TLM_HITTEST, 0, Cast(LPARAM, @pp)
+    SelectItem = Cast(MC_HTREELISTITEM, pp.hItem)
+    If SelectItem = 0 Then Exit Sub
+
+    ' ============== 【核心修复】获取水平滚动偏移量 ==============
+    Dim si As SCROLLINFO
+    si.cbSize = SizeOf(SCROLLINFO)
+    si.fMask = SIF_POS
+    GetScrollInfo hWndControl, SB_HORZ, @si
+    Dim lScrollX As Long = si.nPos ' 水平滚动了多少像素
+    
+    ' 3. 【关键】用 客户区X + 滚动偏移 得到“逻辑坐标”来算列
+    Dim colWidth As Long, sumWidth As Long, iColumnIndex As Long
+    Dim logicX As Long = pt.x + lScrollX ' 修正后的逻辑X坐标
+    
+    For iColumnIndex = 0 To TreeList.GetColumnCount - 1
+        colWidth = TreeList.GetColumnWidth(iColumnIndex)
+        ' 用修正后的 logicX 判断
+        If logicX >= sumWidth And logicX < sumWidth + colWidth Then Exit For
+        sumWidth += colWidth
+    Next
+    Print "[TreeList_SubItemHitTest]iColumnIndex:" & iColumnIndex
+    iSubItem = iColumnIndex
 End Sub

@@ -26,3 +26,4 @@ typedef struct _SYSINFO {
 
 VOID EmptyDriverUnload(PDRIVER_OBJECT pDriverObject);
 VOID UnloadDriver(PDRIVER_OBJECT pDriverObject);
+BOOLEAN RemoveAttachedDevice(PDEVICE_OBJECT TargetDevice);

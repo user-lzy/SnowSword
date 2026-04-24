@@ -571,7 +571,7 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
         IoControl hDrv, IOCTL_QueryObject, @MyHandleInfo, SizeOf(HANDLE_INFO), @MyHandleInfo, SizeOf(HANDLE_INFO)
         'If GetLastError = ERROR_INVALID_HANDLE Then Goto ContinueDo
         'Print PID(i + 1) & "有" & HandleCount & "个句柄" & " 0x" & Hex(dwHandle)
-        If ((MyHandleInfo.strType <> "File") AndAlso (InStrW(MyHandleInfo.strName, "\Device\") <> 1)) Then Goto ContinueDo
+        If ((MyHandleInfo.strType <> "File") OrElse (InStrW(MyHandleInfo.strName, "\Device\HarddiskVolume") = 0)) Then Goto ContinueDo
         If NtPathToDosPathW(@MyHandleInfo.strName, @DosPath) Then
             strHandleName = DosPath
         Else

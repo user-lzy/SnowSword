@@ -227,65 +227,93 @@ Private Function ParseDWORDValue(valueData As String, valueType As DWORD) As DWO
     Return result
 End Function
 
+' ==============================================================================
+' 【极速版】仅枚举当前节点的【一层直接子键】，和Regedit逻辑完全一致
+' 作用：给TreeView填充子节点，毫秒级完成，绝不卡死
+' ==============================================================================
 Function GetRegList1( _
-    Node As HTREEITEM, _
-    treKey As Class_TreeView, _
+    ByVal Node As HTREEITEM, _
+    ByRef treKey As Class_TreeView, _
     ByRef outResult As REG_KEY_ITEM _
 ) As Boolean
 
-    Dim result As REG_KEY_ITEM
-    Dim KeyHandle As HKEY
-    Dim lpSubKey As StringW
+    ' 清空输出（防止脏数据）
+    Clear(outResult, 0, SizeOf(REG_KEY_ITEM))
+    Erase outResult.SubKeys, outResult.Values
+
+    If Node = 0 Then Return False
+
+    Dim KeyHandle As HKEY = 0
+    Dim lpSubKey As WString * MAX_PATH
     Dim MainHKEY As HKEY = GetRegPathByNodeW(Node, treKey, lpSubKey)
 
-    If lpSubKey = "" Then
-        result.KeyPath = GetHKEYString(MainHKEY)
-    Else
-        result.KeyPath = GetHKEYString(MainHKEY) & "\" & lpSubKey
-    End If
-    'Print "result.KeyPath:" & result.KeyPath
-    result.KeyPathUpper = PathToUpper(result.KeyPath) ' 同时初始化Upper版本
-    'Print "result.KeyPathUpper:" & result.KeyPathUpper
-
-    If RegOpenKeyEx(MainHKEY, lpSubKey, 0, KEY_READ, @KeyHandle) <> ERROR_SUCCESS Then Return False
+    ' ==========================================================================
+    ' 【修复编译错误】正确拼接注册表路径（解决 WString 拼接报错）
+    ' ==========================================================================
+    Dim hkeystr As WString * 1024
+    hkeystr = GetHKEYString(MainHKEY)
     
-    ' ---------- 子键 ----------
+    If lpSubKey <> "" Then
+        outResult.KeyPath = hkeystr & "\" & lpSubKey
+    Else
+        outResult.KeyPath = hkeystr
+    End If
+    outResult.KeyPathUpper = PathToUpper(outResult.KeyPath)
+
+    ' 打开注册表（64位模式，和Regedit同速度）
+    If RegOpenKeyExW(MainHKEY, lpSubKey, 0, KEY_READ Or KEY_WOW64_64KEY, @KeyHandle) <> ERROR_SUCCESS Then
+        Return False
+    End If
+
+    ' ==========================================================================
+    ' 【1】枚举 一层子键（超快，内核缓存）
+    ' ==========================================================================
     Dim idx As DWORD = 0
     Dim keyName As WString * MAX_PATH
     Do
-        If RegEnumKey(KeyHandle, idx, @keyName, MAX_PATH) <> ERROR_SUCCESS Then Exit Do
-        ReDim Preserve result.SubKeys(idx)
-        result.SubKeys(idx) = keyName
+        If RegEnumKeyW(KeyHandle, idx, @keyName, MAX_PATH) <> ERROR_SUCCESS Then Exit Do
+        Print keyName
+        ReDim Preserve outResult.SubKeys(idx)
+        outResult.SubKeys(idx) = keyName
         idx += 1
+        
+        FF_DoEvents
     Loop
 
-    ' ---------- 值 ----------
+    ' ==========================================================================
+    ' 【2】枚举 当前键 的所有值（轻量、不卡）
+    ' ==========================================================================
     idx = 0
+    Dim valName As WString * MAX_PATH
+    Dim valLen As DWORD, dataType As DWORD, dataSize As DWORD
+    
     Do
-        Dim valName As WString * MAX_PATH
-        Dim valLen As DWORD = MAX_PATH
-        Dim dataType As DWORD
-        Dim dataSize As DWORD
+        valLen = MAX_PATH
+        dataType = 0
+        dataSize = 0
 
-        If RegEnumValue(KeyHandle, idx, @valName, @valLen, 0, @dataType, NULL, @dataSize) <> ERROR_SUCCESS Then Exit Do
-        'Print "valName:" & valName
+        ' 先获取值信息
+        If RegEnumValueW(KeyHandle, idx, @valName, @valLen, 0, @dataType, NULL, @dataSize) <> ERROR_SUCCESS Then Exit Do
+
         Dim buf() As Byte
         If dataSize > 0 Then
-            ReDim buf(dataSize - 1)
-            RegQueryValueEx(KeyHandle, valName, 0, @dataType, @buf(0), @dataSize)
+            ReDim buf(0 To dataSize - 1)
+            RegQueryValueExW(KeyHandle, valName, 0, @dataType, @buf(0), @dataSize)
         End If
 
-        ReDim Preserve result.Values(idx)
-        result.Values(idx).ValueName = valName
-        result.Values(idx).ValueType = dataType
-        result.Values(idx).ValueData = ProcessValueData(dataType, buf(), dataSize)
-
+        ' 保存值
+        ReDim Preserve outResult.Values(idx)
+        outResult.Values(idx).ValueName = valName
+        outResult.Values(idx).ValueType = dataType
+        outResult.Values(idx).ValueData = ProcessValueData(dataType, buf(), dataSize)
+        
         idx += 1
     Loop
 
+    ' 关闭句柄
     RegCloseKey(KeyHandle)
-    outResult = result
     Return True
+
 End Function
 
 ' ########## 辅助函数：路径标准化（核心修复4：大小写不敏感 + 移除末尾反斜杠） ##########
@@ -364,15 +392,13 @@ Private Function TreeViewFindChild(treKey As Class_TreeView, hParent As HTREEITE
     Dim hChild As HTREEITEM = treKey.GetChild(hParent)
     Dim targetTextUpper As String = UCase(childText)
     
-    While hChild <> NULL
-        ' 假设Class_TreeView有获取项目文本的方法（如果没有，请替换为你实际的GetItemText方法）
+    Do While hChild <> NULL
         Dim itemText As String = treKey.Text(hChild)
-        If UCase(itemText) = targetTextUpper Then
-            Return hChild
-        End If
+        If UCase(itemText) = targetTextUpper Then Return hChild
+        
         hChild = treKey.GetNextSiblin(hChild) ' 注意：严格使用你提供的接口名（GetNextSiblin）
-    Wend
-    
+    Loop
+    'Print "hChild = NULL"
     Return NULL
 End Function
 
@@ -545,6 +571,26 @@ Private Sub DetectHiddenItems(apiKey As REG_KEY_ITEM, hiveKey As REG_KEY_ITEM, h
     End If
 End Sub
 
+' ===================== 新增：仅本函数使用的辅助函数（合并Hive数据） =====================
+Private Sub MergeHiveItems(ByRef target As REG_KEY_ITEM, ByRef source As REG_KEY_ITEM)
+    ' 合并子键
+    If UBound(source.SubKeys) >= LBound(source.SubKeys) Then
+        Dim i As Integer
+        For i = LBound(source.SubKeys) To UBound(source.SubKeys)
+            ReDim Preserve target.SubKeys(UBound(target.SubKeys) + 1)
+            target.SubKeys(UBound(target.SubKeys)) = source.SubKeys(i)
+        Next
+    End If
+    ' 合并值
+    If UBound(source.Values) >= LBound(source.Values) Then
+        Dim j As Integer
+        For j = LBound(source.Values) To UBound(source.Values)
+            ReDim Preserve target.Values(UBound(target.Values) + 1)
+            target.Values(UBound(target.Values)) = source.Values(j)
+        Next
+    End If
+End Sub
+
 Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_ListView, UseHive As Boolean)
     ' ===== Step1: 通用初始化 - 获取当前节点API枚举结果 =====
     Dim apiKeyItem As REG_KEY_ITEM
@@ -561,6 +607,11 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     Dim hiddenValues() As REG_VALUE_ITEM
     Dim currentPathNorm As String
     
+    ' 新增：根键批量处理变量
+    Dim rootHives() As String
+    Dim hivePath As String
+    Dim iRoot As Integer
+    
     ' 初始化值列表
     InitListViewData lvwValue
     
@@ -570,21 +621,21 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
         
         ' ✅ 仅清空当前节点的子节点，不全局清空TreeView
         If Node <> NULL Then
+            'treKey.ReDraw = False
             Dim hChild As HTREEITEM = treKey.GetChild(Node)
             While hChild <> NULL
-                Dim hNext As HTREEITEM = treKey.GetNextSiblin(hChild)
                 treKey.DeleteItem hChild
-                hChild = hNext
+                hChild = treKey.GetChild(Node)
             Wend
             
             ' 仅添加当前节点的下一层子键
             If apiGetSuccess And UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
                 For i As Integer = LBound(apiKeyItem.SubKeys) To UBound(apiKeyItem.SubKeys)
-                    If TreeViewFindChild(treKey, Node, apiKeyItem.SubKeys(i)) = NULL Then
-                        treKey.AddItem(Node, apiKeyItem.SubKeys(i))
-                    End If
+                    treKey.AddItem(Node, apiKeyItem.SubKeys(i))
                 Next
             End If
+            'treKey.ReDraw = True
+            'treKey.Refresh
         End If
         
         ' 渲染值列表
@@ -600,7 +651,7 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     End If
     
     ' ==================================================
-    ' ===== Step3: UseHive=True 核心修复 - 隐藏项检测 =====
+    ' ===== Step3: UseHive=True 核心修复 - 根键Hive批量检测 =====
     ' ==================================================
     Print "=== DEBUG: UseHive=True - 隐藏项检测模式 ==="
     
@@ -613,25 +664,97 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     currentFullPath = apiKeyItem.KeyPath
     currentPathUpper = apiKeyItem.KeyPathUpper
     Print "DEBUG: 当前检测路径: " & currentFullPath
+
+    ' ===================== 核心修复：根键多Hive检测 =====================
+    Select Case UCase(currentFullPath)
+        ' 1. HKEY_LOCAL_MACHINE → 对应5个核心Hive
+        Case "HKEY_LOCAL_MACHINE"
+            Print "DEBUG: 检测到根键 HKLM，开始加载所有子Hive..."
+            Split("SAM,SECURITY,SOFTWARE,SYSTEM,HARDWARE", ",", rootHives())
+            ReDim hiveKeyItem.SubKeys(-1)
+            ReDim hiveKeyItem.Values(-1)
+            hiveKeyItem.KeyPath = currentFullPath
+            hiveKeyItem.KeyPathUpper = currentPathUpper
+            
+            ' 遍历加载所有HKLM子Hive
+            For iRoot = 0 To UBound(rootHives)
+                hivePath = currentFullPath & "\" & rootHives(iRoot)
+                Print "DEBUG: 加载HKLM子Hive: " & hivePath
+                If GetHiveInfoFromPath(hivePath, hiveInfo) Then
+                    If LoadHive(hiveInfo, hiveCacheItem) Then
+                        Dim tempNK As ULong
+                        tempNK = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, "")
+                        If tempNK <> 0 Then
+                            Dim tempItem As REG_KEY_ITEM
+                            tempItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), tempNK, hivePath)
+                            ' 合并子键/值到总集
+                            MergeHiveItems(hiveKeyItem, tempItem)
+                        End If
+                    End If
+                End If
+            Next
+            GoTo DetectRootHiddenItems
+        
+        ' 2. HKEY_CURRENT_USER → 对应用户配置Hive
+        Case "HKEY_CURRENT_USER"
+            Print "DEBUG: 检测到根键 HKCU，加载用户Hive..."
+            hivePath = currentFullPath
+            If GetHiveInfoFromPath(hivePath, hiveInfo) Then
+                If LoadHive(hiveInfo, hiveCacheItem) Then
+                    targetNKOffset = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, "")
+                    If targetNKOffset <> 0 Then
+                        hiveKeyItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), targetNKOffset, currentFullPath)
+                    End If
+                End If
+            End If
+            GoTo DetectRootHiddenItems
+        
+        ' 3. HKEY_USERS → 遍历所有用户子配置Hive
+        Case "HKEY_USERS"
+            Print "DEBUG: 检测到根键 HKU，加载所有用户Hive..."
+            ReDim hiveKeyItem.SubKeys(-1)
+            ReDim hiveKeyItem.Values(-1)
+            hiveKeyItem.KeyPath = currentFullPath
+            hiveKeyItem.KeyPathUpper = currentPathUpper
+            
+            If apiGetSuccess And UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
+                For iRoot = LBound(apiKeyItem.SubKeys) To UBound(apiKeyItem.SubKeys)
+                    hivePath = currentFullPath & "\" & apiKeyItem.SubKeys(iRoot)
+                    Print "DEBUG: 加载HKU用户Hive: " & hivePath
+                    If GetHiveInfoFromPath(hivePath, hiveInfo) Then
+                        If LoadHive(hiveInfo, hiveCacheItem) Then
+                            Dim tempNK As ULong
+                            tempNK = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, "")
+                            If tempNK <> 0 Then
+                                Dim tempItem As REG_KEY_ITEM
+                                tempItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), tempNK, hivePath)
+                                MergeHiveItems(hiveKeyItem, tempItem)
+                            End If
+                        End If
+                    End If
+                Next
+            End If
+            GoTo DetectRootHiddenItems
+    End Select
+    ' ==================================================================
     
-    ' 获取当前路径对应的hive信息
+    ' ==================================================
+    ' ===== 普通节点（非根键）：原有Hive加载逻辑 =====
+    ' ==================================================
     If Not GetHiveInfoFromPath(currentFullPath, hiveInfo) Then
         Print "DEBUG: 不支持的路径，无对应hive文件"
         GoTo RenderFinalUI
     End If
     
-    ' 按需加载hive
     If Not LoadHive(hiveInfo, hiveCacheItem) Then
         Print "DEBUG: hive加载失败，请检查管理员权限"
         GoTo RenderFinalUI
     End If
     
-    ' ===== 修复：计算hive内相对路径 =====
+    ' ===== 计算hive内相对路径 =====
     hiveRootUpper = PathToUpper(hiveInfo.RootName)
     currentPathNorm = currentPathUpper
 
-    ' 步骤1：将当前路径的长键名替换为短键名，统一格式
-    ' 例如：HKEY_LOCAL_MACHINE -> HKLM
     If Left(currentPathNorm, 18) = "HKEY_LOCAL_MACHINE" Then
         currentPathNorm = "HKLM" & Mid(currentPathNorm, 19)
     ElseIf Left(currentPathNorm, 17) = "HKEY_CURRENT_USER" Then
@@ -644,44 +767,33 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
         currentPathNorm = "HKCC" & Mid(currentPathNorm, 21)
     End If
 
-    Print "DEBUG: 标准化当前路径: " & currentPathNorm
-    Print "DEBUG: Hive根路径(标准): " & hiveRootUpper
-
-    ' 步骤2：安全截取相对路径
     If currentPathNorm = hiveRootUpper Then
-        ' 路径完全匹配，相对路径为空（就是hive根节点）
         relativePath = ""
     ElseIf Left(currentPathNorm, Len(hiveRootUpper) + 1) = hiveRootUpper & "\" Then
-        ' 当前路径是hive根路径的子键，截取后面的部分
         relativePath = Mid(currentPathNorm, Len(hiveRootUpper) + 2)
     Else
-        ' 理论上不应该走到这里，除非GetHiveInfoFromPath逻辑有误
         Print "DEBUG: 警告 - 路径不匹配，无法计算相对路径"
     End If
-
-    Print "DEBUG: 最终相对路径: " & relativePath
-    ' ===== 修复结束 =====
     
-    ' 查找目标NK节点
     targetNKOffset = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, relativePath)
     If targetNKOffset = 0 Then
         Print "DEBUG: 在hive中找不到目标节点"
         GoTo RenderFinalUI
     End If
     
-    ' 获取hive中目标键的原始数据
     hiveKeyItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), targetNKOffset, currentFullPath)
-    Print "DEBUG: Hive子键数量: " & (UBound(hiveKeyItem.SubKeys) + 1)
-    Print "DEBUG: Hive值数量: " & (UBound(hiveKeyItem.Values) + 1)
     
-    ' 核心：检测隐藏项
+DetectRootHiddenItems:
+    ' ===== 统一执行隐藏项检测（根键+普通节点通用） =====
+    Print "DEBUG: 最终Hive子键数量: " & (UBound(hiveKeyItem.SubKeys) + 1)
+    Print "DEBUG: 最终Hive值数量: " & (UBound(hiveKeyItem.Values) + 1)
     DetectHiddenItems apiKeyItem, hiveKeyItem, hiddenSubKeys(), hiddenValues()
     
     ' ==================================================
-    ' ===== Step4: 修复后的UI渲染 - 仅操作当前节点 =====
+    ' ===== Step4: 统一UI渲染 =====
     ' ==================================================
 RenderFinalUI:
-    ' 仅清空当前节点的子节点，不影响整棵树
+    'treKey.Redraw = False
     Dim hChild As HTREEITEM = treKey.GetChild(Node)
     While hChild <> NULL
         Dim hNext As HTREEITEM = treKey.GetNextSiblin(hChild)
@@ -689,24 +801,19 @@ RenderFinalUI:
         hChild = hNext
     Wend
     
-    ' 先添加正常子键，再添加带标记的隐藏子键
+    ' 无重复检查，直接添加（已清空子节点）
     If UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
         For i As Integer = LBound(apiKeyItem.SubKeys) To UBound(apiKeyItem.SubKeys)
-            If TreeViewFindChild(treKey, Node, apiKeyItem.SubKeys(i)) = NULL Then
-                treKey.AddItem(Node, apiKeyItem.SubKeys(i))
-            End If
+            treKey.AddItem(Node, apiKeyItem.SubKeys(i))
         Next
     End If
     If UBound(hiddenSubKeys) >= LBound(hiddenSubKeys) Then
         For i As Integer = LBound(hiddenSubKeys) To UBound(hiddenSubKeys)
-            Dim displayName As String = hiddenSubKeys(i) & " [隐藏]"
-            If TreeViewFindChild(treKey, Node, hiddenSubKeys(i)) = NULL Then
-                treKey.AddItem(Node, displayName)
-            End If
+            treKey.AddItem(Node, hiddenSubKeys(i) & " [隐藏]")
         Next
     End If
     
-    ' 渲染值列表：正常值 + 带标记的隐藏值
+    ' 渲染值列表
     If UBound(apiKeyItem.Values) >= LBound(apiKeyItem.Values) Then
         For j As Integer = LBound(apiKeyItem.Values) To UBound(apiKeyItem.Values)
             AddItemColListEx lvwValue, 3,,, WStr(apiKeyItem.Values(j).ValueName), WStr(GetRegTypeName(apiKeyItem.Values(j).ValueType)), WStr(apiKeyItem.Values(j).ValueData)
@@ -714,16 +821,17 @@ RenderFinalUI:
     End If
     If UBound(hiddenValues) >= LBound(hiddenValues) Then
         For j As Integer = LBound(hiddenValues) To UBound(hiddenValues)
-            Dim displayName As String = hiddenValues(j).ValueName & " [隐藏]"
-            AddItemColListEx lvwValue, 3,,, WStr(displayName), WStr(GetRegTypeName(hiddenValues(j).ValueType)), "[隐藏数据 - 仅Hive中存在]"
+            AddItemColListEx lvwValue, 3,,, WStr(hiddenValues(j).ValueName & " [隐藏]"), WStr(GetRegTypeName(hiddenValues(j).ValueType)), "[隐藏数据]"
         Next
     End If
     
+    'treKey.ReDraw = True
+    'treKey.Refresh
     Print "=== DEBUG: UseHive=True 检测完成 ==="
     CommitListViewView lvwValue
 End Sub
 
-Function AddRButtonMenu() As BOOLEAN
+Function AddRButtonMenu() As Boolean
     ' 右键菜单显示名称
     Dim menuName As Const WString * MAX_PATH = "使用SnowSword粉碎文件"
 

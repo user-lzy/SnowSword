@@ -1,4 +1,6 @@
-﻿#define BUFFER_SIZE 1024
+﻿#include Once "win/winsock2.bi"
+
+#define BUFFER_SIZE 1024
 
 'Extern "C"
 Declare Function inet_ntop Lib "ws2_32.dll " Alias "inet_ntop"(ByVal Family As INT_, ByVal pAddr As PVOID, ByVal pStringBuf As LPSTR, ByVal StringBufSize As UInteger) As LPCSTR
@@ -38,6 +40,51 @@ Private Function GetChecksum(bytData As Byte Ptr, ByVal length As Long) As UShor
     Return Cast(UShort, Not sum)
 End Function
 
+' 数值IP(你的ip ULONG) → MAC
+Function GetMACByIP(ByVal ulIP As ULong) As String
+    Dim dwSize As DWORD = 0
+    Dim pTable As Any Ptr = NULL
+    Dim pRow As MIB_IPNETROW Ptr
+    Dim i As Integer
+    Dim macStr As String = "未知MAC"  ' 默认兜底
+    
+    ' 1. 先获取ARP表所需内存大小
+    If GetIpNetTable(NULL, @dwSize, 0) <> 0 And dwSize = 0 Then
+        Return macStr
+    End If
+    
+    ' 2. 分配内存
+    pTable = Allocate(dwSize)
+    If pTable = NULL Then Return macStr
+    
+    ' 3. 读取系统ARP表
+    If GetIpNetTable(pTable, @dwSize, 0) = 0 Then
+        ' 获取ARP表条目数量
+        Dim dwCount As DWORD = *CPtr(DWORD Ptr, pTable)
+        pRow = CPtr(MIB_IPNETROW Ptr, CPtr(Byte Ptr, pTable) + SizeOf(DWORD))
+        
+        ' 4. 遍历ARP表（关键：IP转换为网络字节序！）
+        For i = 0 To dwCount - 1
+            ' ⭐ 核心修复：htonl 转换字节序，匹配系统ARP表
+            If pRow->dwAddr = htonl(ulIP) And pRow->dwPhysAddrLen = 6 Then
+                ' 拼接标准MAC格式（00-11-22-33-44-55）
+                macStr = UCase(Right("0" & Hex(pRow->bPhysAddr(0)), 2)) & "-" & _
+                         UCase(Right("0" & Hex(pRow->bPhysAddr(1)), 2)) & "-" & _
+                         UCase(Right("0" & Hex(pRow->bPhysAddr(2)), 2)) & "-" & _
+                         UCase(Right("0" & Hex(pRow->bPhysAddr(3)), 2)) & "-" & _
+                         UCase(Right("0" & Hex(pRow->bPhysAddr(4)), 2)) & "-" & _
+                         UCase(Right("0" & Hex(pRow->bPhysAddr(5)), 2))
+                Exit For
+            End If
+            pRow += 1
+        Next
+    End If
+    
+    ' 释放内存
+    If pTable Then Deallocate(pTable)
+    Return macStr
+End Function
+
 Function GetProtocolTxt(protocol As Integer) As String
     Select Case protocol
         Case IPPROTO_ICMP
@@ -71,16 +118,46 @@ Function IPStringToIPADDR(ipStr As String) As UInteger
 End Function
 
 Sub NetworkListenerThread(ByVal userdata As Any Ptr)
-    Dim buffer(BUFFER_SIZE - 1) As Byte
+    ' 堆分配缓冲区（避免栈溢出）
+    Dim buffer As Byte Ptr = New Byte[BUFFER_SIZE]
+    Dim ip As IPHeader
+    Dim tcp As TCPHeader
     Do While True ' IsStartSniffer
-        'Print "1"
-        Dim ret As Long = recv(sock, @buffer(0), BUFFER_SIZE, 0)
-        If ret > 0 Then
-            memcpy @ip, @buffer(0), SizeOf(IPHeader)
-            memcpy @tcp, @buffer(ip.verIhl * 4), SizeOf(TCPHeader)
-            lvwSniffer.AddItemColList,, GetProtocolTxt(ip.protocol), GetIPAddress(ip.saddr), GetIPAddress(ip.daddr), Str(ntohs(tcp.sourcePort)), Str(ntohs(tcp.destPort)), Str(ntohs(ip.totLen))
-            Print "2"
-        End If
+        Dim running As Boolean = IsStartSniffer
+        'LeaveCriticalSection(@cs)
+        
+        If Not running Then Exit Do
+        
+        ' 非阻塞检查套接字（解决recv阻塞无法退出问题）
+        Dim fdSetR As fd_set
+        FD_ZERO(@fdSetR)
+        FD_SET_(sock, @fdSetR)
+        
+        Dim timeout As timeval
+        timeout.tv_sec = 0
+        timeout.tv_usec = 100000 ' 100ms超时，定时检查退出
+        
+        Dim retSelect As Long = select_(0, @fdSetR, NULL, NULL, @timeout)
+        If retSelect <= 0 Then Continue Do
+        
+        ' 接收数据
+        Dim ret As Long = recv(sock, buffer, BUFFER_SIZE, 0)
+        If ret <= 0 Then Continue Do
+        
+        Print "ret > 0"
+        
+        ' ============== 安全校验：避免内存越界 ==============
+        If ret < SizeOf(IPHeader) Then Continue Do
+        memcpy @ip, buffer, SizeOf(IPHeader)
+        
+        ' 校验IP头长度
+        Dim ipHeaderLen As Long = (ip.verIhl And &HF) * 4
+        If ipHeaderLen < 20 Or ipHeaderLen > 60 Then Continue Do
+        If ret < ipHeaderLen + SizeOf(TCPHeader) Then Continue Do
+        
+        ' 解析TCP头
+        memcpy @tcp, buffer + ipHeaderLen, SizeOf(TCPHeader)
+        lvwSniffer.AddItemColList,, GetProtocolTxt(ip.protocol), GetIPAddress(ip.saddr), GetIPAddress(ip.daddr), Str(ntohs(tcp.sourcePort)), Str(ntohs(tcp.destPort)), Str(ntohs(ip.totLen))
     Loop
 End Sub
 
@@ -161,7 +238,7 @@ Sub GetAliveHostList(ByVal TheIP As String, ByVal startIP As ULong, ByVal endIP 
     WSACleanup
 End Sub
 
-Function SetSnifferStatus(ListView As Class_ListView, ByVal IsStart As BOOLEAN) As BOOLEAN
+Function SetSnifferStatus(ListView As Class_ListView, ByVal IsStart As Boolean) As Boolean
     Static sock As SOCKET
     Static listenerThread As HANDLE
     If IsStart Then
@@ -181,43 +258,54 @@ Function SetSnifferStatus(ListView As Class_ListView, ByVal IsStart As BOOLEAN) 
         End If
         
         ' 获取本机名
-        Dim LocalName(511) As Byte
-        gethostname @LocalName(0), 512
-
-        ' 获取本地IP地址
-        Dim pHost As hostent Ptr = gethostbyname(@LocalName(0))
-
-        ' 填充SOCKADDR_IN结构
+        'Dim LocalName(511) As Byte
+        'gethostname @LocalName(0), 512
+        '
+        '' 获取本地IP地址
+        'Dim pHost As hostent Ptr = gethostbyname(@LocalName(0))
+        '
+        '' 填充SOCKADDR_IN结构
+        'Dim addr_in As sockaddr_in
+        'memcpy @addr_in.sin_addr, pHost->h_addr_list[0], 4
+        'addr_in.sin_family = AF_INET
+        'addr_in.sin_port = htons(1004)
+        '
+        '' 绑定套接字到本地网卡地址
+        'If bind(sock, Cast(SOCKADDR Ptr, @addr_in), Len(addr_in)) <> 0 Then
+        '    Print "Bind failed:" & WinErrorMsg(GetLastError)
+        '    closesocket sock
+        '    WSACleanup
+        '    Return False
+        'End If
+        
         Dim addr_in As sockaddr_in
-        memcpy @addr_in.sin_addr, pHost->h_addr_list[0], 4
         addr_in.sin_family = AF_INET
-        addr_in.sin_port = htons(1004)
-
-        ' 绑定套接字到本地网卡地址
+        addr_in.sin_addr.S_addr = htonl(INADDR_ANY)
+        addr_in.sin_port = htons(0)
         If bind(sock, Cast(SOCKADDR Ptr, @addr_in), Len(addr_in)) <> 0 Then
-            Print "Bind failed:" & WinErrorMsg(GetLastError)
-            closesocket sock
-            WSACleanup
+            Print "Bind failed: " & WSAGetLastError
+            closesocket(sock)
+            sock = INVALID_SOCKET
             Return False
         End If
 
         ' 设置IP头操作选项
-        Dim flag As Long = 1
+        /'Dim flag As Long = 1
         If setsockopt(sock, IPPROTO_IP, IP_HDRINCL, Cast(LPCSTR, @flag), SizeOf(Long)) <> 0 Then
             Print "setsockopt failed:" & WinErrorMsg(GetLastError)
             closesocket sock
             WSACleanup
             Return False
-        End If
+        End If'/
 
         ' 设置SOCK_RAW为SIO_RCVALL，以便接收所有的IP包
-        Dim dwValue As Long = 1
+        /'Dim dwValue As Long = 1
         If ioctlsocket(sock, SIO_RCVALL, @dwValue) <> 0 Then
-            Print "ioctlsocket failed:" & WinErrorMsg(GetLastError)
+            Print "ioctlsocket failed:" & WinErrorMsg(WSAGetLastError) & WSAGetLastError
             closesocket sock
             WSACleanup
             Return False
-        End If
+        End If'/
 
         ' 创建线程监听网络数据包
         IsStartSniffer = True

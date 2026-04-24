@@ -6,11 +6,11 @@ Enum MEMORY_INFORMATION_CLASS
     MemorySectionName
 End Enum
 
-Type UNICODE_STRING32
+/'Type UNICODE_STRING32
     Length As WORD
     MaximumLength As WORD
     Buffer As DWORD ' 4字节指针
-End Type
+End Type'/
 
 Type PEB_LDR_DATA32 Field = 4
     Length As DWORD
@@ -24,15 +24,17 @@ Type PEB_LDR_DATA32 Field = 4
     ShutdownThreadId As DWORD
 End Type
 
-Type PEB32 Field = 4
-    InheritedAddressSpace As Byte
-    ReadImageFileExecOptions As Byte
-    BeingDebugged As Byte
-    BitField As Byte
-    Mutant As DWORD
-    ImageBaseAddress As DWORD
-    Ldr As DWORD
-    ' ... 省略其他不使用的字段
+Type PEB32
+    InheritedAddressSpace As Byte    ' +0x00
+    ReadImageFileExecOptions As Byte ' +0x01
+    BeingDebugged As Byte            ' +0x02
+    SpareBool As Byte                 ' +0x03 (4字节对齐)
+    Mutant As DWORD                   ' +0x04
+    ImageBaseAddress As DWORD         ' +0x08 (关键字段！之前漏掉了)
+    Ldr As DWORD                      ' +0x0C
+    ProcessParameters As DWORD        ' +0x10 【官方正确偏移！！！】
+    Reserved4(104) As Byte
+    SessionId As DWORD
 End Type
 
 Type LDR_DATA_TABLE_ENTRY32 Field = 4
@@ -60,36 +62,6 @@ Type PVOID As Any Ptr
 'Declare Function ZwQueryVirtualMemory Lib "ntdll.dll" Alias "ZwQueryVirtualMemory"(ByVal ProcessHandle As HANDLE, ByVal BaseAddress As PVOID, ByVal MemoryInformationClass As MEMORY_INFORMATION_CLASS,  ByVal MemoryInformation As ULong, ByVal MemoryInformationLength As ULong, ByVal ReturnLength As PULONG) As NTSTATUS
 Declare Function RtlNtStatusToDosError Lib "ntdll.dll" Alias "RtlNtStatusToDosError"(ByVal st As NTSTATUS) As ULong
 Declare Function ZwUnmapViewOfSection Lib "ntdll.dll" Alias "ZwUnmapViewOfSection"(ByVal hProcess As HANDLE, ByVal HMODULE As HMODULE) As NTSTATUS
-
-/'Public Sub PrintProcessModules()
-    Dim Addr As PVOID, st As NTSTATUS, hProcess As HANDLE = Cast(HANDLE, -1), ReturnLength As SIZE_T = 0
-    Dim Information As MEMORY_BASIC_INFORMATION, wName As StringW
-    Dim library As Any Ptr = DyLibLoad("ntdll.dll")
-    Dim ZwQueryVirtualMemory As Function(ByVal As HANDLE, ByVal As PVOID, ByVal As MEMORY_INFORMATION_CLASS,  ByVal As PVOID, ByVal As SIZE_T, ByVal As SIZE_T Ptr) As NTSTATUS
-    ZwQueryVirtualMemory = DyLibSymbol(library, "ZwQueryVirtualMemory") 
-    For Addr = &H7FF0000000000000 To &H7FFFFFFFFFFFFFFF Step &H1000 '0
-        st = ZwQueryVirtualMemory(hProcess, Addr, MemoryBasicInformation, @Information, SizeOf(MEMORY_BASIC_INFORMATION), @ReturnLength)
-        If (NT_SUCCESS(st)) Then
-            Print "Addr:0x" & Hex(Addr)
-            If (Information.Type = MEM_IMAGE) Then
-                Print "Addr1:0x" & Hex(Addr)
-                If (Information.AllocationBase = Addr) Then
-                    Print "ModuleAddr:0x" & Hex(Addr)
-                    st = ZwQueryVirtualMemory(hProcess, Addr, MemorySectionName, wName, MAX_PATH, NULL)
-                    If NT_SUCCESS(st) Then
-                        Print wName
-                    Else
-                        Print "MemorySectionName:" & Hex(st)
-                    End If
-                End If
-            End If
-        Else
-            Print Hex(st) & " " & ReturnLength & " " & SizeOf(Information)
-        End If
-        FF_DoEvents
-    Next
-    DyLibFree library
-End Sub '/
 
 Private Function GetModuleEntryPoint(ByVal ProcessId As DWORD,ByVal hModule As HMODULE) As DWORD
     Dim hProcess As HANDLE,pModuleInfo As LPMODULEINFO,EntryPoint As DWORD
@@ -449,41 +421,6 @@ Function EnumModuleListEx(ByVal hProcess As HANDLE, ModuleList() As MODULE_INFOR
     End If
 End Function
 
-/'Function EnumModuleListEx(ByVal hProcess As HANDLE, ModuleList() As MODULE_INFORMATION) As Long
-    Dim isWow64 As BOOL = False
-    Dim bytesRead As SIZE_T = 0
-    Dim moduleCount As Long = 0
-    Dim peb_32 As ULONG_PTR
-    Dim pbi64 As PROCESS_BASIC_INFORMATION
-    Dim retLen As DWORD = 0
-    Dim st As NTSTATUS
-    
-    ' ========== 步骤2：读取目标进程PEB地址 ==========
-    ' Wow64进程
-    If IsProcessWow64_Ex(hProcess) Then
-        ' 读取32位进程基本信息（获取PEB地址）
-        st = ZwQueryInformationProcess(hProcess, ProcessWow64Information, @peb_32, SizeOf(peb_32), retLen)
-        If Not NT_SUCCESS(st) Then
-            Print "[-] 读取32位进程基本信息失败,st=" & WHex(st)
-            Return -1
-        End If
-        ' 步骤3：遍历32位模块链表
-        moduleCount = EnumModules32(hProcess, peb_32, ModuleList())
-    Else
-        ' 读取64位进程基本信息
-        st = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, @pbi64, SizeOf(pbi64), retLen)
-        If Not NT_SUCCESS(st) Then
-            Print "[-] 读取64位进程基本信息失败,st=" & WHex(st)
-            Return -1
-        End If
-        ' 步骤3：遍历64位模块链表
-        moduleCount = EnumModules64(hProcess, Cast(ULONG_PTR, pbi64.PebBaseAddress), ModuleList())
-    End If
-    
-    ' ========== 步骤4：返回模块数量 ==========
-    Return moduleCount
-End Function'/
-
 Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListView) As Integer
     Dim i As Long, hProcess As HANDLE, ModuleCount As Long, ItemIndex As Long
     Dim ModuleInformation1() As MODULE_INFORMATION
@@ -500,13 +437,9 @@ Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListV
     ModuleCount = EnumModuleListEx(hProcess, ModuleInformation1())
     If ModuleCount >= 0 Then
         For i As Integer = 0 To ModuleCount - 1
-            /'ItemIndex = AddItemEx(lvwModule,, WStr(i + 1), FB_Red, FB_White)
-            SetItemTextEx lvwModule, ItemIndex, 1, ModuleInformation1(i).szName
-            SetItemTextEx lvwModule, ItemIndex, 2, "0x" & WHex(ModuleInformation1(i).BaseAddr)
-            SetItemTextEx lvwModule, ItemIndex, 3, "0x" & WHex(ModuleInformation1(i).dwSize)
-            SetItemTextEx lvwModule, ItemIndex, 4, ModuleInformation1(i).szPath'/
-            AddItemColListEx lvwModule, 5,,, WStr(i + 1), WStr(ModuleInformation1(i).szName), WStr("0x" & WHex(ModuleInformation1(i).BaseAddr)), _
-            WStr("0x" & WHex(ModuleInformation1(i).dwSize)), WStr(ModuleInformation1(i).szPath)
+            ItemIndex = AddItemColListEx(lvwModule, 6,,, WStr(i + 1), WStr(ModuleInformation1(i).szName), WStr("0x" & WHex(ModuleInformation1(i).BaseAddr)), _
+            WStr("0x" & WHex(ModuleInformation1(i).dwSize)), WStr(ModuleInformation1(i).szPath), WStr(GetFileCompany(ModuleInformation1(i).szPath)))
+            VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, ModuleInformation1(i).szPath
             'SetItemColor lvwModule, ItemIndex, FB_Red, FB_White ' FB_Black, FB_White
         Next
     End If
@@ -517,8 +450,9 @@ Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListV
     For j As Integer = 0 To ModuleCount - 1
         If (Not IsInArray(ModuleInformation2(j).BaseAddr, ModuleInformation1())) Then ' 找到隐藏模块
             Print "隐藏模块:" & ModuleInformation2(j).szPath
-            ItemIndex = AddItemColListEx(lvwModule, 5, FB_Red, , WStr(lvwModule.ItemCount + 1), WStr(ModuleInformation2(j).szName), WStr("0x" & WHex(ModuleInformation2(j).BaseAddr)), _
-            WStr("0x" & WHex(ModuleInformation2(j).dwSize)), WStr(ModuleInformation2(j).szPath))
+            ItemIndex = AddItemColListEx(lvwModule, 6, FB_Red, , WStr(lvwModule.ItemCount + 1), WStr(ModuleInformation2(j).szName), WStr("0x" & WHex(ModuleInformation2(j).BaseAddr)), _
+            WStr("0x" & WHex(ModuleInformation2(j).dwSize)), WStr(ModuleInformation2(j).szPath), WStr(GetFileCompany(ModuleInformation1(i).szPath)))
+            VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, ModuleInformation2(i).szPath
             'SetItemColor lvwModule, lvwModule.ItemCount, FB_Red, FB_White
             i += 1
         End If

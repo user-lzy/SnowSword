@@ -3,6 +3,7 @@
 #include "global.h"
 
 #define IRP_MJ_MAXIMUM_FUNCTION 0x1b
+#define FAST_IO_MAX_COUNT 27
 #define DO_PDO 0x00000008  // PDO标志位
 
 typedef struct _DRIVER_INFO {
@@ -13,6 +14,7 @@ typedef struct _DRIVER_INFO {
 	PVOID FastIoDispatchAddr;
 	PVOID DriverUnloadAddr;
 	PVOID MajorFunctionAddr[IRP_MJ_MAXIMUM_FUNCTION + 1];
+    PVOID FastIOFunctionAddr[FAST_IO_MAX_COUNT];
 }DRIVER_INFO, * PDRIVER_INFO;
 
 //_OBJECT_HEADER 内两个成员的偏移
@@ -151,6 +153,7 @@ static KSPIN_LOCK g_AttachmentMapLock;
 static PDEVICE_ATTACHMENT_ENTRY g_AttachmentMap = NULL;
 static BOOLEAN g_GlobalMapBuilt = FALSE;  // 标记是否已构建全局映射
 
+PVOID FindIopInvalidDeviceRequest();
 NTSTATUS BuildGlobalDeviceAttachmentMap();
 VOID FreeGlobalDeviceAttachmentMap();
 NTSTATUS CalculateGlobalDataSize(OUT PULONG pTotalSize);

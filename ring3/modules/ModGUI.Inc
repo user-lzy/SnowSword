@@ -121,23 +121,23 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
     dataSize = lpRet
     If dataSize = 0 Then
         Print "未发现任何消息钩子"
-        InitListViewData lvwMsgHook
-        ' ====================== 消息钩子 PID列处理 ======================
-        ' PID列索引：5 | 列名：PID
-        Const MSGHOOK_PID_COL_INDEX = 5
-        If PID <> Cast(DWORD, -1) Then
-            ' 删除前校验：确保该列是PID列
-            If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) = "PID" Then
-                lvwMsgHook.DeleteColumn(MSGHOOK_PID_COL_INDEX)
-            End If
-        Else
-            ' 添加前校验：确保PID列不存在
-            If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) <> "PID" Then
-                lvwMsgHook.InsertColumn(MSGHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-            End If
-        End If
-        ' =================================================================
-        CommitListViewView lvwMsgHook
+        'InitListViewData lvwMsgHook
+        '' ====================== 消息钩子 PID列处理 ======================
+        '' PID列索引：5 | 列名：PID
+        'Const MSGHOOK_PID_COL_INDEX = 5
+        'If PID <> Cast(DWORD, -1) Then
+        '    ' 删除前校验：确保该列是PID列
+        '    If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) = "PID" Then
+        '        lvwMsgHook.DeleteColumn(MSGHOOK_PID_COL_INDEX)
+        '    End If
+        'Else
+        '    ' 添加前校验：确保PID列不存在
+        '    If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) <> "PID" Then
+        '        lvwMsgHook.InsertColumn(MSGHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
+        '    End If
+        'End If
+        '' =================================================================
+        'CommitListViewView lvwMsgHook
         Exit Sub
     End If
 
@@ -173,7 +173,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
         End If
     End If
     ' =================================================================
-    Print "==================== 消息钩子列表 ===================="
+    'Print "==================== 消息钩子列表 ===================="
 
     For i As Integer = 0 To hookCount - 1
         Dim info As WIN32K_MSG_HOOK_INFO = pHook[i]
@@ -215,7 +215,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
             WStr(info.ThreadId)
 
         ' 调试打印
-        Print "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
+        MyLog.PrintLog LOG_INFO, "GetMsgHook",, "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
         " | 模块:" & finalModulePath
         CloseHandle hProcess
     Next
@@ -307,7 +307,7 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
         End If
     End If
     ' =================================================================
-    Print "==================== 事件钩子列表 ===================="
+    'Print "==================== 事件钩子列表 ===================="
 
     For i As Integer = 0 To hookCount - 1
         Dim info As WIN32K_WINEVENT_HOOK_INFO = pHook[i]
@@ -346,7 +346,7 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
             WStr(info.TargetThreadId)
 
         ' 调试打印
-        Print "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
+        MyLog.PrintLog LOG_INFO, "GetEventHookList",, "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
         " | PID:" & info.ProcessId & " | 模块:" & finalModulePath & " | VA:0x" & Hex(realVA)
         CloseHandle hProcess
     Next

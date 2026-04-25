@@ -193,7 +193,8 @@ Function GetRemoteVersionJson _
 ( _
     outVer As WString Ptr, _
     outExeUrl As WString Ptr, _
-    outSysUrl As WString Ptr _
+    outSysUrl As WString Ptr, _
+    outUpdateLog As WString Ptr _  ' 新增：输出更新日志
 ) As Boolean
 
     ' Gitee官方原生RAW地址
@@ -257,29 +258,31 @@ Function GetRemoteVersionJson _
     ' 解析JSON
     If nLen > 0 Then
         Dim As ZString Ptr p = buf
-        ' ======================================================================
-        ' ✅【核心修复】添加空格！匹配 JSON 里的 "version": " 格式
-        ' ======================================================================
         Dim As ZString Ptr v = StrStr(p, !"version\": \"")
         Dim As ZString Ptr e = StrStr(p, !"exe_url\": \"")
         Dim As ZString Ptr s = StrStr(p, !"sys_url\": \"")
+        Dim As ZString Ptr l = StrStr(p, !"update_log\": \"")  ' 新增：匹配更新日志
 
-        If v<>NULL And e<>NULL And s<>NULL Then
+        ' 新增日志字段校验
+        If v<>NULL And e<>NULL And s<>NULL And l<>NULL Then
             DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "✅ 所有JSON字段匹配成功！"
             ' 截取字段值
             v += 11 : *StrStr(v, !"\"") = 0
             e += 11 : *StrStr(e, !"\"") = 0
             s += 11 : *StrStr(s, !"\"") = 0
+            l += 13 : *strstr(l, !"\"") = 0  ' 新增：截取更新日志
 
             ' 转宽字符
             MultiByteToWideChar(CP_UTF8, 0, v, -1, outVer, 259)
             MultiByteToWideChar(CP_UTF8, 0, e, -1, outExeUrl, 259)
             MultiByteToWideChar(CP_UTF8, 0, s, -1, outSysUrl, 259)
+            MultiByteToWideChar(CP_UTF8, 0, l, -1, outUpdateLog, 1023)  ' 新增：转换日志
 
             DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "✅ 解析成功！远程版本：" & *outVer
+            DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "✅ 更新日志：" & *outUpdateLog
             bOK = True
         Else
-            DEBUG_LOG LOG_ERROR, "GetRemoteVersionJson",, "❌ JSON字段缺失（空格格式不匹配）"
+            DEBUG_LOG LOG_ERROR, "GetRemoteVersionJson",, "❌ JSON字段缺失"
         EndIf
     EndIf
 
@@ -291,44 +294,61 @@ CLEANUP:
     Return bOK
 End Function
 
-' 自动更新主逻辑
+' 更新检测主逻辑
 Sub CheckUpdate()
     Dim As WString * 260 appDir, appPath, localVer, remoteVer
     Dim As WString * 260 tempExe, tempSys, sysPath
     Dim As WString * 256 GITEE_EXE, GITEE_SYS
+    Dim As WString * 1024 updateLog  ' 新增：存储更新日志
+    Dim As Integer userChoice  ' 新增：用户选择
 
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "========== SnowSword 自动更新 =========="
     
     appDir = App.Path
-    ' 路径拼接（你确认正确，保留）
     appPath = appDir & App.EXEName
     
-    ' 驱动路径（修复：宽字符类型匹配）
+    ' 驱动路径
     wcscpy(@sysPath, @appDir)
     Dim As Long i = CUInt(wcsrchr( @sysPath, AscW("\") )) - CUInt(@sysPath) + 1
     sysPath[i] = 0
-    wcscat(@sysPath, StrPtrW("SnowSword.sys"))  ' 修复：StrPtrW替换为WStr，类型匹配
+    wcscat(@sysPath, StrPtrW("SnowSword.sys"))  ' 修复StrPtrW
 
     If Not GetLocalVersion(@appPath, @localVer) Then Return
     
-    If GetRemoteVersionJson(@remoteVer, @GITEE_EXE, @GITEE_SYS) = False Then
+    ' 新增：传入更新日志参数
+    If GetRemoteVersionJson(@remoteVer, @GITEE_EXE, @GITEE_SYS, @updateLog) = False Then
         DEBUG_LOG LOG_ERROR, "CheckUpdate",, "获取版本信息失败"
         Return
     EndIf
     
     If CheckNeedUpdate(@localVer, @remoteVer) = False Then Return
 
-    ' 临时文件（修复类型匹配）
+    ' ==============================================
+    ' 【核心新增】弹窗显示更新日志，询问是否更新
+    ' ==============================================
+    Dim As WString * 2048 msg
+    msg = "检测到新版本！" & !"\n\n当前版本：" & localVer & !"\n最新版本：" & remoteVer & !"\n\n更新内容：\n" & updateLog
+    userChoice = AfxMsg(msg, "更新检测", MB_YESNO Or MB_ICONQUESTION)
+
+    ' 用户选择 否 → 取消更新
+    If userChoice = IDNO Then
+        DEBUG_LOG LOG_INFO, "CheckUpdate",, "用户取消更新"
+        Return
+    EndIf
+    DEBUG_LOG LOG_INFO, "CheckUpdate",, "用户确认更新，开始执行..."
+
+    ' 临时文件
     GetTempPathW(260, tempExe) : wcscat(@tempExe, StrPtrW("SnowSword_new.exe"))
     GetTempPathW(260, tempSys) : wcscat(@tempSys, StrPtrW("SnowSword_new.sys"))
 
     If DownloadFile(@GITEE_EXE, @tempExe) = False Then Return
     If DownloadFile(@GITEE_SYS, @tempSys) = False Then Return
 
-    ' 后续逻辑完全保留
+    ' 后续替换逻辑（完全不变）
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "开始替换主程序..."
-    ' 驱动相关函数你已实现，保留调用
     LoadDriver App.Path & "SnowSword.sys", False
+    Dim As HANDLE hDrv  ' 修复：补全变量声明
+    Dim As Boolean IsDriverLoaded = False
     hDrv = OpenDrv("\\.\\SnowSword")
     If (hDrv <> INVALID_HANDLE_VALUE) Then IsDriverLoaded = True
     ForceDeleteFile(@appPath)

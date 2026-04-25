@@ -294,6 +294,34 @@ CLEANUP:
     Return bOK
 End Function
 
+' ==============================================
+' 宽字符专用：将字符串中的 \n 替换为真实换行符 (ChrW(10))
+' ==============================================
+Sub ReplaceJsonNewLine(str1 As WString Ptr)
+    Dim As WString * 2048 temp = ""
+    Dim As Long i = 0, idx = 0
+    
+    While str1[i] <> 0
+        ' 匹配 JSON 中的 \n 转义字符
+        If str1[i] = AscW("\") AndAlso str1[i+1] = AscW("n") Then
+            ' 🔥 修复：Windows标准换行，分两次赋值单个宽字符
+            temp[idx] = 13  ' 回车
+            idx += 1
+            temp[idx] = 10  ' 换行
+            idx += 1
+            i += 2  ' 跳过 \ 和 n 两个字符
+        Else
+            ' 普通字符直接复制
+            temp[idx] = str1[i]
+            idx += 1
+            i += 1
+        End If
+    Wend
+    
+    ' 覆盖原字符串
+    wcscpy(str1, @temp)
+End Sub
+
 ' 更新检测主逻辑
 Sub CheckUpdate()
     Dim As WString * 260 appDir, appPath, localVer, remoteVer
@@ -327,6 +355,8 @@ Sub CheckUpdate()
     ' 【核心新增】弹窗显示更新日志，询问是否更新
     ' ==============================================
     Dim As WString * 2048 msg
+    ' 🔥 关键：替换更新日志里的 \n 为真实换行
+    ReplaceJsonNewLine(@updateLog)
     msg = "检测到新版本！" & !"\n\n当前版本：" & localVer & !"\n最新版本：" & remoteVer & !"\n\n更新内容：\n" & updateLog
     userChoice = AfxMsg(msg, "更新检测", MB_YESNO Or MB_ICONQUESTION)
 

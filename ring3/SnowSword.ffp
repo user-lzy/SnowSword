@@ -25,7 +25,7 @@ Build=0
 FileMajor=1
 FileMinor=0
 FileRevision=1
-FileBuild=3911
+FileBuild=3912
 AutoIncrement=1
 DefaultCompiler=64
 Comments=
@@ -78,7 +78,7 @@ Module=.\modules\itab.Inc|0|0||Yes|
 Module=.\modules\types.Inc|0|412||Yes|
 Form=.\forms\FrmLog.Frm|0|642||Yes|
 Module=.\modules\ModSystemMisc.Inc|592|26538||Yes|
-Module=.\modules\ModUpdate.Inc|323|13668||Yes|
+Module=.\modules\ModUpdate.Inc|297|12409||Yes|
 
 TopTab=.\forms\FrmMain.frm|False|0|1402|66457
 TopTab=.\forms\FrmListView.Frm|False|0|675|58008
@@ -91,7 +91,7 @@ TopTab=.\modules\ModMemory.Inc|False|0|144|5835
 TopTab=.\modules\ModProcess.Inc|False|0|1015|39749
 TopTab=.\modules\ModGUI.Inc|False|0|459|18252
 TopTab=.\modules\ModThread.Inc|False|0|884|39189
-TopTab=.\modules\ModUpdate.Inc|True|0|323|13668
+TopTab=.\modules\ModUpdate.Inc|True|0|297|12409
 #END_MAIN_PROPERTIES#
 
 

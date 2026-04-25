@@ -270,13 +270,13 @@ Function GetRemoteVersionJson _
             v += 11 : *StrStr(v, !"\"") = 0
             e += 11 : *StrStr(e, !"\"") = 0
             s += 11 : *StrStr(s, !"\"") = 0
-            l += 13 : *strstr(l, !"\"") = 0  ' 新增：截取更新日志
+            l += 14 : *strstr(l, !"\"") = 0  ' 新增：截取更新日志
 
             ' 转宽字符
             MultiByteToWideChar(CP_UTF8, 0, v, -1, outVer, 259)
             MultiByteToWideChar(CP_UTF8, 0, e, -1, outExeUrl, 259)
             MultiByteToWideChar(CP_UTF8, 0, s, -1, outSysUrl, 259)
-            MultiByteToWideChar(CP_UTF8, 0, l, -1, outUpdateLog, 1023)  ' 新增：转换日志
+            MultiByteToWideChar(CP_UTF8, 0, l, -1, outUpdateLog, 1023) ' 新增：转换日志
 
             DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "✅ 解析成功！远程版本：" & *outVer
             DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "✅ 更新日志：" & *outUpdateLog

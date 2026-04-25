@@ -361,6 +361,30 @@ Function MyDeleteFile(ByVal lpFilePath As LPCWSTR) As NTSTATUS
     Return ZwDeleteFile(@ObjectAttributes)
 End Function
 
+Function ForceDeleteFile(ByVal lpFilePath As LPCWSTR) As Boolean
+    Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
+    If (strFile = NULL) Then
+        Print "[FrmMain_mnuFile_ForceDelete]分配内存失败"
+        Return False
+    End If
+    *strFile = "\??\" & *lpFilePath
+    'AfxMsg *strFile
+    If IsDriverLoaded Then
+        #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
+        Dim status As NTSTATUS = MyDeleteFile(strFile)
+        SetLastError 0
+        If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
+            If IoControl(hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then Print "[ForceDeleteFile]IOCTL_DeleteFileByIRP:" & WinErrorMsg(GetLastError) & GetLastError
+        Else ' 是被打开的文件
+            If IoControl(hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then Print "[ForceDeleteFile]IOCTL_DeleteFileByXCB:" & WinErrorMsg(GetLastError) & GetLastError
+            DeleteFile strFile
+            Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
+        End If
+    End If
+    Deallocate strFile
+    Return True
+End Function
+
 Function LocateFilePathByExplorer(ByVal lpFilePath As LPCWSTR) As Boolean
     ' 打开文件资源管理器并选择文件
     'CoInitializeEx NULL, COINIT_MULTITHREADED

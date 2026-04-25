@@ -329,7 +329,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "Notify",, 300
                 .AddColumn "FlowDelete",, 300
                 .AddColumn "名称",, 300
-            Case File
+            Case 1 ' File
                 .AddColumn "名称",, 250
                 .ADdColumn "类型",, 200
                 .AddColumn "大小",, 100

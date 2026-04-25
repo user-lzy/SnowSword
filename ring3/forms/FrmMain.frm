@@ -727,7 +727,7 @@ Tag=
 [TopMenu]
 Name=TopMenu1
 Help=
-Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb0-10{防火墙FrmMain_TopMenu1_mnuFireWall000}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10}
+Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb0-10{防火墙FrmMain_TopMenu1_mnuFireWall000}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10检测更新FrmMain_TopMenu1_mnuCheckUpdate0-10}
 Tag=
 
 [TreeView]
@@ -1276,7 +1276,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     'Print GetProcessSessionId(6744, SessionId) & "SessionId:" & SessionId
     'Test
     'Print GetKernelProcAddress("ntoskrnl.exe", "IopInvalidDeviceRequest ")
-    'Dim bytData() As Byte
+    Dim bytData() As Byte
     'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
     Dim DriverInfo As DRIVER_INFO
     'GetOriginalDispatchFunctionAddr "C:\WIndows\System32\drivers\Ntfs.sys", DriverInfo
@@ -1284,6 +1284,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     FrmLog.Visible = False
     InitLog
     InitThreadPool
+    CheckUpdate
     bFrmMainShowed = True
 End Sub
 
@@ -2305,6 +2306,8 @@ Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmFireWall.Show
         Case FrmMain_TopMenu1_mnuViewLog ' 显示日志
             FrmLog.Visible = True
+        Case FrmMain_TopMenu1_mnuCheckUpdate ' 检测更新
+            CheckUpdate
    End Select
 End Sub
 

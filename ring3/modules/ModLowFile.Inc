@@ -1366,13 +1366,19 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
     
     ' ========== 步骤3：解析DATA属性（类型0x80） ==========
     Dim dataAttr As ATTR_HEADER_NONRESIDENT Ptr = NULL
+    Dim targetMftBuf() As UByte   ' 用于存储外部 MFT 记录（如果需要）
+    Dim isExternalRecord As Boolean = False
+    
+' 定义标签，用于从外部记录跳转到核心处理逻辑
+FindDataAttr:
     Dim attrOff As ULong = mrh->attrOffset
     Dim fileSize As ULongLong = 0
+    Dim gAttr As ATTR_HEADER_GENERIC Ptr
     
     ' 遍历MFT记录的所有属性，找到DATA属性
     Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
         Print ">>> [调试] 检查属性偏移: " & attrOff
-        Dim gAttr As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
+        gAttr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
         Print "      TypeID: " & Hex(gAttr->typeID, 8) & " (80=DATA, 30=FILENAME)"
         Print "      TotalLen: " & gAttr->totalLen
         Print "      NonResident: " & gAttr->nonResident
@@ -1382,166 +1388,243 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         
         ' 找到DATA属性（类型0x80）
         If gAttr->typeID = &H80 Then
-            ' 区分常驻/非常驻属性（大部分文件是非常驻）
-            Dim dataSize As ULong = 0
-            If gAttr->nonResident = 1 Then
-                Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
-                Print ">>> [调试] 非常驻 DATA 属性详情:"
-                Print "      LowVCN: " & nr->lowVCN
-                Print "      HighVCN: " & nr->highVCN
-                Print "      DataSize: " & nr->dataSize
-                Print "      AllocSize: " & nr->allocSize
-                Print "      RunOff: " & nr->runOff
-                dataSize = nr->dataSize
-                Dim allocatedSize As ULongLong = nr->allocSize ' 已分配大小
-                
-                /'Print "    找到非驻留DATA属性："
-                Print "      文件大小: " & fileSize & " 字节"
-                Print "      分配大小: " & allocatedSize & " 字节"'/
-                
-                ' 防御性检查
-                If dataSize = 0 Or dataSize > 256*1024*1024 Then
-                    Print "    [!] 非驻留数据大小异常: " & dataSize
-                    Goto ContinueWhile
-                End If
-                
-                Dim pfileData As UByte Ptr = Allocate(dataSize)
-                If pfileData = NULL Then
-                    Print "    [!] 内存分配失败: " & dataSize & " 字节"
-                    Goto ContinueWhile
-                End If
-                
-                ' 初始化内存为零（处理稀疏运行）
-                memset(pfileData, 0, dataSize)
-                
-                Dim runPtr As UByte Ptr = Cast(UByte Ptr, nr) + nr->runOff
-                Dim currentLCN As ULongLong = 0
-                Dim vcn As ULongLong = nr->lowVCN
-                Dim bytesWritten As ULongLong = 0
-                Dim clusterBuffer As UByte Ptr = Allocate(ctx->clusterSize)
-                
-                If clusterBuffer = NULL Then
-                    Print "    [!] 簇缓冲区分配失败"
-                    Deallocate(pfileData)
-                    Goto ContinueWhile
-                End If
-                
-                Print "    开始解析RunList..."
-                Dim runIndex As Integer = 0
-                Dim baseVCN As ULongLong = nr->lowVCN  ' 新增：保存该属性的起始 VCN
-
-                While runPtr <> NULL And runPtr[0] <> 0
-                    Dim runLen As ULongLong
-                    runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen)
-                    
-                    If runPtr = NULL Then Exit While
-                    
-                    Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
-                    
-                    If runLen = 0 Or runLen > 1000000 Then
-                        Print "    [!] 无效的run长度: " & runLen
-                        Exit While
-                    End If
-                    
-                    For i As ULong = 0 To runLen - 1
-                        Dim lcn As ULongLong = currentLCN + i
-                        
-                        ' ============== 核心修改开始 ==============
-                        ' 错误写法：Dim offsetInData As ULongLong = bytesWritten
-                        ' 正确写法：基于 (当前VCN - 起始VCN) 计算文件偏移
-                        Dim currentVCN As ULongLong = vcn + i
-                        Dim offsetInData As ULongLong = (currentVCN - baseVCN) * ctx->clusterSize
-                        ' ============== 核心修改结束 ==============
-                        
-                        ' 边界检查
-                        If offsetInData >= dataSize Then 
-                            Print "      [!] 偏移超出数据大小: " & offsetInData & " >= " & dataSize
-                            Exit For
-                        End If
-                        
-                        Dim bytesToRead As ULong = ctx->clusterSize
-                        If offsetInData + bytesToRead > dataSize Then
-                            bytesToRead = dataSize - offsetInData
-                        End If
-                        
-                        If bytesToRead = 0 Then Exit For
-                        
-                        If lcn = 0 Then
-                            ' 稀疏运行：保持为0（已初始化）
-                            bytesWritten += bytesToRead
-                        Else
-                            ' 正常运行：读取数据
-                            If ReadClusters(ctx, lcn, 1, clusterBuffer) Then
-                                memcpy(pfileData + offsetInData, clusterBuffer, bytesToRead)
-                                bytesWritten += bytesToRead
-                            Else
-                                Print "      [!] 读取簇失败: LCN=" & lcn
-                            End If
-                        End If
-                    Next
-                    
-                    vcn += runLen  ' 正确跟踪下一个 Run 的起始 VCN
-                    runIndex += 1
-                Wend
-                
-                ' 显示结果
-                Print "    读取完成: " & bytesWritten & " / " & dataSize & " 字节"
-                
-                If bytesWritten > 0 Then
-                    ' 显示前16字节（十六进制）
-                    /'Print "    前16字节(HEX): ";
-                    For i As Integer = 0 To IIf(dataSize > 15, 15, dataSize - 1)
-                        Print Hex(pfileData[i], 2) & " ";
-                    Next
-                    Print
-                    Print "编码类型:" & GetEncodingType(pfileData, dataSize)'/
-                    ' 显示为ASCII文本
-                    /'Print "    ASCII预览: ";
-                    Dim strData As String =  Utf8ToAnsi(pfileData, IIf(dataSize > 16, 16, dataSize))
-                    Print strData
-                    Print'/
-                    ReDim bytData(bytesWritten - 1) As UByte
-                    For i As Integer = 0 To bytesWritten - 1
-                        bytData(i) = pfileData[i]
-                    Next
-                End If
-                result = True
-            Else
-                ' 处理小文件（常驻属性）
+            Print ">>> [√] 找到 DATA 属性 (在" & IIf(isExternalRecord, "外部", "当前") & "记录中)"
+            ' 直接移交控制权给下方的现有处理逻辑
+            Goto ProcessFoundDataAttr
+        ElseIf gAttr->typeID = ATTR_TYPE_ATTRIBUTE_LIST AndAlso Not isExternalRecord Then
+            Print ">>> [调试] 发现 Attribute List，开始搜索外部 DATA..."
+            
+            ' 1. 解析 Attribute List 的数据内容
+            Dim listDataPtr As UByte Ptr
+            Dim listDataSize As ULong
+            Dim tempListBuf() As UByte
+            
+            If gAttr->nonResident = 0 Then
                 Dim resAttr As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, gAttr)
-                fileSize = resAttr->dataLen
-                ' 直接读取常驻数据
-                'Dim dataPtr As UByte Ptr = @recBuf(0) + attrOff + SizeOf(ATTR_HEADER_RESIDENT) + resAttr->dataOff
-                ' 修正：dataOff是从resident头开始的偏移，不需要加SizeOf
-                Dim dataPtr As UByte Ptr = Cast(UByte Ptr, resAttr) + resAttr->dataOff
+                listDataPtr = Cast(UByte Ptr, resAttr) + resAttr->dataOff
+                listDataSize = resAttr->dataLen
+            Else
+                ' (可选) 处理非常驻的 Attribute List (通常很少见)
+                'Print "    [!] Attribute List 是非常驻的，代码暂不支持"
+                ' ============== 新增：处理非常驻 Attribute List ==============
+                Print ">>> [调试] 处理非常驻 Attribute List"
+                Dim nrAttr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
+                listDataSize = nrAttr->dataSize
                 
-                If dataPtr <> NULL Then
-                    ' 显示前16字节（十六进制）
-                    /'Print "    前16字节(HEX): ";
-                    For i As Integer = 0 To IIf(fileSize > 15, 15, fileSize - 1)
-                        Print Hex(dataPtr[i], 2) & " ";
-                    Next
-                    Print
-                    Print "编码类型:" & GetEncodingType(dataPtr, fileSize)'/
-                    ' 显示为ASCII文本
-                    /'Print "    ASCII预览: ";
-                    Dim strData As String =  Utf8ToAnsi(dataPtr, IIf(fileSize > 16, 16, fileSize))
-                    Print strData
-                    Print'/
-                    ReDim bytData(fileSize - 1) As UByte
-                    For i As Integer = 0 To fileSize - 1
-                        bytData(i) = dataPtr[i]
-                    Next
+                ' 安全限制：防止超大列表占用内存
+                If listDataSize = 0 Or listDataSize > 1024 * 1024 Then
+                    Print "    [!] 非常驻 Attribute List 大小异常"
+                    Goto ContinueDo
                 End If
-                    
-                result = True
-                Exit Do
+                
+                ' 分配缓冲区，读取非常驻数据（复用你已有的函数）
+                ReDim tempListBuf(0 To listDataSize - 1)
+                If ReadNonResidentAttributeData(ctx, nrAttr, @tempListBuf(0), listDataSize) = False Then
+                    Print "    [!] 读取非常驻 Attribute List 失败"
+                    Goto ContinueDo
+                End If
+                
+                ' 指针指向读取后的缓冲区
+                listDataPtr = @tempListBuf(0)
             End If
-            Exit Do
+            
+            ' 2. 遍历 Attribute List 条目
+            Dim entry As ATTRIBUTE_LIST_ENTRY Ptr = Cast(ATTRIBUTE_LIST_ENTRY Ptr, listDataPtr)
+            Dim offset As ULong = 0
+            
+            While offset + SizeOf(ATTRIBUTE_LIST_ENTRY) <= listDataSize
+                If entry->recordLen < SizeOf(ATTRIBUTE_LIST_ENTRY) Then Exit While
+                If offset + entry->recordLen > listDataSize Then Exit While
+                
+                ' 检查：这个条目是不是 DATA 属性 (0x80)？
+                If entry->typeID = ATTR_TYPE_DATA Then
+                    Dim extMftRecNo As ULongLong = entry->mftRef And &HFFFFFFFFFFFFULL
+                    Print ">>> [调试] 找到外部 DATA，位于 MFT 记录: " & extMftRecNo
+                    
+                    ' 3. 读取外部 MFT 记录
+                    ReDim targetMftBuf(0 To ctx->mftRecordSize - 1)
+                    If ReadExternalMFTRecord(ctx, extMftRecNo, @targetMftBuf(0)) Then
+                        ' 4. 切换上下文：将 recBuf 指向外部记录，并重置 mrh 指针
+                        ' 注意：这里我们利用数组的内存连续性，直接操作 @recBuf(0) 是关键
+                        ' FreeBASIC 动态数组内存是连续的，我们可以用 memcpy 覆盖它
+                        memcpy(@recBuf(0), @targetMftBuf(0), ctx->mftRecordSize)
+                        
+                        ' 重新初始化 MFT 头指针
+                        mrh = Cast(MFT_RECORD_HEADER Ptr, @recBuf(0))
+                        isExternalRecord = True
+                        
+                        ' 5. 跳回标签 FindDataAttr，在新的 recBuf 里重新找属性
+                        GoTo FindDataAttr
+                    End If
+                End If
+                
+                offset += entry->recordLen
+                entry = Cast(ATTRIBUTE_LIST_ENTRY Ptr, listDataPtr + offset)
+            Wend
         End If
-ContinueWhile:
+ContinueDo:
         attrOff += gAttr->totalLen ' 偏移到下一个属性
     Loop
+    
+    ' 如果走到这里，说明没找到 DATA 属性
+    Print "[!] 错误：未找到 $DATA 属性 (0x80)"
+    Return False
+    
+ProcessFoundDataAttr : 
+    ' 区分常驻/非常驻属性（大部分文件是非常驻）
+    Dim dataSize As ULong = 0
+   If gAttr->nonResident = 1 Then
+        Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
+        Print ">>> [调试] 非常驻 DATA 属性详情:"
+        Print "      LowVCN: " & nr->lowVCN
+        Print "      HighVCN: " & nr->highVCN
+        Print "      DataSize: " & nr->dataSize
+        Print "      AllocSize: " & nr->allocSize
+        Print "      RunOff: " & nr->runOff
+        dataSize = nr->dataSize
+        Dim allocatedSize As ULongLong = nr->allocSize ' 已分配大小
+        
+        /'Print "    找到非驻留DATA属性："
+        Print "      文件大小: " & fileSize & " 字节"
+        Print "      分配大小: " & allocatedSize & " 字节"'/
+        
+        ' 防御性检查
+        If dataSize = 0 Or dataSize > 256*1024*1024 Then
+            Print "    [!] 非驻留数据大小异常: " & dataSize
+            Goto ContinueDo
+        End If
+        
+        Dim pfileData As UByte Ptr = Allocate(dataSize)
+        If pfileData = NULL Then
+            Print "    [!] 内存分配失败: " & dataSize & " 字节"
+            Goto ContinueDo
+        End If
+        
+        ' 初始化内存为零（处理稀疏运行）
+        memset(pfileData, 0, dataSize)
+        
+        Dim runPtr As UByte Ptr = Cast(UByte Ptr, nr) + nr->runOff
+        Dim currentLCN As ULongLong = 0
+        Dim vcn As ULongLong = nr->lowVCN
+        Dim bytesWritten As ULongLong = 0
+        Dim clusterBuffer As UByte Ptr = Allocate(ctx->clusterSize)
+        
+        If clusterBuffer = NULL Then
+            Print "    [!] 簇缓冲区分配失败"
+            Deallocate(pfileData)
+            Goto ContinueDo
+        End If
+        
+        Print "    开始解析RunList..."
+        Dim runIndex As Integer = 0
+        Dim baseVCN As ULongLong = nr->lowVCN  ' 新增：保存该属性的起始 VCN
+
+        While runPtr <> NULL And runPtr[0] <> 0
+            Dim runLen As ULongLong
+            runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen)
+            
+            If runPtr = NULL Then Exit While
+            
+            Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
+            
+            If runLen = 0 Or runLen > 1000000 Then
+                Print "    [!] 无效的run长度: " & runLen
+                Exit While
+            End If
+            
+            For i As ULong = 0 To runLen - 1
+                Dim lcn As ULongLong = currentLCN + i
+                
+                ' ============== 核心修改开始 ==============
+                ' 错误写法：Dim offsetInData As ULongLong = bytesWritten
+                ' 正确写法：基于 (当前VCN - 起始VCN) 计算文件偏移
+                Dim currentVCN As ULongLong = vcn + i
+                Dim offsetInData As ULongLong = (currentVCN - baseVCN) * ctx->clusterSize
+                ' ============== 核心修改结束 ==============
+                
+                ' 边界检查
+                If offsetInData >= dataSize Then 
+                    Print "      [!] 偏移超出数据大小: " & offsetInData & " >= " & dataSize
+                    Exit For
+                End If
+                
+                Dim bytesToRead As ULong = ctx->clusterSize
+                If offsetInData + bytesToRead > dataSize Then
+                    bytesToRead = dataSize - offsetInData
+                End If
+                
+                If bytesToRead = 0 Then Exit For
+                
+                If lcn = 0 Then
+                    ' 稀疏运行：保持为0（已初始化）
+                    bytesWritten += bytesToRead
+                Else
+                    ' 正常运行：读取数据
+                    If ReadClusters(ctx, lcn, 1, clusterBuffer) Then
+                        memcpy(pfileData + offsetInData, clusterBuffer, bytesToRead)
+                        bytesWritten += bytesToRead
+                    Else
+                        Print "      [!] 读取簇失败: LCN=" & lcn
+                    End If
+                End If
+            Next
+            
+            vcn += runLen  ' 正确跟踪下一个 Run 的起始 VCN
+            runIndex += 1
+        Wend
+        
+        ' 显示结果
+        Print "    读取完成: " & bytesWritten & " / " & dataSize & " 字节"
+        
+        If bytesWritten > 0 Then
+            ' 显示前16字节（十六进制）
+            /'Print "    前16字节(HEX): ";
+            For i As Integer = 0 To IIf(dataSize > 15, 15, dataSize - 1)
+                Print Hex(pfileData[i], 2) & " ";
+            Next
+            Print
+            Print "编码类型:" & GetEncodingType(pfileData, dataSize)'/
+            ' 显示为ASCII文本
+            /'Print "    ASCII预览: ";
+            Dim strData As String =  Utf8ToAnsi(pfileData, IIf(dataSize > 16, 16, dataSize))
+            Print strData
+            Print'/
+            ReDim bytData(bytesWritten - 1) As UByte
+            For i As Integer = 0 To bytesWritten - 1
+                bytData(i) = pfileData[i]
+            Next
+        End If
+        result = True
+    Else
+        ' 处理小文件（常驻属性）
+        Dim resAttr As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, gAttr)
+        fileSize = resAttr->dataLen
+        ' 直接读取常驻数据
+        'Dim dataPtr As UByte Ptr = @recBuf(0) + attrOff + SizeOf(ATTR_HEADER_RESIDENT) + resAttr->dataOff
+        ' 修正：dataOff是从resident头开始的偏移，不需要加SizeOf
+        Dim dataPtr As UByte Ptr = Cast(UByte Ptr, resAttr) + resAttr->dataOff
+        
+        If dataPtr <> NULL Then
+            ' 显示前16字节（十六进制）
+            /'Print "    前16字节(HEX): ";
+            For i As Integer = 0 To IIf(fileSize > 15, 15, fileSize - 1)
+                Print Hex(dataPtr[i], 2) & " ";
+            Next
+            Print
+            Print "编码类型:" & GetEncodingType(dataPtr, fileSize)'/
+            ' 显示为ASCII文本
+            /'Print "    ASCII预览: ";
+            Dim strData As String =  Utf8ToAnsi(dataPtr, IIf(fileSize > 16, 16, fileSize))
+            Print strData
+            Print'/
+            ReDim bytData(fileSize - 1) As UByte
+            For i As Integer = 0 To fileSize - 1
+                bytData(i) = dataPtr[i]
+            Next
+        End If
+            
+        result = True
+    End If
     
     ' ========== 最终结果返回 ==========
     If result = True Then

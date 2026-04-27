@@ -184,6 +184,70 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
     CommitListViewView lvwInternet
 End Sub
 
+' IP字符串 转 网络字节序DWORD
+Function StringToIP(ByVal ipStr As String) As ULong
+    Dim As String part(0 To 3)
+    Dim As Long p, i, pos1
+    Dim As ULong a, b, c, d
+
+    ' 初始化
+    For i = 0 To 3
+        part(i) = ""
+    Next
+
+    p = 0
+    pos1 = 1
+
+    ' 按 . 分割 IP
+    While pos1 <= Len(ipStr) And p < 4
+        If Mid(ipStr, pos1, 1) = "." Then
+            p += 1
+            pos1 += 1
+        Else
+            part(p) += Mid(ipStr, pos1, 1)
+            pos1 += 1
+        End If
+    Wend
+
+    ' 转数字
+    a = Val(part(0)) : b = Val(part(1))
+    c = Val(part(2)) : d = Val(part(3))
+
+    ' 范围检查
+    If a > 255 Or b > 255 Or c > 255 Or d > 255 Then Return 0
+
+    ' 关键：返回 网络字节序 (Big-Endian) DWORD
+    ' 与 Windows inet_addr 完全一致
+    Return (d Shl 24) Or (c Shl 16) Or (b Shl 8) Or a
+End Function
+
+' 关闭指定的TCP连接
+' 参数：本地IP、本地端口、远程IP、远程端口
+Public Function CloseTcpConnection(LocalIP As String, LocalPort As Integer, RemoteIP As String, RemotePort As Integer) As Boolean
+    Dim tcpRow As MIB_TCPROW
+    Dim ret As Long
+    
+    ' 填充连接信息
+    tcpRow.dwLocalAddr = StringToIP(LocalIP)
+    tcpRow.dwLocalPort = htons(LocalPort)
+    tcpRow.dwRemoteAddr = StringToIP(RemoteIP)
+    tcpRow.dwRemotePort = htons(RemotePort)
+    
+    ' 关键：把连接状态设为 DELETE_TCB = 强制关闭
+    tcpRow.dwState = MIB_TCP_STATE_DELETE_TCB
+    
+    ' 调用API关闭
+    ret = SetTcpEntry(@tcpRow)
+    
+    If ret = 0 Then
+        MyLog.PrintLog LOG_INFO, "CloseTcpConnection", "SetTcpEntry", "连接关闭成功:" & LocalIP & ":" & LocalPort & " <-> " & RemoteIP & ":" & RemotePort
+        Return True
+    Else
+        MyLog.PrintLog LOG_ERROR, "CloseTcpConnection", "SetTcpEntry", "关闭失败,错误:" & WinErrorMsg(ret) & "(" & ret & ")"
+        Return False
+    End If
+End Function
+
 ' ==============================================
 ' 核心函数：枚举系统 Winsock SPI 提供者 (对齐ETW代码风格)
 ' ==============================================

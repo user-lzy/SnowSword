@@ -13,7 +13,7 @@ Dim Shared NtUserDestroyWindow As Function(ByVal hWnd As hWnd) As WINBOOL
 Sub InitNtUserFunction()
     hwin32uDll = DyLibLoad("win32u.dll")
     If (hwin32uDll = NULL) Then
-        Print "加载win32u.dll失败!" & Err
+        MyLog.PrintLog LOG_ERROR, "InitNtUserFunction", "DyLibLoad", "加载win32u.dll失败!"
         Exit Sub
     End If
     NtUserShowWindow = DyLibSymbol(hwin32uDll, "NtUserShowWindow")

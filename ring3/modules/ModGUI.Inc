@@ -77,15 +77,67 @@ End Function
 ' 辅助函数：转换虚拟键码为字符串（简化版，可自行扩展）
 Function GetVkKeyStr(ByVal vkCode As DWORD) As StringW
     Select Case vkCode
+        ' 数字与字母
         Case &H30 To &H39 : Return Chr(vkCode)
         Case &H41 To &H5A : Return Chr(vkCode)
+        ' 功能键 F1-F24
         Case &H70 To &H87 : Return "F" & (vkCode - &H6F)
-        Case &H0 : Return ""
-        Case &H20 : Return "Space"
+        ' 常用控制键
+        Case &H0  : Return ""                    ' 无主键（仅修饰键）
+        Case &H08 : Return "Backspace"
+        Case &H09 : Return "Tab"
         Case &H0D : Return "Enter"
         Case &H1B : Return "Esc"
-        Case &H09 : Return "Tab"
-        Case Else : Return "VK_0x" & Hex(vkCode)
+        Case &H20 : Return "Space"
+        ' 编辑与导航键
+        Case &H2D : Return "Insert"
+        Case &H2E : Return "Delete"
+        Case &H24 : Return "Home"
+        Case &H23 : Return "End"
+        Case &H21 : Return "PageUp"
+        Case &H22 : Return "PageDown"
+        Case &H25 : Return "Left"
+        Case &H27 : Return "Right"
+        Case &H26 : Return "Up"
+        Case &H28 : Return "Down"
+        ' 锁键与特殊键
+        Case &H2C : Return "PrintScreen"
+        Case &H91 : Return "ScrollLock"
+        Case &H13 : Return "Pause"
+        Case &H12 : Return "Alt"                 ' 虚拟键 Alt（通常作为修饰键，但可能单独注册）
+        Case &H11 : Return "Ctrl"
+        Case &H10 : Return "Shift"
+        Case &H5B : Return "LeftWin"
+        Case &H5C : Return "RightWin"
+        Case &H5D : Return "Apps"                ' 右键菜单键
+        ' 鼠标键（某些软件或驱动注册）
+        Case &H01 : Return "LButton"
+        Case &H02 : Return "RButton"
+        Case &H04 : Return "MButton"
+        Case &H05 : Return "XButton1"
+        Case &H06 : Return "XButton2"
+        ' 媒体与控制键
+        Case &HAD : Return "VolumeMute"
+        Case &HAE : Return "VolumeDown"
+        Case &HAF : Return "VolumeUp"
+        Case &HB0 : Return "NextTrack"
+        Case &HB1 : Return "PrevTrack"
+        Case &HB2 : Return "Stop"
+        Case &HB3 : Return "PlayPause"
+        Case &HB4 : Return "Mail"
+        Case &HB5 : Return "MediaSelect"
+        Case &HB6 : Return "LaunchApp1"
+        Case &HB7 : Return "LaunchApp2"
+        ' 浏览器键（常见）
+        Case &HAC : Return "BrowserHome"
+        Case &HA6 : Return "BrowserBack"
+        Case &HA7 : Return "BrowserForward"
+        Case &HA8 : Return "BrowserRefresh"
+        Case &HA9 : Return "BrowserStop"
+        Case &HAA : Return "BrowserSearch"
+        Case &HAB : Return "BrowserFavorites"
+        ' 未定义或未知键，保留原始信息并加标记
+        Case Else : Return "VK_0x" & Hex(vkCode) & " [?]"
     End Select
 End Function
 

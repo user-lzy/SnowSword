@@ -498,7 +498,7 @@ Function GetProxyDescription32(img As RemotePeImageEx, ByVal proxyVA As ULong) A
     Dim offset As ULong
 
     If ResolveFuncName(img, modBase, rva, funcName, offset) = False Then
-        Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "!0x" & Hex(rva)
+        Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "+0x" & Hex(rva)
     End If
 
     Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "!" & funcName & "+0x" & Hex(offset)
@@ -510,14 +510,14 @@ Function GetProxyDescription64(img As RemotePeImageEx, ByVal proxyVA As ULongInt
     Dim modPath As String
 
     If GetModuleByVA64(img, proxyVA, modBase, modSize, modPath) = False OrElse modPath = "" Then Return "0x" & Hex(proxyVA)
-    Print modPath
+    'Print modPath
     Dim rva As ULongInt = proxyVA - modBase
 
     Dim strName As String
     Dim offset As ULong
 
     If ResolveFuncName(img, modBase, rva, strName, offset) = False Then Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) _ 
-    & "!0x" & Hex(rva)
+    & "+0x" & Hex(rva)
 
     Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "!" & strName & "+0x" & Hex(offset)
 End Function

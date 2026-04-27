@@ -11,9 +11,12 @@ Enum Interface
     WebConnect
     Hook
     Privilege
+    ProcessOtherInfo
     MsgHook
     EventHook
     Hotkey
+    
+    ThreadCallStack
     
     KernelModule
     KernelThread
@@ -66,6 +69,7 @@ Type CURRENT_INFORMATION
     hListView As hWnd
     intType As Interface
     ProcessId As DWORD
+    ThreadId As DWORD
     CurrentModule As CurrentModuleInfo
     CurrentDriver As CurrentDriverInfo
 End Type
@@ -186,10 +190,10 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 '.AddColumn "公司名",, 200
             Case Handles
                 .AddColumn "类型",, 200
-                .AddColumn "名称",, 300
+                .AddColumn "名称",, 350
                 .AddColumn "值",, 100
                 .AddColumn "访问权限",, 150
-                .AddColumn "对象地址",, 200
+                .AddColumn "对象地址",, 350
             Case Privilege
                 .AddColumn "LUID",, 100
                 .AddColumn "名称",, 400
@@ -204,6 +208,23 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "所属窗口",, 150
                 .AddColumn "所属TID",, 100
                 .AddColumn "所属PID",, 100
+            Case WebConnect
+                .AddColumn "协议",, 100
+                .AddColumn "PID",, 100
+                .AddColumn "状态",, 150
+                .AddColumn "SrcIP",, 200
+                .AddColumn "DstIP",, 200
+                .AddColumn "SrcPort",, 100
+                .AddColumn "DstPort",, 100
+                .AddColumn "路径",, 500
+            Case Hook
+                .AddColumn "Hook类型",, 200
+                .AddColumn "地址",, 300
+                .AddColumn "所属模块",, 600
+                .AddColumn "代理函数地址",, 300
+                .AddColumn "所属模块",, 600
+                .AddColumn "当前字节",, 300
+                .AddColumn "原始字节",, 300
             Case MsgHook
                 .AddColumn "hHook",, 100
                 .AddColumn "类型",, 150
@@ -230,6 +251,13 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "PID",, 100
                 .AddColumn "TID",, 100
                 .AddColumn "备注",, 300
+                
+            Case ThreadCallStack
+                .AddColumn "栈帧序号",, 100
+                .AddColumn "地址",, 250
+                .AddColumn "名称",, 300
+                .AddColumn "模块路径",, 300
+                
             Case KernelModule
                 .AddColumn "序号",, 100
                 .AddColumn "名称",, 200
@@ -329,7 +357,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "Notify",, 300
                 .AddColumn "FlowDelete",, 300
                 .AddColumn "名称",, 300
-            Case 1 ' File
+            Case File
                 .AddColumn "名称",, 250
                 .ADdColumn "类型",, 200
                 .AddColumn "大小",, 100
@@ -343,23 +371,6 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "名称",, 200
                 .AddColumn "类型",, 100
                 .AddColumn "数据",, 200
-            Case WebConnect
-                .AddColumn "协议",, 100
-                .AddColumn "PID",, 100
-                .AddColumn "状态",, 150
-                .AddColumn "SrcIP",, 200
-                .AddColumn "DstIP",, 200
-                .AddColumn "SrcPort",, 100
-                .AddColumn "DstPort",, 100
-                .AddColumn "路径",, 500
-            Case Hook
-                .AddColumn "Hook类型",, 200
-                .AddColumn "地址",, 300
-                .AddColumn "所属模块",, 600
-                .AddColumn "代理函数地址",, 300
-                .AddColumn "所属模块",, 600
-                .AddColumn "当前字节",, 300
-                .AddColumn "原始字节",, 300
             Case Service
                 .AddColumn "服务名",, 250
                 .AddColumn "状态",, 140
@@ -589,6 +600,7 @@ End Sub
 ' 修正版：保存当前模块状态（深拷贝数据，无指针冲突）
 ' ==============================================
 Sub SaveCurrentModuleState(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
+    Print "Enter SaveCurrentModuleState"
     Dim ctx As ListViewContext Ptr = _
         Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
     If ctx = 0 Then Exit Sub
@@ -609,12 +621,14 @@ Sub SaveCurrentModuleState(ByVal lvw As Class_ListView, ByVal moduleType As Inte
     Print "moduleType:" & moduleType & " lvw.SelectedItem:" & lvw.SelectedItem
     g_ViewCache(moduleType).TopVisibleIndex = ListView_GetTopIndex(lvw.hWnd)
     g_ViewCache(moduleType).ItemCount = ctx->Snap->RowCount
+    Print "Exit SaveCurrentModuleState"
 End Sub
 
 ' ==============================================
 ' 修正版：从缓存恢复模块（重新填充数据，绝对不冲突）
 ' ==============================================
 Sub RestoreModuleFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
+    Print "Enter RestoreModuleFromCache"
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = 0 Or cache->IsCached = False Or cache->pSnap = 0 Then Exit Sub
 
@@ -645,7 +659,207 @@ Sub RestoreModuleFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Inte
         ListView_EnsureVisible(lvw.hWnd, cache->SelectedIndex + (lvw.CountPerPage - (cache->SelectedIndex - cache->TopVisibleIndex)), True)
         lvw.SetFocus
     End If
+    Print "Exit RestoreModuleFromCache"
 End Sub
+
+
+
+'' 【修复3】修改缓存查找：仅返回“窗口句柄有效且缓存未失效”的索引
+'Private Function FindWindowCacheIndex(ByVal hWnd As HWND) As Long
+'    If hWnd = 0 OrElse IsWindow(hWnd) = 0 Then Return -1 ' 先检查窗口是否有效
+'    
+'    For i As Long = 0 To UBound(g_WindowListViewCache)
+'        If g_WindowListViewCache(i).hWnd = hWnd AndAlso g_WindowListViewCache(i).IsValid Then
+'            Return i
+'        End If
+'    Next
+'    Return -1
+'End Function
+'
+'' 【修复4】新增：强制失效旧缓存（防止句柄复用）
+'Private Sub InvalidateOldCacheByHWnd(ByVal hWnd As HWND)
+'    For i As Long = 0 To UBound(g_WindowListViewCache)
+'        If g_WindowListViewCache(i).hWnd = hWnd Then
+'            g_WindowListViewCache(i).IsValid = False
+'            If g_WindowListViewCache(i).pSnap <> 0 Then
+'                FreeListViewSnapshot(g_WindowListViewCache(i).pSnap)
+'                g_WindowListViewCache(i).pSnap = 0
+'            End If
+'        End If
+'    Next
+'End Sub
+'
+'' 新增：安全检查辅助函数
+'Private Function IsWindowAndCacheValid(ByVal hWnd As HWND) As Boolean
+'    If hWnd = 0 OrElse IsWindow(hWnd) = 0 Then Return False
+'    
+'    Dim idx As Long = FindWindowCacheIndex(hWnd)
+'    If idx <> -1 AndAlso g_WindowListViewCache(idx).IsValid = False Then Return False
+'    
+'    Return True
+'End Function
+'
+'Sub SaveWindowListViewCache(ByVal lvw As Class_ListView, ByVal hWnd As HWND)
+'    Print "=== 开始保存缓存: hWnd=" & hWnd & " ==="
+'    
+'    ' 前置检查
+'    If IsWindow(hWnd) = 0 OrElse IsWindow(lvw.hWnd) = 0 Then
+'        Print "  [拦截] 窗口无效，跳过保存"
+'        Exit Sub
+'    End If
+'    
+'    Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
+'    If ctx = 0 OrElse ctx->Snap = 0 Then
+'        Print "  [错误] ctx/Snap 无效，保存失败"
+'        Exit Sub
+'    End If
+'    
+'    ' ✅ 保存前停止渲染，避免与渲染回调冲突
+'    SendMessage lvw.hWnd, WM_SETREDRAW, FALSE, 0
+'    
+'    ' 先强制失效旧缓存
+'    InvalidateOldCacheByHWnd hWnd
+'    
+'    ' 创建新缓存项
+'    Print "  创建新缓存项"
+'    ReDim Preserve g_WindowListViewCache(UBound(g_WindowListViewCache) + 1)
+'    Dim newIdx As Long = UBound(g_WindowListViewCache)
+'    g_WindowListViewCache(newIdx).hWnd = hWnd
+'    g_WindowListViewCache(newIdx).IsValid = True
+'    
+'    ' 深拷贝快照
+'    Print "  开始深拷贝快照..."
+'    g_WindowListViewCache(newIdx).pSnap = CloneListViewSnapshot(ctx->Snap)
+'    If g_WindowListViewCache(newIdx).pSnap = 0 Then
+'        Print "  [错误] 克隆快照失败"
+'        ' 恢复渲染
+'        SendMessage lvw.hWnd, WM_SETREDRAW, TRUE, 0
+'        Exit Sub
+'    End If
+'    Print "  克隆成功，缓存快照行数: " & g_WindowListViewCache(newIdx).pSnap->RowCount
+'    
+'    ' 保存 UI 状态
+'    g_WindowListViewCache(newIdx).SelectedIndex = lvw.SelectedItem
+'    g_WindowListViewCache(newIdx).TopVisibleIndex = ListView_GetTopIndex(lvw.hWnd)
+'    Print "  保存UI状态: SelectedIndex=" & g_WindowListViewCache(newIdx).SelectedIndex & ", TopVisibleIndex=" & g_WindowListViewCache(newIdx).TopVisibleIndex
+'    
+'    ' 恢复渲染
+'    SendMessage lvw.hWnd, WM_SETREDRAW, TRUE, 0
+'    
+'    Print "=== 保存缓存完成 ==="
+'End Sub
+'
+'Sub RestoreWindowListViewCache(ByVal lvw As Class_ListView, ByVal hWnd As HWND)
+'    Print "=== 开始恢复缓存: hWnd=" & hWnd & " ==="
+'    
+'    ' 前置检查
+'    If IsWindow(hWnd) = 0 OrElse IsWindow(lvw.hWnd) = 0 Then
+'        Print "  [拦截] 窗口无效，跳过恢复"
+'        Exit Sub
+'    End If
+'    
+'    Dim idx As Long = FindWindowCacheIndex(hWnd)
+'    If idx = -1 Then
+'        Print "  [警告] 未找到缓存，跳过恢复"
+'        Exit Sub
+'    End If
+'    If g_WindowListViewCache(idx).pSnap = 0 OrElse g_WindowListViewCache(idx).pSnap->RowCount <= 0 Then
+'        Print "  [警告] 缓存无效，跳过恢复"
+'        Exit Sub
+'    End If
+'    
+'    Dim srcSnap As ListViewSnapshot Ptr = g_WindowListViewCache(idx).pSnap
+'    Print "  找到缓存，快照行数: " & srcSnap->RowCount
+'    
+'    ' 获取当前窗口的 ctx（线程列表的 ctx 一直存在，不需要重建！）
+'    Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
+'    If ctx = 0 Then
+'        ' 只有当 ctx 真的为空时（比如新窗口），才调用 InitListViewData
+'        Print "  ctx 为空，初始化新 ListView"
+'        InitListViewData lvw
+'        ctx = Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
+'        If ctx = 0 Then
+'            Print "  [致命错误] 初始化 ctx 失败"
+'            Exit Sub
+'        End If
+'    Else
+'        ' ✅ 核心修复：线程列表 ctx 存在，只清空现有数据，不重建 ctx！
+'        Print "  ctx 存在，清空现有数据"
+'        DeleteAllItemsEx lvw
+'    End If
+'    
+'    ' 停止渲染
+'    SendMessage lvw.hWnd, WM_SETREDRAW, FALSE, 0
+'    
+'    ' ✅ 直接手动深拷贝缓存到 ctx->Snap（绕过 AddItemColListEx，更安全）
+'    Print "  开始手动填充缓存数据..."
+'    Dim fillCount As Long = 0
+'    
+'    ' 先确保 ctx->Snap 有效
+'    If ctx->Snap = 0 Then
+'        ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
+'        ctx->Snap->RowCount = 0
+'        ReDim ctx->Snap->Rows(-1)
+'    End If
+'    
+'    ' 深拷贝每一行
+'    For i As Long = 0 To srcSnap->RowCount - 1
+'        Dim srow As LVRow Ptr = srcSnap->Rows(i)
+'        If srow = 0 Then Continue For
+'        
+'        ' 分配新行
+'        Dim drow As LVRow Ptr = CAllocate(1, SizeOf(LVRow))
+'        drow->ColCount = srow->ColCount
+'        drow->Fore = srow->Fore
+'        drow->Back = srow->Back
+'        drow->Cols = CAllocate(srow->ColCount, SizeOf(WCHAR Ptr))
+'        
+'        ' 深拷贝每一列
+'        For c As Long = 0 To srow->ColCount - 1
+'            If srow->Cols[c] <> 0 Then
+'                drow->Cols[c] = DupWStr(srow->Cols[c])
+'            End If
+'        Next
+'        
+'        ' 添加到 ctx->Snap
+'        Dim idx As Long = ctx->Snap->RowCount
+'        ctx->Snap->RowCount += 1
+'        ReDim Preserve ctx->Snap->Rows(idx)
+'        ctx->Snap->Rows(idx) = drow
+'        
+'        fillCount = fillCount + 1
+'    Next
+'    Print "  填充完成，共填充 " & fillCount & " 行"
+'    
+'    ' 刷新视图
+'    CommitListViewView lvw
+'    
+'    ' 恢复渲染
+'    SendMessage lvw.hWnd, WM_SETREDRAW, True, 0
+'    InvalidateRect lvw.hWnd, NULL, TRUE
+'    
+'    ' 恢复 UI 状态
+'    If g_WindowListViewCache(idx).SelectedIndex >= 0 AndAlso g_WindowListViewCache(idx).SelectedIndex < lvw.ItemCount Then
+'        lvw.SelectedItem = g_WindowListViewCache(idx).SelectedIndex
+'        ListView_EnsureVisible(lvw.hWnd, g_WindowListViewCache(idx).TopVisibleIndex, False)
+'        lvw.SetFocus
+'    End If
+'    
+'    Print "=== 恢复缓存完成 ==="
+'End Sub
+
+/'Sub CleanupWindowListViewCache(ByVal hWnd As HWND)
+    Dim idx As Long = FindWindowCacheIndex(hWnd)
+    If idx = -1 Then Exit Sub
+
+    ' 释放快照
+    If g_WindowListViewCache(idx).pSnap <> 0 Then
+        FreeListViewSnapshot(g_WindowListViewCache(idx).pSnap)
+        g_WindowListViewCache(idx).pSnap = 0
+    End If
+    ' 标记无效
+    g_WindowListViewCache(idx).IsValid = False
+End Sub'/
 
 
 
@@ -1130,7 +1344,7 @@ Sub DeleteAllItemsEx(ListView As Class_ListView)
             ' 释放列指针数组
             Deallocate(r->Cols)
             ' 释放行结构
-            Delete r ' 是否应改为Deallocate?
+            Deallocate r ' ✅ 修复：Delete → Deallocate（唯一修改点！）
         End If
     Next
     

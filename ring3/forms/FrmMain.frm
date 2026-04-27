@@ -775,7 +775,7 @@ AcceptFiles=False
 Name=mnuProcess
 Help=
 Index=-1
-Menu=结束进程FrmMain_mnuProcess_mnuTerminateProcess0-10强制结束进程FrmMain_mnuProcess_mnuForceTerminateProcess0-10暴力结束进程FrmMain_mnuProcess_mnuViolentTerminateProcess0-10挂起进程FrmMain_mnuProcess_mnuSuspendProcess0-10恢复进程FrmMain_mnuProcess_mnuResumeProcess0-10保护进程FrmMain_mnuProcess_mnuProtectProcess0-10检测隐藏进程FrmMain_mnuProcess_mnuCheckHideProcess0-10校验数字签名FrmMain_mnuProcess_mnuCheckSign0-10校验所有数字签名FrmMain_mnuProcess_mnuCheckAllSign0-10刷新FrmMain_mnuProcess_mnuRefresh0-10-FrmMain_mnuProcess_mnuStep1000注入DLLFrmMain_mnuProcess_mnuInjectDll0-10-FrmMain_mnuProcess_mnuStep20-10查看模块FrmMain_mnuProcess_mnuViewModule0-10查看线程FrmMain_mnuProcess_mnuViewThread0-10查看内存FrmMain_mnuProcess_mnuViewMemory0-10查看...FrmMain_mnuProcess_mnuView0-10{查看窗口列表FrmMain_mnuProcess_mnuViewWindowList0-10查看句柄列表FrmMain_mnuProcess_mnuViewHandleList0-10查看网络连接列表FrmMain_mnuProcess_mnuViewWebConnect0-10查看特权FrmMain_mnuProcess_mnuViewPrivilege0-10查看HookFrmMain_mnuProcess_mnuViewHook0-10查看进程定时器FrmMain_mnuProcess_mnuViewProcessTimer0-10查看消息钩子FrmMain_mnuProcess_mnuViewMsgHook0-10查看事件钩子FrmMain_mnuProcess_mnuViewEventHook0-10查看热键FrmMain_mnuProcess_mnuViewHotkey0-10}-FrmMain_mnuProcess_mnuStep30-10复制FrmMain_mnuProcess_mnuCopy0-10{复制单格FrmMain_mnuProcess_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuProcess_mnuLocateFilePath0-10
+Menu=结束进程FrmMain_mnuProcess_mnuTerminateProcess0-10强制结束进程FrmMain_mnuProcess_mnuForceTerminateProcess0-10暴力结束进程FrmMain_mnuProcess_mnuViolentTerminateProcess0-10挂起进程FrmMain_mnuProcess_mnuSuspendProcess0-10恢复进程FrmMain_mnuProcess_mnuResumeProcess0-10保护进程FrmMain_mnuProcess_mnuProtectProcess0-10检测隐藏进程FrmMain_mnuProcess_mnuCheckHideProcess0-10校验数字签名FrmMain_mnuProcess_mnuCheckSign0-10校验所有数字签名FrmMain_mnuProcess_mnuCheckAllSign0-10刷新FrmMain_mnuProcess_mnuRefresh0-10-FrmMain_mnuProcess_mnuStep1000注入DLLFrmMain_mnuProcess_mnuInjectDll0-10-FrmMain_mnuProcess_mnuStep20-10查看模块FrmMain_mnuProcess_mnuViewModule0-10查看线程FrmMain_mnuProcess_mnuViewThread0-10查看内存FrmMain_mnuProcess_mnuViewMemory0-10查看...FrmMain_mnuProcess_mnuView0-10{查看窗口列表FrmMain_mnuProcess_mnuViewWindowList0-10查看句柄列表FrmMain_mnuProcess_mnuViewHandleList0-10查看网络连接列表FrmMain_mnuProcess_mnuViewWebConnect0-10查看特权FrmMain_mnuProcess_mnuViewPrivilege0-10查看HookFrmMain_mnuProcess_mnuViewHook0-10查看进程定时器FrmMain_mnuProcess_mnuViewProcessTimer0-10查看消息钩子FrmMain_mnuProcess_mnuViewMsgHook0-10查看事件钩子FrmMain_mnuProcess_mnuViewEventHook0-10查看热键FrmMain_mnuProcess_mnuViewHotkey0-10查看其他信息FrmMain_mnuProcess_mnuViewOtherInfo0-10}-FrmMain_mnuProcess_mnuStep30-10复制FrmMain_mnuProcess_mnuCopy0-10{复制单格FrmMain_mnuProcess_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuProcess_mnuLocateFilePath0-10
 Left=510
 Top=250
 Tag=
@@ -1283,6 +1283,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     FrmLog.Show
     FrmLog.Visible = False
     InitLog
+    
     InitThreadPool
     CheckUpdate
     bFrmMainShowed = True
@@ -1555,6 +1556,8 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmListView.Show,, WebConnect
         Case FrmMain_mnuProcess_mnuViewPrivilege ' 查看特权列表
             FrmListView.Show,, Privilege
+        Case FrmMain_mnuProcess_mnuViewOtherInfo ' 查看其他信息
+            FrmOtherInfo.Show,, ProcessOtherInfo
         Case FrmMain_mnuProcess_mnuViewHook ' 查看Hook
             CurrentInformation.CurrentModule.ModuleName = ""
             CurrentInformation.CurrentModule.ModuleHandle = NULL
@@ -1567,6 +1570,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmListView.Show,, EventHook
         Case FrmMain_mnuProcess_mnuViewHotkey ' 查看热键
             FrmListView.Show,, Hotkey
+
         Case FrmMain_mnuProcess_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -2334,6 +2338,7 @@ Sub FrmMain_WM_NcActivate(hWndForm As hWnd, fActive As Long)
         End If
         CurrentInformationArray(0).intType = CurrentInformation.intType
         CurrentInformationArray(0).ProcessId = CurrentInformation.ProcessId
+        CurrentInformationArray(0).ThreadId = CurrentInformation.ThreadId
         
         CurrentInformationArray(0).CurrentModule.ModuleName = CurrentInformation.CurrentModule.ModuleName
         CurrentInformationArray(0).CurrentModule.ModuleHandle = CurrentInformation.CurrentModule.ModuleHandle
@@ -2351,6 +2356,7 @@ Sub FrmMain_WM_NcActivate(hWndForm As hWnd, fActive As Long)
         ' 正确做法：逐个字段赋值
         CurrentInformation.intType = CurrentInformationArray(0).intType
         CurrentInformation.ProcessId = CurrentInformationArray(0).ProcessId
+        CurrentInformation.ThreadId = CurrentInformationArray(0).ThreadId
         
         CurrentInformation.CurrentModule.ModuleName = CurrentInformationArray(0).CurrentModule.ModuleName
         CurrentInformation.CurrentModule.ModuleHandle = CurrentInformationArray(0).CurrentModule.ModuleHandle

@@ -364,7 +364,7 @@ Sub Logger.PrintLog(level As LogLevel, func As String = "", apiName As String = 
     'If module <> "" Then logStr = logStr & " [模块:" & module & "]"
     If func <> "" Then logStr = logStr & " [函数:" & func & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
-    logStr = logStr & " " & msg
+    logStr = logStr & " " & MSG
     
     ' 仅入内存队列，立即返回
     EnqueueLog(logStr)
@@ -378,7 +378,7 @@ Sub Logger.PrintWin32Error(funcName As String, apiName As String, msg As String)
     logStr = logStr & " [函数:" & funcName & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & "调用失败,错误码:" & nError & "(" & WinErrorMsg(nError) & ")"
-    logStr = logStr & msg
+    logStr = logStr & " " & msg
     
     ' 仅入内存队列，立即返回
     EnqueueLog(logStr)
@@ -391,7 +391,7 @@ Sub Logger.PrintNtError(funcName As String, apiName As String, ByVal status As N
     logStr = logStr & " [函数:" & funcName & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & "调用失败,错误码:0x" & WHex(status)
-    logStr = logStr & msg
+    logStr = logStr & " " & msg
     
     ' 仅入内存队列，立即返回
     EnqueueLog(logStr)

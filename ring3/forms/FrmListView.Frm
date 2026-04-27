@@ -50,7 +50,7 @@ AcceptFiles=False
 Name=mnuWebConnect
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuWebConnect_mnuRefresh0-10-FrmListView_mnuWebConnect_Step10-10显示全部FrmListView_mnuWebConnect_ViewAll0-10-FrmListView_mnuWebConnect_mnuStep10-10复制FrmListView_mnuWebConnect_mnuCopy0-10{复制单格数据FrmListView_mnuWebConnect_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuWebConnect_mnuLocateFilePath0-10
+Menu=刷新FrmListView_mnuWebConnect_mnuRefresh0-10-FrmListView_mnuWebConnect_mnuStep10-10关闭连接FrmListView_mnuWebConnect_mnuCloseConnect0-10-FrmListView_mnuWebConnect_mnuStep20-10显示全部FrmListView_mnuWebConnect_mnuViewAll0-10-FrmListView_mnuWebConnect_mnuStep30-10复制FrmListView_mnuWebConnect_mnuCopy0-10{复制单格数据FrmListView_mnuWebConnect_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuWebConnect_mnuLocateFilePath0-10
 Left=680
 Top=190
 Tag=
@@ -167,7 +167,7 @@ Tag=
 Name=mnuThread
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10暴力摧毁线程(可能蓝屏)FrmListView_mnuThread_mnuForceDestroyThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10-FrmListView_mnuThread_mnuStep30-10查看/编辑内存FrmListView_mnuThread_mnuEditMemory0-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
+Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10暴力摧毁线程(可能蓝屏)FrmListView_mnuThread_mnuForceDestroyThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10查看线程栈FrmListView_mnuThread_mnuViewThreadStack0-10-FrmListView_mnuThread_mnuStep30-10查看/编辑内存FrmListView_mnuThread_mnuEditMemory0-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
 Left=360
 Top=150
 Tag=
@@ -295,6 +295,7 @@ Type DO_SOMETHING
 End Type
 
 Dim Shared CurrentPID As DWORD
+Dim Shared CurrentTID As DWORD
 Dim Shared CurrentProcessName As StringW
 Dim Shared prevFrmListViewProc As LONG_PTR = NULL
 
@@ -429,8 +430,9 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
     CurrentInformation.intType = UserData
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP)
-    UninitListViewData ListView
     Me.hWndForm = hWndForm 'ListView.hWndForm = hWndForm
+    ListView.hWndForm = hWndForm
+    UninitListViewData ListView
     CurrentPID = CurrentInformation.ProcessId
     CurrentProcessName = GetNameByPath(GetProcessPath(CurrentPID))
     lblNum.Caption = "正在获取..."
@@ -438,48 +440,52 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
     Select Case CurrentInformation.intType
         Case Module
             GetModuleList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 模块列表"
         Case Thread
             GetThreadList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 线程列表"
         Case KernelThread
             GetKernelThreadList ListView
         Case Windows
             GetWindowList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 窗口列表"
         Case ProcessTimer
             GetProcessTimerList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 定时器列表"
         Case Handles
             GetHandleList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
-            Print "1"'下面的Print和SetListViewData在执行此次Case后均不会被执行
-            Print "2"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 句柄列表"
+            'Print "1"'下面的Print和SetListViewData在执行此次Case后均不会被执行
+            'Print "2"
         Case Memory
             GetMemoryBlockList CurrentPID,ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 内存块列表"
         Case WebConnect
             GetWebConnectList CurrentPID, ListView, True
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 网络连接列表"
         Case Privilege
             GetProcessPrivilegeList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 特权列表"
         Case Hook
             If CurrentInformation.CurrentModule.ModuleHandle = NULL Then
                 GetProcessHookList CurrentPID, ListView
             Else
                 GetModuleHookList CurrentPID, CurrentInformation.CurrentModule.ModuleName, CurrentInformation.CurrentModule.ModuleHandle, ListView
             End If
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " Hook列表(inline hook, iat hook, eat hook)"
+            
+        Case ThreadCallStack
+            GetCallStack CurrentPID, CurrentTID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & " TID:" & CurrentTID & "]" & " 调用栈"
         Case MsgHook
             GetMsgHookList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
         Case EventHook
             GetEventHookList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
         Case Hotkey
             GetHotkeyList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]"
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
         Case UnlockTheFile
             Unlock_File ListView', FilePathByUnlock
             Me.Caption = "文件占用查看小工具"
@@ -487,7 +493,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             If CurrentInformation.CurrentDriver.DriverObject <> 0 Then
                 GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverPath, CurrentInformation.CurrentDriver.DriverObject
             End If
-            Me.Caption = "[" & CurrentInformation.CurrentDriver.DriverName & "]"
+            Me.Caption = "[" & CurrentInformation.CurrentDriver.DriverName & "]" & " IO派遣函数列表"
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
 End Sub
@@ -533,7 +539,7 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
             mnuHandle.hWndForm = hWndForm
             PopupMenu hWndForm, mnuHotkey.HMENU
         Case UnlockTheFile
-            mnuUnlock_FIle.hWndForm = hWndForm
+            mnuUnlock_File.hWndForm = hWndForm
             PopupMenu hWndForm,mnuUnlock_FIle.HMENU
     End Select
 End Sub
@@ -584,12 +590,12 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd,wID As ULong)
                 If IsListViewItemSelected(ListView, i) Then MyResumeThread ValULng(ListView.GetItemText(i, 0))
             Next
             GetThreadList CurrentPID, ListView
+        Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
+            CurrentTID = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
+            FrmListView.Show,, ThreadCallStack
         Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
             If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
             FrmMemoryEditor.Show,, Addr
         Case FrmListView_mnuThread_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
@@ -664,6 +670,7 @@ End Sub
 '[FrmListView]事件 : 即将关闭窗口，返回非0可阻止关闭
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 Function FrmListView_WM_Close(hWndForm As hWnd) As LResult
+    ListView.hWndForm = hWndForm
     UninitListViewData ListView
     Function = FALSE ' 返回 TRUE 阻止关闭窗口。
 End Function
@@ -674,6 +681,7 @@ End Function
 Sub FrmListView_WM_NcActivate(hWndForm As hWnd, fActive As Long)
     Dim CurrentIndex As Integer = GetIndexByListViewHwnd(hWndForm)
     Me.hWndForm = hWndForm
+    ListView.hWndForm = hWndForm
     If fActive = 0 Then
         'Print "[FrmListView]失去焦点," & FrmListView.hWnd & "->" & CurrentInformation.intType & " CurrentIndex:" & CurrentIndex
         'CurrentInformationArray(CurrentIndex).hListView = hWndForm
@@ -857,15 +865,15 @@ Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd,wID As ULong)
    Select Case wID
         Case FrmListView_mnuWebConnect_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
-            GetWebConnectList CurrentPID, ListView, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_ViewAll)
+            GetWebConnectList CurrentPID, ListView, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuWebConnect_ViewAll ' 显示全部
+        Case FrmListView_mnuWebConnect_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
-            GetWebConnectList CurrentPID, ListView, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_ViewAll)
+            GetWebConnectList CurrentPID, ListView, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-            SetMenuCheckState mnuWebConnect, FrmListView_mnuWebConnect_ViewAll, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_ViewAll)
+            SetMenuCheckState mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
         Case FrmListView_mnuWebConnect_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
@@ -929,6 +937,7 @@ End Sub
 'wParam      主消息参数，什么作用，由发送消息者定义
 'lParam      副消息参数，什么作用，由发送消息者定义
 Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lParam As lParam) As LResult
+    ListView.hWndForm = hWndForm
     Select Case wMsg
     Case WM_NOTIFY
         Dim Nmhdr As NMHDR Ptr = Cast(NMHDR Ptr, lParam)
@@ -936,21 +945,40 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
             
             Select Case Nmhdr->code
             Case LVN_GETDISPINFO
-                Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
-                Dim ctx As ListViewContext Ptr = _
-                    Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
-                ' ========== 新增：全套安全校验（修复崩溃） ==========
-                If ctx = NULL Then Return 0 ' 上下文为空
-                If ctx->Snap = NULL Then Return 0 ' 快照为空
-                If p->item.iItem < 0 Or p->item.iItem >= ctx->VisibleCount Then Return 0 ' 项索引越界
-                If ctx->VisibleCount <= 0 Then Return 0 ' 无可见项
-                ' ======================================================
-                
-                Dim real As Long = ctx->VisibleIndex(p->item.iItem)
-                ' 新增：真实行索引校验
-                If real < 0 Or real >= ctx->Snap->RowCount Then Return 0
-                Dim r As LVRow Ptr = ctx->Snap->Rows(real)
-                If r = NULL Then Return 0 ' 行数据为空
+            Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
+            ' -------------- 纯渲染调试，无任何全局变量 --------------
+            'Print "====================================="
+            'Print "重绘窗口句柄：" & p->hdr.hwndFrom  ' 确认是正确的ListView
+            'Print "请求行：" & p->item.iItem & " 列：" & p->item.iSubItem
+            
+            ' 获取当前窗口的私有ctx（唯一渲染入口）
+            Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
+            'Print "ctx指针：" & ctx & " (空=崩溃，非空=正常)"
+            
+            If ctx = NULL Then Return 0
+            'Print "ctx->Snap：" & ctx->Snap & " (空=无数据)"
+            'Print "ctx->VisibleCount：" & ctx->VisibleCount
+            'Print "ctx->Snap->RowCount：" & ctx->Snap->RowCount
+            
+            ' 核心：VisibleIndex映射是否失效
+            Dim real As Long = ctx->VisibleIndex(p->item.iItem)
+            'Print "【关键】映射后真实索引：" & real & " (正常≥0，-1=失效)"
+            
+            If real < 0 Or real >= ctx->Snap->RowCount Then
+                'Print "❌ 索引越界 → 无文字"
+                Return 0
+            End If
+            
+            Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+            'Print "行数据指针：" & r & " (空=无数据)"
+            If r = NULL Then Return 0
+            
+            ' 最终：文本指针是否有效
+            If p->item.iSubItem < r->ColCount Then
+                'Print "✅ 文本内容：" & r->Cols[p->item.iSubItem]
+            Else
+                'Print "❌ 列越界 → 无文字"
+            End If
 
                 If (p->item.mask And LVIF_TEXT) <> 0 Then
                     If p->item.iSubItem < r->ColCount Then
@@ -1277,10 +1305,3 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
     End Select
 End Sub
-
-
-
-
-
-
-

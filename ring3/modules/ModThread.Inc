@@ -125,16 +125,8 @@ Declare Function ZwTerminateThread Lib "ntdll.dll" Alias "ZwTerminateThread"(ByV
 Declare Function ZwSuspendThread Lib "ntdll.dll" Alias "ZwSuspendThread"(ByVal ThreadHandle As HANDLE,ByVal PreviousSuspendCount As PULONG) As NTSTATUS
 Declare Function ZwResumeThread Lib "ntdll.dll" Alias "ZwResumeThread"(ByVal ThreadHandle As HANDLE, ByVal PreviousSuspendCount As PULONG) As NTSTATUS
 
-#ifdef PrintLog
-'#define PrintLog(nt_Status, Reason) MyPrintLog(nt_Status, Reason, __FUNCTION__, __LINE__)'取消注释就炸
-#endif
-
-#ifdef PrintLastError
-#define PrintLastError MyPrintA "Error In Function [" & __FUNCTION__ & "] At Line " & __LINE__ & ":" & WinErrorMsg(GetLastError) & "(" & Str(GetLastError) & ")"
-#endif
-
 Function SnowSword_OpenThread(ByVal ThreadId As DWORD) As HANDLE
-    'If Not IsDriverLoaded Then Return NULL
+    If Not IsDriverLoaded Then Return NULL
     Dim TID As DWORD = ThreadId
     Dim hThread As HANDLE = NULL
     IoControl hDrv, IOCTL_OpenThread, @TID, SizeOf(DWORD), @hThread, SizeOf(hThread)
@@ -151,8 +143,8 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
     
     ' 读取DOS头
     If (ReadProcessMemory(hProcess, Cast(LPCVOID, Cast(ULONG_PTR, moduleBase)), @dosHeader, SizeOf(IMAGE_DOS_HEADER), @bytRead) = 0) OrElse (bytRead <> SizeOf(IMAGE_DOS_HEADER)) Then
-        Print "[-] 读取DOS头失败: " & GetLastError
-        Print bytRead & "/" & SizeOf(IMAGE_DOS_HEADER)
+        MyLog.PrintWin32Error "Get32BitFuncAddress", "ReadProcessMemory", "读取DOS头失败"
+        'Print bytRead & "/" & SizeOf(IMAGE_DOS_HEADER)
         Return 0
     End If
     
@@ -161,8 +153,7 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
     ' 读取NT头
     Dim ntHeaderAddr As ULONG_PTR = moduleBase + dosHeader.e_lfanew
     If (ReadProcessMemory(hProcess, Cast(LPCVOID, ntHeaderAddr), @ntHeaders32, SizeOf(IMAGE_NT_HEADERS32), @bytRead) = 0) OrElse (bytRead <> SizeOf(IMAGE_NT_HEADERS32)) Then
-        Print "[-] 读取NT头失败: " & GetLastError
-        Print bytRead & "/" & SizeOf(IMAGE_NT_HEADERS32)
+        MyLog.PrintWin32Error "Get32BitFuncAddress", "ReadProcessMemory", "读取NT头失败"
         Return 0
     End If
     
@@ -175,8 +166,7 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
     Dim exportDir As IMAGE_EXPORT_DIRECTORY
     Dim exportDirAddr As ULONG_PTR = moduleBase + exportRVA
     If (ReadProcessMemory(hProcess, Cast(LPCVOID, exportDirAddr), @exportDir, SizeOf(IMAGE_EXPORT_DIRECTORY), @bytRead) = 0) OrElse (bytRead <> SizeOf(IMAGE_EXPORT_DIRECTORY)) Then
-        Print "[-] 读取导出目录失败: " & GetLastError
-        Print bytRead & "/" & SizeOf(IMAGE_EXPORT_DIRECTORY)
+        MyLog.PrintWin32Error "Get32BitFuncAddress", "ReadProcessMemory", "读取导出目录失败"
         Return 0
     End If
     
@@ -189,7 +179,7 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
         ' 读取函数名RVA
         Dim nameRVA As DWORD
         If (ReadProcessMemory(hProcess, Cast(LPCVOID, namesAddr + i * 4), @nameRVA, 4, @bytRead) = 0) OrElse (bytRead < 4) Then
-            Print bytRead & "/4" 
+            'Print bytRead & "/4" 
             Continue For
         End If
         
@@ -197,7 +187,7 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
         Dim nameAddr As ULONG_PTR = moduleBase + nameRVA
         Dim nameBuffer As ZString * 64
         If (ReadProcessMemory(hProcess, Cast(LPCVOID, nameAddr), @nameBuffer, 64, @bytRead) = 0) OrElse (bytRead < 64) Then
-            Print bytRead & "/64"
+            'Print bytRead & "/64"
             Continue For
         End If
         ''Print nameBuffer
@@ -212,12 +202,12 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
             ReadProcessMemory(hProcess, Cast(LPCVOID, functionsAddr + ordinal*4), @funcRVA, 4, @bytRead)
             
             Dim finalAddr As DWORD = moduleBase + funcRVA
-            Print "[+] 找到 " & funcName & " @ 0x" & Hex(finalAddr)
+            MyLog.PrintLog LOG_INFO, "Get32BitFuncAddress",, "[+] 找到 " & funcName & " @ 0x" & Hex(finalAddr)
             Return finalAddr
         End If
     Next
     
-    Print "[-] 未找到函数: " & funcName
+    MyLog.PrintLog LOG_ERROR, "Get32BitFuncAddress",, "[-] 未找到函数: " & funcName
     Return 0
 End Function
 
@@ -233,50 +223,50 @@ Private Function Get32BitProcAddress(ByVal hProcess As HANDLE, moduleName As Str
     ' 获取WOW64 PEB指针
     st = NtQueryInformationProcess(hProcess, ProcessWow64Information, @wow64Peb, SizeOf(wow64Peb), NULL)
     If Not NT_SUCCESS(st) Then
-        Print "[-] NtQueryInformationProcess失败: 0x" & Hex(st)
+        MyLog.PrintNtError "Get32BitProcAddress", "NtQueryInformationProcess", st, "获取WOW64 PEB指针失败"
         Return 0
     End If
     
     If wow64Peb = NULL Then
-        Print "[-] WOW64 PEB为NULL"
+        MyLog.PrintLog LOG_ERROR, "Get32BitProcAddress", "", "WOW64 PEB为NULL"
         Return 0
     End If
     
     Dim peb32Addr As DWORD = Cast(DWORD, wow64Peb)  ' 32位地址
-    Print "[*] WOW64 PEB地址: 0x" & Hex(peb32Addr)
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] WOW64 PEB地址: 0x" & Hex(peb32Addr)
     
     ' 读取PEB（只读必要的字段）
     Dim peb As PEB32
     If (ReadProcessMemory(hProcess, Cast(LPCVOID, Cast(ULONG_PTR, peb32Addr)), @peb, SizeOf(PEB32), @bytRead) = 0) OrElse (bytRead <> SizeOf(PEB32)) Then
-        Print "[-] 读取PEB失败: " & GetLastError
-        Print bytRead & "/" & SizeOf(PEB32)
+        MyLog.PrintWin32Error "Get32BitProcAddress", "ReadProcessMemory", "读取PEB失败"
+        MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", bytRead & "/" & SizeOf(PEB32)
         Return 0
     End If
     
     If peb.Ldr = 0 Then
-        Print "[-] Ldr指针为NULL"
+        MyLog.PrintLog LOG_ERROR, "Get32BitProcAddress", "", "Ldr指针为NULL"
         Return 0
     End If
     
-    Print "[*] PEB_LDR_DATA地址: 0x" & Hex(peb.Ldr)
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] PEB_LDR_DATA地址: 0x" & Hex(peb.Ldr)
     
     ' 读取LDR头
     Dim ldr32 As PEB_LDR_DATA32
     If (ReadProcessMemory(hProcess, Cast(LPCVOID, Cast(ULONG_PTR, peb.Ldr)), @ldr32, SizeOf(PEB_LDR_DATA32), @bytRead) = 0) OrElse (bytRead <> SizeOf(PEB_LDR_DATA32)) Then
-        Print "[-] 读取LDR失败: " & GetLastError
-        Print bytRead & "/" & SizeOf(PEB_LDR_DATA32)
+        MyLog.PrintWin32Error "Get32BitProcAddress", "ReadProcessMemory", "读取LDR失败"
+        MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", bytRead & "/" & SizeOf(PEB_LDR_DATA32)
         Return 0
     End If
     
-    Print "[*] LDR.InMemoryOrder.Flink: 0x" & Hex(ldr32.InMemoryOrderModuleList.Flink)
-    Print "[*] LDR.InMemoryOrder.Blink: 0x" & Hex(ldr32.InMemoryOrderModuleList.Blink)
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] LDR.InMemoryOrder.Flink: 0x" & Hex(ldr32.InMemoryOrderModuleList.Flink)
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] LDR.InMemoryOrder.Blink: 0x" & Hex(ldr32.InMemoryOrderModuleList.Blink)
     
     ' 关键修复：计算远程链表头地址
     Dim listHeadAddr As DWORD = peb.Ldr + offsetof(PEB_LDR_DATA32, InMemoryOrderModuleList)
     Dim currentLink As DWORD = ldr32.InMemoryOrderModuleList.Flink
     
-    Print "[*] 链表头地址: 0x" & Hex(listHeadAddr)
-    Print "[*] 开始遍历模块（最多50个）..."
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] 链表头地址: 0x" & Hex(listHeadAddr)
+    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[*] 开始遍历模块（最多50个）..."
     
     Dim i As Integer = 0
     Do While currentLink <> 0 And currentLink <> listHeadAddr And i < 50
@@ -285,8 +275,8 @@ Private Function Get32BitProcAddress(ByVal hProcess As HANDLE, moduleName As Str
         
         Dim entry32 As LDR_DATA_TABLE_ENTRY32
         If (ReadProcessMemory(hProcess, Cast(LPCVOID, Cast(ULONG_PTR, entryAddr)), @entry32, SizeOf(LDR_DATA_TABLE_ENTRY32), @bytRead) = 0) OrElse (bytRead <> SizeOf(LDR_DATA_TABLE_ENTRY32)) Then
-            Print "[-] 读取条目失败: " & GetLastError & " @ 0x" & Hex(entryAddr)
-            Print bytRead & "/" & SizeOf(LDR_DATA_TABLE_ENTRY32)
+            MyLog.PrintWin32Error "Get32BitProcAddress", "ReadProcessMemory", "读取条目失败 @ 0x" & Hex(entryAddr)
+            MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", bytRead & "/" & SizeOf(LDR_DATA_TABLE_ENTRY32)
             Exit Do
         End If
         
@@ -297,21 +287,19 @@ Private Function Get32BitProcAddress(ByVal hProcess As HANDLE, moduleName As Str
             
             If (ReadProcessMemory(hProcess, Cast(LPCVOID, Cast(ULONG_PTR, entry32.BaseDllName.Buffer)), @nameBuffer, entry32.BaseDllName.Length, NULL) <> 0) AndAlso (bytRead >= entry32.BaseDllName.Length) Then
                 nameBuffer[nameLen] = 0  ' 确保终止
-                ''Print "模块:" & nameBuffer
                 Dim strmodule As StringW = LeftW(nameBuffer, nameLen)
-                ''Print "  [" & i & "] " & moduleName & " (基址: 0x" & WHex(entry32.DllBase) & ")"
                 
                 ' 关键修复：不区分大小写比较
                 If LCaseW(strmodule) = LCaseW(moduleName) Then
-                    Print "[+] 找到kernel32.dll!地址:" & WHex(entry32.DllBase)
+                    MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "[+] 找到kernel32.dll!地址:" & WHex(entry32.DllBase)
                     Return Get32BitFuncAddress(hProcess, entry32.DllBase, FuncName)
                 End If
             Else
-                Print "  [" & i & "] 读取名称失败: " & WinErrorMsg(GetLastError) & GetLastError
-                Print bytRead & "/" & entry32.BaseDllName.Length
+                MyLog.PrintWin32Error "Get32BitProcAddress", "ReadProcessMemory", "[" & i & "] 读取名称失败: " & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", bytRead & "/" & entry32.BaseDllName.Length
             End If
         Else
-            Print "  [" & i & "] 名称为空或缓冲区无效"
+            MyLog.PrintLog LOG_INFO, "Get32BitProcAddress", "", "  [" & i & "] 名称为空或缓冲区无效"
         End If
         
         ' 下一个链接
@@ -319,7 +307,7 @@ Private Function Get32BitProcAddress(ByVal hProcess As HANDLE, moduleName As Str
         i += 1
     Loop
     
-    Print "[-] 遍历完成，未找到kernel32.dll (检查" & i & "个模块)"
+    MyLog.PrintLog LOG_ERROR, "Get32BitProcAddress", "", "[-] 遍历完成，未找到kernel32.dll (检查" & i & "个模块)"
     Return 0
 End Function
 
@@ -350,59 +338,59 @@ Function RemoteInjectDll(ByVal ProcessId As DWORD, ByVal wszInjectDllPathName As
     
     Function = False
     
-    Print "======================================"
-    Print "[*] 目标进程PID: " & ProcessId
-    Print "[*] DLL路径: " & *wszInjectDllPathName.wstrPtr
-    Print "======================================"
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "======================================"
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[*] 目标进程PID: " & ProcessId
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[*] DLL路径: " & *wszInjectDllPathName.wstrPtr
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "======================================"
     
     ' 打开目标进程
     hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, ProcessId)
     If hProcess = NULL Then
-        Print "[-] OpenProcess失败: 错误码 " & GetLastError
+        MyLog.PrintWin32Error "RemoteInjectDll", "OpenProcess", "打开目标进程失败"
         Goto Cleanup
     End If
     
     ' 判断位数
     IsWow64 = IsProcessWow64_Ex(hProcess)
-    Print "[*] 进程类型: " & IIf(IsWow64, "32位(WOW64)", "64位(原生)")
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[*] 进程类型: " & IIf(IsWow64, "32位(WOW64)", "64位(原生)")
     
     ' 分配内存并写入DLL路径
     lpBuffer = VirtualAllocEx(hProcess, NULL, dwDllPathSize, MEM_COMMIT, PAGE_READWRITE)
     If lpBuffer = NULL Then
-        Print "[-] VirtualAllocEx失败: " & GetLastError
+        MyLog.PrintWin32Error "RemoteInjectDll", "VirtualAllocEx", "分配远程内存失败"
         Goto Cleanup
     End If
     
     If WriteProcessMemory(hProcess, lpBuffer, wszInjectDllPathName.wstrPtr, dwDllPathSize, @written) = 0 Then
-        Print "[-] WriteProcessMemory失败: " & GetLastError
+        MyLog.PrintWin32Error "RemoteInjectDll", "WriteProcessMemory", "写入DLL路径失败"
         Goto Cleanup
     End If
     
     ' 验证写入
     ReadProcessMemory(hProcess, lpBuffer, @verifyBuf, dwDllPathSize, NULL)
-    Print "[+] 路径写入验证: " & verifyBuf
+    MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] 路径写入验证: " & verifyBuf
     
     ' 区分处理
     If IsWow64 Then
         ' 32位进程
-        Print "[*] 注入32位进程..."
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[*] 注入32位进程..."
         pfnLoadLibraryW = Get32BitProcAddress(hProcess, "kernel32.dll", "LoadLibraryW")
         
         If pfnLoadLibraryW = 0 Then
-            Print "[-] 获取LoadLibraryW地址失败"
+            MyLog.PrintLog LOG_ERROR, "RemoteInjectDll", "", "[-] 获取LoadLibraryW地址失败"
             Goto Cleanup
         End If
         
-        Print "[+] LoadLibraryW地址: 0x" & Hex(pfnLoadLibraryW)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] LoadLibraryW地址: 0x" & Hex(pfnLoadLibraryW)
         
         pfnNtTerminateThread = Get32BitProcAddress(hProcess, "ntdll.dll", "NtTerminateThread")
         
         If pfnNtTerminateThread = 0 Then
-            Print "[-] 获取NtTerminateThread地址失败"
+            MyLog.PrintLog LOG_ERROR, "RemoteInjectDll", "", "[-] 获取NtTerminateThread地址失败"
             Goto Cleanup
         End If
         
-        Print "[+] NtTerminateThread地址: 0x" & Hex(pfnNtTerminateThread)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] NtTerminateThread地址: 0x" & Hex(pfnNtTerminateThread)
         
         ' 构造x86 Shellcode
         lpBuffer32 = Cast(DWORD, Cast(ULONG_PTR, lpBuffer))
@@ -414,74 +402,52 @@ Function RemoteInjectDll(ByVal ProcessId As DWORD, ByVal wszInjectDllPathName As
         ' 分配可执行内存
         Dim lpShellcode As LPVOID = VirtualAllocEx(hProcess, NULL, UBound(shellcode)+1, MEM_COMMIT, PAGE_EXECUTE_READ)
         If lpShellcode = NULL Then
-            Print "[-] Shellcode内存分配失败: " & GetLastError
+            MyLog.PrintWin32Error "RemoteInjectDll", "VirtualAllocEx", "Shellcode内存分配失败"
             Goto Cleanup
         End If
         
         If WriteProcessMemory(hProcess, lpShellcode, @shellcode(0), Ubound(shellcode)+1, NULL) = 0 Then
-            Print "[-] Shellcode写入失败: " & GetLastError
+            MyLog.PrintWin32Error "RemoteInjectDll", "WriteProcessMemory", "Shellcode写入失败"
             VirtualFreeEx(hProcess, lpShellcode, 0, MEM_RELEASE)
             Goto Cleanup
         End If
         
-        Print "[+] Shellcode已写入: 0x" & Hex(lpShellcode)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] Shellcode已写入: 0x" & Hex(lpShellcode)
         
         ' 执行Shellcode
         st = ZwCreateThreadEx(@ThreadHandle, THREAD_ALL_ACCESS, NULL, hProcess, _
             Cast(LPTHREAD_START_ROUTINE, lpShellcode), NULL, 0, 0, 0, 0, NULL)
         
         If Not NT_SUCCESS(st) Then
-            Print "[-] ZwCreateThreadEx失败: 0x" & Hex(st)
+            MyLog.PrintNtError "RemoteInjectDll", "ZwCreateThreadEx", st, "创建远程线程失败"
             VirtualFreeEx(hProcess, lpShellcode, 0, MEM_RELEASE)
             Goto Cleanup
         End If
-        
-        'WaitForSingleObject(ThreadHandle, INFINITE)
-        'VirtualFreeEx(hProcess, lpShellcode, 0, MEM_RELEASE)
     Else
         ' 64位进程
-        Print "[*] 注入64位进程..."
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[*] 注入64位进程..."
         pfnLoadLibraryW = Cast(ULONG_PTR, GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryW"))
         
-        Print "[+] LoadLibraryW地址: 0x" & Hex(pfnLoadLibraryW)
-        Print "[+] 参数地址: 0x" & Hex(lpBuffer)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] LoadLibraryW地址: 0x" & Hex(pfnLoadLibraryW)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] 参数地址: 0x" & Hex(lpBuffer)
         
         ' 关键：验证参数指针在目标进程中的有效性
         Dim memInfo As MEMORY_BASIC_INFORMATION
         VirtualQueryEx(hProcess, lpBuffer, @memInfo, SizeOf(memInfo))
-        Print "[+] 内存状态: State=" & Hex(memInfo.State) & " Protect=" & Hex(memInfo.Protect)
+        MyLog.PrintLog LOG_INFO, "RemoteInjectDll", "", "[+] 内存状态: State=" & Hex(memInfo.State) & " Protect=" & Hex(memInfo.Protect)
         
         st = ZwCreateThreadEx(@ThreadHandle, THREAD_ALL_ACCESS, NULL, hProcess, _
             Cast(LPTHREAD_START_ROUTINE, pfnLoadLibraryW), lpBuffer, 0, 0, 0, 0, NULL)
         
         If Not NT_SUCCESS(st) Then
-            Print "[-] ZwCreateThreadEx失败: 0x" & Hex(st)
+            MyLog.PrintNtError "RemoteInjectDll", "ZwCreateThreadEx", st, "创建远程线程失败"
             Goto Cleanup
         End If
-        
-        'WaitForSingleObject(ThreadHandle, INFINITE)
     End If
     
-    ' 获取退出码
-    /'If GetExitCodeThread(ThreadHandle, @dwExitCode) = 0 Then
-        Print "[-] GetExitCodeThread失败: " & GetLastError
-        Goto Cleanup
-    End If
-    
-    If dwExitCode = 0 Then
-        Print "[-] DLL加载失败! 退出码: 0"
-        Print "[!] 可能原因:"
-        Print "    1. DLL路径在目标进程中无效"
-        Print "    2. DLL依赖项缺失（如C++运行库）"
-        Print "    3. DllMain返回FALSE"
-    Else
-        Print "[+] 注入成功! 模块句柄: 0x" & Hex(dwExitCode)
-        Function = True
-    End If'/
     Function = True
     
 Cleanup:
-    'If lpBuffer Then VirtualFreeEx(hProcess, lpBuffer, 0, MEM_RELEASE)
     If hProcess Then CloseHandle(hProcess)
     If ThreadHandle Then CloseHandle(ThreadHandle)
 End Function
@@ -496,8 +462,7 @@ Private Function GetTeb(ByVal dwThreadId As DWORD) As Any Ptr
     End If
     Dim tbi As THREAD_BASIC_INFORMATION, ret As DWORD, st As NTSTATUS
     st = ZwQueryInformationThread(hThread, ThreadBasicInformation, @tbi, SizeOf(tbi), ret)
-    'If PrintLog(st, "") Then
-    Print "[GetTeb]TID" & dwThreadId & " " & Hex(st)
+    MyLog.PrintNtError "GetTeb", "ZwQueryInformationThread", st, "dwThreadId=" & dwThreadId
     Return tbi.TebBaseAddress
 End Function
 
@@ -573,40 +538,37 @@ Function ThreadStateToString(ByVal threadInfo As SYSTEM_THREAD_INFORMATION Ptr) 
         ' 打开线程句柄（需要THREAD_SUSPEND_RESUME权限）
         If IsDriverLoaded Then
             threadHandle = SnowSword_OpenThread(Cast(DWORD, Cast(UInteger, threadInfo->ClientId.UniqueThread)))
+            If threadHandle <> NULL Then
+                MyLog.PrintLog LOG_ERROR, "ThreadStateToString",, "打开线程失败,dwThreadId=" & threadInfo->ClientID.UniqueThread
+                stateStr &= " [Suspended x?]"
+                Return stateStr
+            End If
         Else
             threadHandle = OpenThread(THREAD_SUSPEND_RESUME, False, Cast(DWORD, Cast(UInteger, threadInfo->ClientId.UniqueThread)))
+            If threadHandle <> NULL Then
+                MyLog.PrintWin32Error "ThreadStateToString", "OpenThread", "dwThreadId=" & threadInfo->ClientID.UniqueThread
+                stateStr &= " [Suspended x?]"
+                Return stateStr
+            End If
         End If
         
-        If threadHandle <> NULL Then
-            ' 调用ZwResumeThread获取挂起计数（此调用会减少挂起计数1）
-            ntStatus = ZwResumeThread(threadHandle, @suspendCount)
-            If NT_SUCCESS(ntStatus) Then ' NTSTATUS_SUCCESS = 0
-                ' 重新挂起线程，恢复原有挂起状态
-                ZwSuspendThread threadHandle, @suspendCount
-                ' 拼接挂起次数（注意：suspendCount是调用Resume前的计数）
-                stateStr &= " [Suspended x" & Str(suspendCount) & "]"
-            Else
-                stateStr &= " [Suspended x?]"
-                Print "[ThreadStateToString]获取挂起次数失败，错误码：" & WStr(ntStatus)
-            End If
-            ' 关闭线程句柄
-            CloseHandle threadHandle
+        ' 调用ZwResumeThread获取挂起计数（此调用会减少挂起计数1）
+        ntStatus = ZwResumeThread(threadHandle, @suspendCount)
+        If NT_SUCCESS(ntStatus) Then ' NTSTATUS_SUCCESS = 0
+            ' 重新挂起线程，恢复原有挂起状态
+            ZwSuspendThread threadHandle, @suspendCount
+            ' 拼接挂起次数（注意：suspendCount是调用Resume前的计数）
+            stateStr &= " [Suspended x" & Str(suspendCount) & "]"
         Else
             stateStr &= " [Suspended x?]"
-            Print "[ThreadStateToString]无法打开线程句柄，错误码：" & WStr(GetLastError)
+            MyLog.PrintNtError "ThreadStateToString", "ZwResumeThread", ntStatus, "dwThreadId=" & threadInfo->ClientID.UniqueThread
         End If
+        ' 关闭线程句柄
+        CloseHandle threadHandle
     End If
     
     Return stateStr
 End Function
-
-Sub GetThreadList2()
-    If Not IsDriverLoaded Then Exit Sub
-    For TID As DWORD = 0 To &H20000
-        Dim pEThread As ULONG64 = GetEThread(TID)
-        If pEThread <> NULL Then Print "Thread " & TID
-    Next
-End Sub
 
 Function NtPathToDosPathW(ByVal FullNtPath As LPWSTR, ByVal FullDosPath As LPWSTR) As Boolean
     Dim MupPrefix As WString * 12 = "\Device\Mup\"
@@ -679,7 +641,7 @@ Private Function GetThreadState(ByVal dwThreadId As DWORD) As StringW
                 Function = "Suspended(Count:" & SuspendCount & ")"'(Waiting?)
             End If
         Else
-            Print "[GetThreadState]ZwResumeThread " & dwThreadId & ":" & Hex(st)
+            MyLog.PrintNtError "GetThreadState", "ZwResumeThread", st, "dwThreadId=" & dwThreadId
             Function = "Unknown"
         End If
     Else
@@ -698,40 +660,9 @@ Function GetThreadStartAddr(ByVal dwThreadId As DWORD) As PVOID
     End If
     Dim StartAddr As PVOID = NULL, st As NTSTATUS, ret As DWORD
     st = ZwQueryInformationThread(hThread, ThreadQuerySetWin32StartAddress, @StartAddr, SizeOf(StartAddr), ret)
-    If (StartAddr = 0) Then Print "[GetThreadStartAddr]" & Hex(st)
+    If Not NT_SUCCESS(st) Then MyLog.PrintNtError "GetThreadStartAddr", "ZwQueryInformationThread", st, "dwThreadId=" & dwThreadId
     Return StartAddr
 End Function
-
-'Sub GetModuleByAddress(ByVal dwProcessId As DWORD, ByVal Addr As PVOID, ByVal pstrName As LPWSTR)
-'    Dim hProcess As HANDLE
-'    If dwProcessId = 4 Then
-'        *pstrName = GetDriverPathByAddr(Cast(ULONG64, Addr))
-'        Exit Sub
-'    End If
-'    
-'    If IsDriverLoaded Then
-'        hProcess = SnowSword_OpenProcess(dwProcessId)
-'    Else
-'        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwProcessId)
-'    End If
-'    Dim NtPath As WString * MAX_PATH
-'    If (hProcess = NULL) Then Exit Sub'PrintLastError '"1"'PrintLastError
-'    'Print "0x" & Hex(Addr)'删掉这句会导致所有线程所在模块都变成一样的乱码
-'    'Print "1"
-'    Dim ret As DWORD = GetMappedFileNameW(hProcess, Addr, @NtPath, MAX_PATH)
-'    'Print "2"
-'    If (ret > 0) Then
-'        Dim ModulePath As WString * MAX_PATH
-'        If (NtPathToDosPathW(NtPath, @ModulePath)) Then
-'            'Print "3"
-'            ZwClose hProcess
-'            *pstrName = ModulePath
-'            Exit Sub
-'        End If
-'        Print "NtPathToDosPathW Failed"
-'    End If
-'    ZwClose hProcess
-'End Sub
 
 Sub GetModuleByAddress(ByVal dwProcessId As DWORD, ByVal Addr As PVOID, ByVal pstrName As LPWSTR)
     Dim hProcess As HANDLE
@@ -810,18 +741,20 @@ Sub GetModuleByAddress(ByVal dwProcessId As DWORD, ByVal Addr As PVOID, ByVal ps
                     End If
                 End If
             Else
-                Print "invalid sectionName"
+                MyLog.PrintLog LOG_ERROR, "GetModuleByAddress",, "invalid sectionName"
             End If
         Else
-            Print "[GetModuleByAddress]ZwQueryVirtualMemory2(" & WHex(Addr) & ")" & WHex(status)
+            MyLog.PrintNtError "GetModuleByAddress", "ZwQueryVirtualMemory", status, "获取所需缓冲区大小失败" & vbCrLf & _
+            "Addr=" & Addr & " dwProcessId=" & dwProcessId
         End If
     Else
-        Print "[GetModuleByAddress]ZwQueryVirtualMemory1(" & WHex(Addr) & ")" & WHex(status)
+        MyLog.PrintNtError "GetModuleByAddress", "ZwQueryVirtualMemory", status, "获取实际数据失败" & vbCrLf & _
+        "Addr=" & Addr & " dwProcessId=" & dwProcessId
     End If
     
     ' 清理资源
     DyLibFree(library)
-    If IsDriverLoaded Then ZwClose(hProcess) Else CloseHandle(hProcess)
+    ZwClose(hProcess)
 End Sub
 
 Private Function SetCriticalThread(ByVal dwThreadId As DWORD, ByVal IsCritical As Boolean) As NTSTATUS
@@ -830,6 +763,7 @@ Private Function SetCriticalThread(ByVal dwThreadId As DWORD, ByVal IsCritical A
     ByVal ThreadInformation As LPVOID, ByVal ThreadInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS = DyLibSymbol(GetModuleHandle("ntdll.dll"), "ZwSetInformationThread")
     hThread = OpenThread(THREAD_SET_INFORMATION, False, dwThreadId)
     ret = ZwSetInformationThread(hThread, ThreadBreakOnTermination, @IsCritical, Len(IsCritical), retLen)
+    If (Not NT_SUCCESS(ret)) Then MyLog.PrintNtError "SetCriticalThread", "ZwSetInformationThread", ret, "dwThreadId=" & dwThreadId
     ZwClose hThread
     Return ret
 End Function
@@ -837,7 +771,8 @@ End Function
 Private Function IsThreadCritical(ByVal dwThreadId As DWORD, ByVal IsCritical As PBOOLEAN) As NTSTATUS
     Dim hThread As HANDLE, ret As NTSTATUS, retLen As DWORD
     hThread = OpenThread(THREAD_QUERY_INFORMATION, False, dwThreadId)
-    ret = ZwQueryInformationThread(hThread, ThreadBreakOnTermination, IsCritical, Len(*IsCritical), retLen)
+    ret = ZwQueryInformationThread(hThread, ThreadBreakOnTermination, IsCritical, Len( *IsCritical), retLen)
+    If (Not NT_SUCCESS(ret)) Then MyLog.PrintNtError "IsThreadCritical", "ZwQueryInformationThread", ret, "dwThreadId=" & dwThreadId
     ZwClose hThread
     Return ret
 End Function
@@ -854,7 +789,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
     ' 第一次调用：获取所需缓冲区大小
     status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, 0, 0, @returnLength)
     If status <> STATUS_INFO_LENGTH_MISMATCH Then  ' 表示需要更大缓冲区
-        Print "[GetThreadList]获取缓冲区大小失败，错误码: " & Hex(status)
+        MyLog.PrintNtError "GetThreadList", "ZwQuerySystemInformation", status, "获取缓冲区大小失败, ProcessId=" & ProcessId
         Return -1
     End If
     
@@ -862,14 +797,14 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
     bufferSize = returnLength + 4096
     buffer = Allocate(bufferSize)
     If buffer = NULL Then
-        Print "[GetThreadList]内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "GetThreadList", "Allocate", "内存分配失败, bufferSize=" & bufferSize
         Return -1
     End If
-    'Print returnLength & " " & returnLength / SizeOf(SYSTEM_PROCESS_INFORMATION)
+    
     ' 第二次调用：获取进程信息
     status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, buffer, bufferSize, @returnLength)
     If status <> 0 Then  ' 0表示STATUS_SUCCESS
-        Print "[GetThreadList]获取进程信息失败，错误码: " & Hex(status)
+        MyLog.PrintNtError "GetThreadList", "ZwQuerySystemInformation", status, "获取进程信息失败, ProcessId=" & ProcessId
         Deallocate buffer
         Return -1
     End If
@@ -892,7 +827,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
                 WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath), WStr(GetFileCompany(strModulePath)))
                 VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, strModulePath
                 threadInfo += 1
-                i += 1
+                'i += 1
             Next
         End If
         
@@ -942,59 +877,6 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
     Return i
 End Function
 
-'这样总有随机几个线程的ETHREAD内核正常获取但应用层打印出来是0
-/'Function GetKernelThreadList1(ByVal DriverBase As ULONG64, ByVal DriverSize As ULONG64, DriverPath As StringW, lvwKernelThread As Class_ListView) As DWORD
-    Dim i As Long
-    Dim StartAddress As ULONG64
-    Print "DriverBase:0x" & WHex(DriverBase) & " DriverSize:0x" & WHex(DriverSize) & " DriverEndBase:0x" & WHex(DriverBase + DriverSize)
-    'Print (&H7FF8B977B9A0>&HFFFFF80000000000)
-    Dim OwnerPID As DWORD, pEThread As HANDLE
-    For TID As DWORD = 0 To 1000 Step 4 ' &H20000 Step 4
-        pEThread = CPtr(HANDLE, GetEThread(TID))
-        If pEThread > 0 Then
-            IoControl hDrv, IOCTL_GetPIDFromTID, @TID, SizeOf(DWORD), @OwnerPID, SizeOf(DWORD)
-            If (GetLastError = 0) AndAlso (OwnerPID = 4) Then
-                StartAddress = Cast(ULONG64, GetThreadStartAddr(TID))
-                Print "TID:" & TID & " StartAddr:0x" & WHex(StartAddress)
-                If (StartAddress >= DriverBase) AndAlso (StartAddress <= DriverBase + DriverSize) Then
-                    lvwKernelThread.AddItemColList,, WStr(TID),,, "0x" & WHex(pEThread)
-                    i += 1
-                End If
-            End If
-        End If
-    Next
-    Return i
-End Function'/
-
-'Function GetKernelThreadList(lvwKernelThread As Class_ListView) As DWORD
-'    Dim thre As THREADENTRY32
-'    Dim hSnapshot As HANDLE, strModulePath As WString * 260, ThreadStartAddress As ULONG64
-'    Dim pEThread As HANDLE
-'    Dim i As DWORD
-'    
-'    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 4)
-'    If hSnapshot > 0 Then
-'        thre.dwSize = SizeOf(THREADENTRY32)
-'        If Thread32First(hSnapshot, @thre) Then
-'            Do
-'                If thre.th32OwnerProcessID = 4 Then
-'                    pEThread = CPtr(HANDLE, GetEThread(thre.th32ThreadID))
-'                    ThreadStartAddress = Cast(ULONG64, GetThreadStartAddr(thre.th32ThreadID))
-'                    'If ThreadStartAddress = NULL Then Print "TID:" & thre.th32ThreadID & " " & WinErrorMsg(GetLastError) & GetLastError
-'                    'Print "TID:" & TID & " StartAddr:0x" & WHex(StartAddress)
-'                    Dim DriverPath As StringW = GetDriverPathByAddr(ThreadStartAddress)
-'                    If DriverPath <> "" Then
-'                        lvwKernelThread.AddItemColList,, WStr(thre.th32ThreadID), WStr(thre.tpBasePri), _
-'                        GetThreadState(thre.th32ThreadID), "0x" & WHex(pEThread), "0x" & WHex(ThreadStartAddress), DriverPath
-'                        i += 1
-'                    End If
-'                End If
-'            Loop Until Thread32Next(hSnapshot, @thre) = 0
-'        End If
-'    End If
-'    Return i
-'End Function
-
 Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
     Dim status As Long
     Dim bufferSize As ULong = 0, returnLength As ULong= 0
@@ -1007,7 +889,7 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
     ' 第一次调用：获取所需缓冲区大小
     status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, 0, 0, @returnLength)
     If status <> STATUS_INFO_LENGTH_MISMATCH Then  ' 表示需要更大缓冲区
-        Print "[GetThreadList]获取缓冲区大小失败，错误码: " & Hex(status)
+        MyLog.PrintNtError "GetKernelThreadList", "ZwQuerySystemInformation", status, "获取所需缓冲区大小失败"
         Return -1
     End If
     
@@ -1015,14 +897,14 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
     bufferSize = returnLength + 4096
     buffer = Allocate(bufferSize)
     If buffer = NULL Then
-        Print "[GetThreadList]内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "GetKernelThreadList", "Allocate", "内存分配失败, bufferSize=" & bufferSize
         Return -1
     End If
     'Print returnLength & " " & returnLength / SizeOf(SYSTEM_PROCESS_INFORMATION)
     ' 第二次调用：获取进程信息
     status = ZwQuerySystemInformation(SystemProcessesAndThreadsInformation, buffer, bufferSize, @returnLength)
     If status <> 0 Then  ' 0表示STATUS_SUCCESS
-        Print "[GetThreadList]获取进程信息失败，错误码: " & Hex(status)
+        MyLog.PrintNtError "GetKernelThreadList", "ZwQuerySystemInformation", status, "获取进程信息失败"
         Deallocate buffer
         Return -1
     End If
@@ -1067,13 +949,14 @@ Public Function MySuspendThread(ByVal dwThreadId As DWORD) As Boolean
     End If
     
     If (hThread = NULL) Then
-        'PrintLastError
+        MyLog.PrintLog LOG_ERROR, "MySuspendThread",, "打开线程失败,dwThreadId=" & dwThreadId
         Return False
     End If
     SuspendThread hThread
-    CloseHandle  hThread
+    CloseHandle hThread
+    
     If GetLastError <> 0 Then
-        Print "[MySuspendThread]" & dwThreadId & ":" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MySuspendThread", "SuspendThread", "挂起线程失败,dwThreadId=" & dwThreadId
         Return False
     Else
         Return True
@@ -1090,20 +973,19 @@ Public Function MyResumeThread(ByVal dwThreadId As DWORD) As Boolean
     End If
     
     If (hThread = NULL) Then
-        'PrintLastError
+        MyLog.PrintLog LOG_ERROR, "MyResumeThread",, "打开线程失败,dwThreadId=" & dwThreadId
         Return False
     End If
     ResumeThread hThread
-    CloseHandle  hThread
+    CloseHandle hThread
+    
     If GetLastError <> 0 Then
-        Print "[MyResumeThread]" & dwThreadId & ":" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyResumeThread", "ResumeThread", "恢复线程失败,dwThreadId=" & dwThreadId
         Return False
     Else
         Return True
     End If
 End Function
-
-'ZwSetInformationThread ThreadAttachContainer
 
 Public Function KillThread(ByVal dwThreadId As DWORD) As Boolean
     Dim IsCritical As Boolean
@@ -1122,12 +1004,13 @@ Public Function KillThread(ByVal dwThreadId As DWORD) As Boolean
     Else
         hThread = OpenThread(THREAD_TERMINATE, False, dwThreadId)
     End If
+    
     If (hThread = 0) Then
-        Print "打开线程失败,原因:" & WinErrorMsg(GetLastError),"提示"
+        MyLog.PrintLog LOG_ERROR, "KillThread",, "打开线程失败,dwThreadId=" & dwThreadId
         Goto Err1
     End If
     If (TerminateThread(hThread,0) = 0) Then
-        Print "结束线程失败,原因:" & WinErrorMsg(GetLastError),"提示"
+        MyLog.PrintWin32Error "KillThread", "TerminateThread", "结束线程失败,dwThreadId=" & dwThreadId
         Goto Err1
     End If
     Return True
@@ -1144,7 +1027,7 @@ Function ForceKillThread(ByVal dwThreadId As HANDLE) As Boolean
         Function = True
     Else
         Function = False
-        Print "[ForceKillThread]:" & GetLastError
+        MyLog.PrintWin32Error "ForceKillThread", "IOCTL_ForceKillThread", "强制结束线程失败,dwThreadId=" & dwThreadId
     End If
 End Function
 
@@ -1172,9 +1055,10 @@ Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
     InitListViewData lvwWorkItemThread
     
     Dim WorkItemThreadArray() As WORKER_THREAD_INFO
+    SetLastError 0
     IoControl hDrv, IOCTL_EnumWorkItemThread, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
-        Print "[GetWorkItemThreadList]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetWorkItemThreadList", "IOCTL_EnumWorkItemThread", "获取缓冲区大小失败"
         Exit Sub
     End If
     ReDim WorkItemThreadArray(lpRet / SizeOf(WORKER_THREAD_INFO) - 1) As WORKER_THREAD_INFO
@@ -1185,14 +1069,14 @@ Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
     CommitListViewView lvwWorkItemThread
 End Sub
 
-/'Private Declare Function SymInitialize Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal szSearchPath As String, ByVal bInvadeProcess As Long) As Long
-Private Declare Function SymGetOptions Lib "dbghelp.dll" () As Long
-Private Declare Function SymSetOptions Lib "dbghelp.dll" (ByVal SymOptions As Long) As Long
-Private Declare Function SymEnumerateSymbols Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal BaseAddress As Long, ByVal EnumSymbolsCallback As Long, ByVal UserContext As Long) As Long
-Private Declare Function StackWalk Lib "dbghelp.dll" (ByVal MachineType As Long, ByVal hProcess As Long, ByVal hThread As Long, ByRef StackFrame As STACKFRAME, ByVal Context As Long, ByVal ReadMemoryRoutine As Long, ByVal FunctionTableAccessRoutine As Long, ByVal GetModuleBaseRoutine As Long, ByVal TranslateAddress As Long) As Long
-Private Declare Function SymCleanup Lib "dbghelp.dll" (ByVal hProcess As Long) As Long
+/'Declare Function SymInitialize Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal szSearchPath As String, ByVal bInvadeProcess As Long) As Long
+Declare Function SymGetOptions Lib "dbghelp.dll" () As Long
+Declare Function SymSetOptions Lib "dbghelp.dll" (ByVal SymOptions As Long) As Long
+Declare Function SymEnumerateSymbols Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal BaseAddress As Long, ByVal EnumSymbolsCallback As Long, ByVal UserContext As Long) As Long
+Declare Function StackWalk Lib "dbghelp.dll" (ByVal MachineType As Long, ByVal hProcess As Long, ByVal hThread As Long, ByRef STACKFRAME As STACKFRAME, ByVal CONTEXT As Long, ByVal ReadMemoryRoutine As Long, ByVal FunctionTableAccessRoutine As Long, ByVal GetModuleBaseRoutine As Long, ByVal TranslateAddress As Long) As Long
+Declare Function SymCleanup Lib "dbghelp.dll" (ByVal hProcess As Long) As Long'/
 
-Private Type STACKFRAME
+/'Private Type STACKFRAME
     AddrPC As Long
     AddrReturn As Long
     AddrFrame As Long
@@ -1203,37 +1087,232 @@ Private Type STACKFRAME
     Virtual As Long
     Reserved(3) As Long
     AddrBpAsAddrPC As Long
-End Type
+End Type '/
 
-Sub GetCallStack(hProcess As Long, hThread As Long)
-    Dim SymOptions As Long
-    Dim SymInitialized As Long
-    Dim StackFrame As STACKFRAME
-    Dim Context As Long
-    Dim ReadMemoryRoutine As Long
-    Dim FunctionTableAccessRoutine As Long
-    Dim GetModuleBaseRoutine As Long
-    Dim TranslateAddress As Long
+/'Private Type CONTEXT64
+    ContextFlags As Long
+    dr0 As Long
+    dr1 As Long
+    dr2 As Long
+    dr3 As Long
+    dr6 As Long
+    dr7 As Long
+    regFloat(0 To 79) As Byte
+    regSegGs As Long
+    regSegFs As Long
+    regSegEs As Long
+    regSegDs As Long
+    regEdi As Long
+    regEsi As Long
+    regEbx As Long
+    regEdx As Long
+    regEcx As Long
+    regEax As Long
+    regEbp As Long
+    regEip As Long
+    regSegCs As Long
+    regFlag As Long
+    regEsp As Long
+    regSegSs As Long
+End Type'/
 
-    SymOptions = SymGetOptions()
-    SymOptions = SymOptions Or SYMOPT_DEBUG
-    SymSetOptions SymOptions
-
-    SymInitialized = SymInitialize(hProcess, "", 1)
-
-    If SymInitialized Then
-        StackFrame.AddrPC = 0
-        StackFrame.AddrStack = 0
-        StackFrame.AddrFrame = 0
-
-        Do While StackWalk(IMAGE_FILE_MACHINE_I386, hProcess, hThread, StackFrame, Context, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress)
-            ' Process each stack frame
-            'Debug.Print "Address: " & Hex(StackFrame.AddrPC)
-        Loop
-
-        SymCleanup(hProcess)
+/'Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD)
+    Const MAX_STACK_FRAMES = 20
+    Dim hProcess As HANDLE = NULL
+    Dim hThread  As HANDLE = NULL
+    Dim ctx As CONTEXT
+    Dim sf As STACKFRAME64
+    Dim i As Integer
+    Dim prevSuspend As DWORD = 0
+    Dim bNeedResume As Boolean = False
+    
+    ' ---------- 1. 打开进程句柄 ----------
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(PID)
     Else
-        'Debug.Print "Failed to initialize symbols"
+        ' StackWalk64 必须读取目标进程内存，VM_READ 不可少，不能降级到 LIMITED
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, PID)
     End If
+    
+    If hProcess = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetCallStack", "OpenProcess failed, PID=" & PID
+        Exit Sub
+    End If
+    
+    ' ---------- 2. 打开线程句柄 ----------
+    If IsDriverLoaded Then
+        ' 若驱动未导出 SnowSword_OpenThread，需自行在驱动层实现
+        ' 对 PP/PPL 进程，R3 的 OpenThread 同样会失败，必须走驱动
+        hThread = SnowSword_OpenThread(TID)
+    Else
+        hThread = OpenThread(THREAD_GET_CONTEXT Or THREAD_SUSPEND_RESUME Or THREAD_QUERY_INFORMATION, 0, TID)
+    End If
+    
+    If hThread = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetCallStack", "OpenThread failed, TID=" & TID
+        GoTo cleanup
+    End If
+    
+    ' ---------- 3. 挂起线程 ----------
+    prevSuspend = SuspendThread(hThread)
+    If prevSuspend = Cast(DWORD, -1) Then
+        MyLog.PrintWin32Error "GetCallStack", "SuspendThread"
+        GoTo cleanup
+    End If
+    bNeedResume = True
+    
+    ' ---------- 4. 获取上下文 ----------
+    ctx.ContextFlags = CONTEXT_FULL
+    If GetThreadContext(hThread, @ctx) = 0 Then
+        MyLog.PrintWin32Error "GetCallStack", "GetThreadContext"
+        GoTo cleanup
+    End If
+    
+    ' ---------- 5. 初始化 STACKFRAME64 ----------
+    sf.AddrPC.Offset    = ctx.Rip
+    sf.AddrPC.Mode      = AddrModeFlat
+    sf.AddrFrame.Offset = ctx.Rbp
+    sf.AddrFrame.Mode   = AddrModeFlat
+    sf.AddrStack.Offset = ctx.Rsp
+    sf.AddrStack.Mode   = AddrModeFlat
+    
+    ' ---------- 6. 栈回溯 ----------
+    For i = 1 To MAX_STACK_FRAMES
+        If StackWalk64(IMAGE_FILE_MACHINE_AMD64, _
+                       hProcess, _
+                       hThread, _
+                       @sf, _
+                       @ctx, _
+                       CPtr(PREAD_PROCESS_MEMORY_ROUTINE64, @ReadProcessMemory), _
+                       @SymFunctionTableAccess64, _
+                       @SymGetModuleBase64, _
+                       0) = 0 Then Exit For
+        
+        If sf.AddrPC.Offset = 0 Then Exit For
+        MyLog.PrintLog LOG_INFO,,, "栈帧 " & i & ": 0x" & Hex(sf.AddrPC.Offset)
+    Next
+
+cleanup:
+    If bNeedResume Then ResumeThread(hThread)
+    If hThread  <> NULL Then CloseHandle(hThread)
+    If hProcess <> NULL Then CloseHandle(hProcess)
+End Sub '/
+
+/'Function GetDescriptionByAddr(ByVal hProcess As HANDLE_INFO, ByVal Addr As UInteger) As StringW
+    Dim ModuleCount As Long
+    Dim ModuleInformation() As MODULE_INFORMATION
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(ProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, False, ProcessId)
+    End If
+    If hProcess = NULL Then Return 0
+    
+    ModuleCount = EnumModuleListEx(hProcess, ModuleInformation())
+    If ModuleCount = 0 Then Return "(failed)"
+    
+    For i As Integer = 0 To ModuleCount - 1
+        If ModuleInformation(i).BaseAddr = NULL Then Continue For
+        
+        Dim img As RemotePeImageEx
+        img.hProc = hProcess
+        img.baseAddr = ModuleInformation(i).BaseAddr
+        img.arch = IIf(IsProcessWow64_Ex(hProcess), PE_ARCH_X86, PE_ARCH_X64)
+        Dim strAddr As StringW = GetProxyDescription(img, sf.AddrPC.Offset)
+        
+        FF_DoEvents
+    Next
+End Function'/
+
+Const CONTEXT_SIZE_X64 = 1232
+
+Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As Class_ListView)
+    Const MAX_STACK_FRAMES = 20
+    Dim hProcess As HANDLE = NULL
+    Dim hThread As HANDLE = NULL
+    
+    InitListViewData lvwThreadCallStack
+    
+    ' ---------- 1. 分配 16 字节对齐的 CONTEXT 缓冲区 ----------
+    Dim ctxBuf As Byte Ptr = Allocate(CONTEXT_SIZE_X64 + 16)
+    If ctxBuf = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetCallStack", "Allocate failed"
+        Goto cleanup
+    End If
+    
+    ' 向上取整到 16 字节边界
+    Dim ctx As CONTEXT Ptr = CPtr(CONTEXT Ptr, (CInt(ctxBuf) + 15) And Not 15)
+    ZeroMemory(ctx, CONTEXT_SIZE_X64)
+    ctx->ContextFlags = CONTEXT_FULL   ' &H10001F 也可以
+    
+    Dim sf As STACKFRAME64
+    Dim prevSuspend As DWORD = 0
+    Dim bNeedResume As Boolean = False
+    
+    ' ---------- 2. 打开进程/线程 ----------
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(PID)
+        hThread  = SnowSword_OpenThread(TID)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, 0, PID)
+        If hProcess = NULL Then
+            MyLog.PrintWin32Error "GetCallStack", "OpenProcess", "PID=" & PID
+            Goto cleanup
+        End If
+        hThread = OpenThread(THREAD_GET_CONTEXT Or THREAD_SUSPEND_RESUME Or THREAD_QUERY_INFORMATION, 0, TID)
+        If hProcess = NULL Then
+            MyLog.PrintWin32Error "GetCallStack", "OpenThread", "TID=" & PID
+            Goto cleanup
+        End If
+    End If
+    
+    If hProcess = NULL Or hThread = NULL Then
+        MyLog.PrintLog LOG_ERROR, "GetCallStack", "Open failed"
+        GoTo cleanup
+    End If
+    
+    ' ---------- 3. 挂起 + 获取上下文 ----------
+    prevSuspend = SuspendThread(hThread)
+    If prevSuspend = Cast(DWORD, -1) Then
+        MyLog.PrintWin32Error "GetCallStack", "SuspendThread"
+        GoTo cleanup
+    End If
+    bNeedResume = True
+    
+    If GetThreadContext(hThread, ctx) = 0 Then
+        MyLog.PrintWin32Error "GetCallStack", "GetThreadContext"
+        Goto cleanup
+    End If
+    
+    ' ---------- 4. 初始化 STACKFRAME64 ----------
+    sf.AddrPC.Offset    = ctx->Rip
+    sf.AddrPC.Mode      = AddrModeFlat
+    sf.AddrFrame.Offset = ctx->Rbp
+    sf.AddrFrame.Mode   = AddrModeFlat
+    sf.AddrStack.Offset = ctx->Rsp
+    sf.AddrStack.Mode   = AddrModeFlat
+    
+    ' ---------- 5. 栈回溯 ----------
+    For i As Integer = 1 To MAX_STACK_FRAMES
+        If StackWalk64(IMAGE_FILE_MACHINE_AMD64, hProcess, hThread, @sf, ctx, CPtr(PREAD_PROCESS_MEMORY_ROUTINE64, @ReadProcessMemory), _
+        @SymFunctionTableAccess64, @SymGetModuleBase64, 0) = 0 Then Exit For
+        
+        If sf.AddrPC.Offset = 0 Then Exit For
+        
+        Dim img As RemotePeImageEx
+        img.hProc = hProcess
+        img.baseAddr = 0
+        img.arch = IIf(IsProcessWow64_Ex(hProcess), PE_ARCH_X86, PE_ARCH_X64)
+        Dim strAddr As StringW = GetProxyDescription(img, sf.AddrPC.Offset)
+        MyLog.PrintLog LOG_INFO, "GetCallStack",, (i - 1) & " 0x" & WHex(sf.AddrPC.Offset) & " " & WStr(strAddr)
+        AddItemColListEx lvwThreadCallStack, 4,,, WStr(i - 1), "0x" & WHex(sf.AddrPC.Offset), WStr(strAddr), WStr("")
+    Next
+
+cleanup:
+    If bNeedResume Then ResumeThread(hThread)
+    If hThread  <> NULL Then CloseHandle(hThread)
+    If hProcess <> NULL Then CloseHandle(hProcess)
+    Deallocate(ctxBuf)
+    
+    CommitListViewView lvwThreadCallStack
 End Sub
-'/

@@ -1,14 +1,11 @@
 ﻿#include Once "win/tlhelp32.bi"
 #include Once "win/psapi.bi"
 #include Once "win/winnt.bi"
-'#include Once "Afx/CWmiDisp.inc"
-'#include Once "win/wintrust.bi"
 #include Once "win/winver.bi"
-'#include "win/ddk/winddk.bi"
 #include Once "win/strsafe.bi"
 
 Private Const MAX_PATH As Integer = 260
-Dim Shared hThread As Any Ptr
+Dim Shared hThread     As Any Ptr
 
 Type LANGANDCODEPAGE
     wLanguage As WORD
@@ -16,31 +13,31 @@ Type LANGANDCODEPAGE
 End Type
 
 Type UNICODE_STRING
-    Length As UShort
+    Length        As UShort
     MaximumLength As UShort
-    Buffer As PWSTR
+    Buffer        As PWSTR
 End Type
 
 Type UNICODE_STRING32
-    Length As WORD
+    Length        As WORD
     MaximumLength As WORD
-    Buffer As DWORD ' 4字节指针
+    Buffer        As DWORD ' 4字节指针
 End Type
 
 Type PROCESS_BASIC_INFORMATION
-    ExitStatus As NTSTATUS                                                          'NTSTATUS
-    PebBaseAddress As Any Ptr                                                      'PPEB
-    AffinityMask As ULong Ptr                                                        'ULONG_PTR
-    BasePriority As Any Ptr                                                        'KPRIORITY
+    ExitStatus      As NTSTATUS  'NTSTATUS
+    PebBaseAddress  As Any Ptr   'PPEB
+    AffinityMask    As ULong Ptr 'ULONG_PTR
+    BasePriority    As Any Ptr   'KPRIORITY
     UniqueProcessId As HANDLE
     ParentProcessId As HANDLE
 End Type
 
 Type PROCESS_BASIC_INFORMATION32
-    ExitStatus As DWORD
-    PebBaseAddress As ULONG
-    AffinityMask As ULONG
-    BasePriority As DWORD
+    ExitStatus      As DWORD
+    PebBaseAddress  As ULONG
+    AffinityMask    As ULONG
+    BasePriority    As DWORD
     UniqueProcessId As ULONG
     InheritedFromUniqueProcessId As ULONG
 End Type
@@ -48,78 +45,78 @@ End Type
 Type PLIST_ENTRY As LIST_ENTRY Ptr
 
 Type PEB_LDR_DATA64
-    Length As ULong
+    Length      As ULong
     Initialized As UByte
-    SsHandle As ULONG_PTR
-    InLoadOrderModuleList As LIST_ENTRY
-    InMemoryOrderModuleList As LIST_ENTRY
+    SsHandle    As ULONG_PTR
+    InLoadOrderModuleList           As LIST_ENTRY
+    InMemoryOrderModuleList         As LIST_ENTRY
     InInitializationOrderModuleList As LIST_ENTRY
 End Type
 Type PPEB_LDR_DATA64 As PEB_LDR_DATA64 Ptr
 
 Type LDR_DATA_TABLE_ENTRY64
-    InLoadOrderLinks As LIST_ENTRY
-    InMemoryOrderLinks As LIST_ENTRY
+    InLoadOrderLinks           As LIST_ENTRY
+    InMemoryOrderLinks         As LIST_ENTRY
     InInitializationOrderLinks As LIST_ENTRY
-    DllBase As ULONG64
-    EntryPoint As ULONG64
-    SizeOfImage As ULong
-    FullDllName As UNICODE_STRING
-    BaseDllName As UNICODE_STRING
-    FLAGS As ULong
-    LoadCount As UShort
-    TlsIndex As UShort
-    HashLinks As LIST_ENTRY
+    DllBase       As ULONG64
+    EntryPoint    As ULONG64
+    SizeOfImage   As ULong
+    FullDllName   As UNICODE_STRING
+    BaseDllName   As UNICODE_STRING
+    FLAGS         As ULong
+    LoadCount     As UShort
+    TlsIndex      As UShort
+    HashLinks     As LIST_ENTRY
     TimeDateStamp As ULong
 End Type
 Type PLDR_DATA_TABLE_ENTRY64 As LDR_DATA_TABLE_ENTRY64 Ptr
 
 Type RTL_USER_PROCESS_PARAMETERS
     Reserved1(15) As Byte
-    Reserved2(9) As PVOID
+    Reserved2(9)  As PVOID
     ImagePathName As UNICODE_STRING
-    CommandLine As UNICODE_STRING
+    CommandLine   As UNICODE_STRING
 End Type
 Type PRTL_USER_PROCESS_PARAMETERS As RTL_USER_PROCESS_PARAMETERS Ptr
 
 Type RTL_USER_PROCESS_PARAMETERS32
-    MaximumLength As DWORD          ' +0x00
-    Length As DWORD                 ' +0x04
-    Flags As DWORD                  ' +0x08
-    DebugFlags As DWORD             ' +0x0C
-    ConsoleHandle As DWORD          ' +0x10
-    ConsoleFlags As DWORD           ' +0x14
-    StdInputHandle As DWORD         ' +0x18
-    StdOutputHandle As DWORD        ' +0x1C
-    StdErrorHandle As DWORD         ' +0x20
-    CurrentDirectory As UNICODE_STRING32   ' +0x24
-    CurrentDirectoryHandle As DWORD         ' +0x2C
-    DllPath As UNICODE_STRING32             ' +0x30
-    ImagePathName As UNICODE_STRING32       ' +0x38
-    CommandLine As UNICODE_STRING32         ' +0x40 【正确偏移】
+    MaximumLength          As DWORD ' +0x00
+    Length                 As DWORD ' +0x04
+    Flags                  As DWORD ' +0x08
+    DebugFlags             As DWORD ' +0x0C
+    ConsoleHandle          As DWORD ' +0x10
+    ConsoleFlags           As DWORD ' +0x14
+    StdInputHandle         As DWORD ' +0x18
+    StdOutputHandle        As DWORD ' +0x1C
+    StdErrorHandle         As DWORD ' +0x20
+    CurrentDirectory       As UNICODE_STRING32 ' +0x24
+    CurrentDirectoryHandle As DWORD   ' +0x2C
+    DllPath       As UNICODE_STRING32 ' +0x30
+    ImagePathName As UNICODE_STRING32 ' +0x38
+    CommandLine   As UNICODE_STRING32 ' +0x40 【正确偏移】
 End Type
 Type PRTL_USER_PROCESS_PARAMETERS32 As RTL_USER_PROCESS_PARAMETERS32 Ptr
 
 Type PEB64
-    Reserved1(1) As Byte
+    Reserved1(1)  As Byte
     BeingDebugged As Byte
-    Reserved2 As Byte
-    Reserved3(1) As PVOID
-    Ldr As PPEB_LDR_DATA64
-    ProcessParameters As PRTL_USER_PROCESS_PARAMETERS
-    Reserved4(2) As PVOID
-    AtlThunkSListPtr As PVOID
-    Reserved5 As PVOID
-    Reserved6 As ULong
-    Reserved7 As PVOID
-    Reserved8 As ULong
-    AtlThunkSListPtr32 As ULong
-    Reserved9(44) As PVOID
-    Reserved10(95) As Byte
-    PostProcessInitRoutine As Any Ptr'PPS_POST_PROCESS_INIT_ROUTINE PostProcessInitRoutine
-    Reserved11(127) As Byte
-    Reserved12 As PVOID
-    SessionId As ULong
+    Reserved2     As Byte
+    Reserved3(1)  As PVOID
+    Ldr           As PPEB_LDR_DATA64
+    ProcessParameters      As PRTL_USER_PROCESS_PARAMETERS
+    Reserved4(2)           As PVOID
+    AtlThunkSListPtr       As PVOID
+    Reserved5              As PVOID
+    Reserved6              As ULong
+    Reserved7              As PVOID
+    Reserved8              As ULong
+    AtlThunkSListPtr32     As ULong
+    Reserved9(44)          As PVOID
+    Reserved10(95)         As Byte
+    PostProcessInitRoutine As Any Ptr 'PPS_POST_PROCESS_INIT_ROUTINE PostProcessInitRoutine
+    Reserved11(127)        As Byte
+    Reserved12             As PVOID
+    SessionId              As ULong
 End Type
 Type PPEB64 As PEB64 Ptr
 
@@ -128,78 +125,106 @@ Type PROCESS_SESSION_INFORMATION
 End Type
 
 Type OBJECT_ATTRIBUTES
-    Length As ULong
-    RootDirectory As HANDLE
-    ObjectName As UNICODE_STRING Ptr
-    Attributes As ULong
-    SecurityDescriptor As PVOID
+    Length                   As ULong
+    RootDirectory            As HANDLE
+    ObjectName               As UNICODE_STRING Ptr
+    Attributes               As ULong
+    SecurityDescriptor       As PVOID
     SecurityQualityOfService As PVOID
 End Type
 Type POBJECT_ATTRIBUTES As OBJECT_ATTRIBUTES Ptr
 
 Type CLIENT_ID
     UniqueProcess As HANDLE
-    UniqueThread As HANDLE
+    UniqueThread  As HANDLE
 End Type
-Type PCLIENT_ID As CLIENT_ID Ptr
+Type PCLIENT_ID         As CLIENT_ID Ptr
 Type POBJECT_ATTRIBUTES As OBJECT_ATTRIBUTES Ptr
 
 Type SYSTEM_THREAD_INFORMATION
-    KernelTime As LARGE_INTEGER
-    UserTime As LARGE_INTEGER
-    CreateTime As LARGE_INTEGER
-    WaitTime As ULong
-    StartAddress As PVOID
-    ClientID As CLIENT_ID
-    Priority As Long 'KPRIORITY
-    BasePriority As Long ' KPRIORITY
+    KernelTime         As LARGE_INTEGER
+    UserTime           As LARGE_INTEGER
+    CreateTime         As LARGE_INTEGER
+    WaitTime           As ULong
+    StartAddress       As PVOID
+    ClientID           As CLIENT_ID
+    Priority           As Long 'KPRIORITY
+    BasePriority       As Long ' KPRIORITY
     ContextSwitchCount As ULong
-    ThreadState As ULong ' THREAD_STATE
-    WaitReason As ULong ' KWAIT_REASON
+    ThreadState        As ULong ' THREAD_STATE
+    WaitReason         As ULong ' KWAIT_REASON
 End Type
 
 Type VM_COUNTERS
-    PeakVirtualSize As size_t
-    VirtualSize As size_t
-    PageFaultCount As ULong
-    PeakWorkingSetSize As size_t
-    WorkingSetSize As size_t
-    QuotaPeakPagedPoolUsage As size_t
-    QuotaPagedPoolUsage As size_t
+    PeakVirtualSize            As size_t
+    VirtualSize                As size_t
+    PageFaultCount             As ULong
+    PeakWorkingSetSize         As size_t
+    WorkingSetSize             As size_t
+    QuotaPeakPagedPoolUsage    As size_t
+    QuotaPagedPoolUsage        As size_t
     QuotaPeakNonPagedPoolUsage As size_t
-    QuotaNonPagedPoolUsage As size_t
-    PagefileUsage As size_t
-    PeakPagefileUsage As size_t
+    QuotaNonPagedPoolUsage     As size_t
+    PagefileUsage              As size_t
+    PeakPagefileUsage          As size_t
 End Type
 
 Type SYSTEM_PROCESS_INFORMATION
-    NextEntryDelta As ULong
-    ThreadCount As ULong
+    NextEntryDelta   As ULong
+    ThreadCount      As ULong
     Reserved(0 To 5) As ULong
-    CreateTime As LARGE_INTEGER
-    UserTime As LARGE_INTEGER
-    KernelTime As LARGE_INTEGER
-    ProcessName As UNICODE_STRING
-    BasePriority As Long ' KPRIORITY
-    ProcessId As UInteger ' HANDLE
+    CreateTime       As LARGE_INTEGER
+    UserTime         As LARGE_INTEGER
+    KernelTime       As LARGE_INTEGER
+    ProcessName      As UNICODE_STRING
+    BasePriority     As Long           ' KPRIORITY
+    ProcessId        As UInteger       ' HANDLE
     InheritedFromProcessId As UInteger ' HANDLE
-    HandleCount As ULong
-    SessionId As ULong
+    HandleCount       As ULong
+    SessionId         As ULong
     PageDirectoryBase As ULONG_PTR
-    VmCounters As VM_COUNTERS
-    PrivatePageCount As size_t
-    IoCounters As IO_COUNTERS
-    Threads(0) As SYSTEM_THREAD_INFORMATION
+    VmCounters        As VM_COUNTERS
+    PrivatePageCount  As size_t
+    IoCounters        As IO_COUNTERS
+    Threads(0)        As SYSTEM_THREAD_INFORMATION
 End Type
 
 Type PROCESS_TIMER
-    pfn As ULONG64 ' 回调函数地址
-    nTimeout As ULong ' 超时时间(ms)
-    nIDEvent As ULONG64 ' 定时器ID
-    ThreadId As ULONG64 ' 线程ID
-    ProcessId As ULONG64 ' 进程ID
-    hWnd As hWnd ' 所属窗口
-    param As ULONG_PTR ' 线程参数
+    pfn       As ULONG64   ' 回调函数地址
+    nTimeout  As ULong     ' 超时时间(ms)
+    nIDEvent  As ULONG64   ' 定时器ID
+    ThreadId  As ULONG64   ' 线程ID
+    ProcessId As ULONG64   ' 进程ID
+    hWnd      As hWnd      ' 所属窗口
+    param     As ULONG_PTR ' 线程参数
+End Type
+
+Type PS_PROTECTION
+    Level As UCHAR
+    Union
+        Type    As UCHAR ' : 3
+        Audit   As UCHAR ' : 1
+        Signer  As UCHAR ' : 4
+    End Union
+End Type
+
+' 统一进程信息结构体
+Type ProcessInfo
+    PID            As DWORD
+    startTimeStr   As String
+    cpuUserSec     As Double
+    cpuKernelSec   As Double
+    workingSetKB   As Long
+    privateBytesKB As Long
+    pagedPoolKB    As Long
+    handleCount    As DWORD
+    gdiObjects     As DWORD
+    userObjects    As DWORD
+    integrityLevel As String
+    isPPL          As Boolean
+    pplLevel       As Byte
+    pplType        As Byte
+    pplSigner      As Byte
 End Type
 
 Public Enum PROCESSINFOCLASS
@@ -216,7 +241,7 @@ Public Enum PROCESSINFOCLASS
     ProcessLdtInformation
     ProcessLdtSize
     ProcessDefaultHardErrorMode
-    ProcessIoPortHandlers                                                       '// Note: this is kernel mode only
+    ProcessIoPortHandlers '// Note: this is kernel mode only
     ProcessPooledUsageAndLimits
     ProcessWorkingSetWatch
     ProcessUserModeIOPL
@@ -243,35 +268,23 @@ Public Enum PROCESSINFOCLASS
     ProcessImageInformation
     MaxProcessInfoClass '// MaxProcessInfoClass should always be the last enum
     ProcessHandleInformation = 51
+    ProcessProtectionInformation = 61
 End Enum
 
-'Private Function Replace
-'32位编译需使用别名,且不使用Extern "C"
-'Extern "C"
 Declare Function ZwSuspendProcess Lib "ntdll.dll" Alias "ZwSuspendProcess"(ByVal hProcess As HANDLE) As NTSTATUS
-Declare Function ZwResumeProcess Lib "ntdll.dll" Alias "ZwResumeProcess"(ByVal hProcess As HANDLE) As NTSTATUS
+Declare Function ZwResumeProcess Lib "ntdll.dll" Alias "ZwResumeProcess"(ByVal hProcess As HANDLE)   As NTSTATUS
 Declare Function ZwOpenProcess Lib "ntdll.dll" Alias "ZwOpenProcess"(ByVal ProcessHandle As PHANDLE, ByVal DesiredAccess As ACCESS_MASK, ByVal ObjectAttributes As POBJECT_ATTRIBUTES, ByVal ClientId As PCLIENT_ID) As NTSTATUS
 Declare Function ZwTerminateProcess Lib "ntdll.dll" Alias "ZwTerminateProcess"(ByVal ProcessHandle As HANDLE, ByVal ExitStatus As NTSTATUS) As NTSTATUS
 Declare Function ZwClose Lib "ntdll.dll" Alias "ZwClose"(ByVal HANDLE As HANDLE) As NTSTATUS
-Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
-Declare Function ZwQueryInformationProcess Lib "ntdll.dll" Alias "ZwQueryInformationProcess"(ByVal ProcessHandle As HANDLE,ByVal ProcessInformationClass As PROCESSINFOCLASS,_
-ByVal ProcessInformation As LPVOID, ByVal ProcessInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS
+Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS, ByVal SystemInformation As PVOID, ByVal SystemInformationLength As ULong, ByVal ReturnLength As PULONG) As NTSTATUS
+Declare Function ZwQueryInformationProcess Lib "ntdll.dll" Alias "ZwQueryInformationProcess"(ByVal ProcessHandle As HANDLE, ByVal ProcessInformationClass As PROCESSINFOCLASS, _
+    ByVal ProcessInformation As LPVOID, ByVal ProcessInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS
 Declare Function _IsProcessCritical Lib "kernel32" Alias "IsProcessCritical"(ByVal hProcess As HANDLE, ByVal Critical As PBOOLEAN) As Boolean
 Declare Function GetProcessIdOfThread Lib "kernel32" Alias "GetProcessIdOfThread"(ByVal Thread As HANDLE) As DWORD
 
-'End Extern
-CONST OBJ_KERNEL_HANDLE = &h00000200
+CONST OBJ_KERNEL_HANDLE = &H00000200
 #define SYSTEM_CALL_OPENPROCESS &H26
 #define SYSTEM_CALL_TERMINATEPROCESS &H2C
-
-/'Private Sub InitializeObjectAttributes(ByVal p As OBJECT_ATTRIBUTES Ptr,ByVal n As UNICODE_STRING Ptr,ByVal a As ULong)
-    p->Length = SizeOf(OBJECT_ATTRIBUTES)
-    p->RootDirectory = NULL
-    p->Attributes = a
-    p->ObjectName = n
-    p->SecurityDescriptor = NULL
-    p->SecurityQualityOfService = NULL
-End Sub'/
 
 Function MyZwOpenProcess Naked(_
     ByVal ProcessHandle As PHANDLE, _
@@ -1049,6 +1062,172 @@ Cleanup:
     If pUserBuf <> NULL Then Deallocate(pUserBuf)
     If hToken <> NULL Then CloseHandle(hToken)
     If hProcess <> NULL Then CloseHandle(hProcess)
+End Function
+
+' 辅助函数
+Private Function FileTimeToLocalStr(ByVal ft As FILETIME) As String
+    Dim st As SYSTEMTIME, lt As SYSTEMTIME
+    FileTimeToSystemTime(@ft, @st)
+    SystemTimeToTzSpecificLocalTime(NULL, @st, @lt)
+    Return _
+        Format(lt.wYear,"0000") & "-" & _
+        Format(lt.wMonth,"00") & "-" & _
+        Format(lt.wDay,"00") & " " & _
+        Format(lt.wHour,"00") & ":" & _
+        Format(lt.wMinute,"00") & ":" & _
+        Format(lt.wSecond,"00")
+End Function
+
+Private Function FileTimeToSeconds(ByVal ft As FILETIME) As Double
+    Dim q As ULongInt = (Cast(ULongInt, ft.dwHighDateTime) Shl 32) Or ft.dwLowDateTime
+    Return q / 10000000.0
+End Function
+
+Private Function IntegrityRidToString(ByVal rid As DWORD) As String
+    Select Case rid
+        Case SECURITY_MANDATORY_LOW_RID    : Return "Low"
+        Case SECURITY_MANDATORY_MEDIUM_RID : Return "Medium"
+        Case SECURITY_MANDATORY_HIGH_RID   : Return "High"
+        Case SECURITY_MANDATORY_SYSTEM_RID : Return "System"
+        Case Else : Return "Unknown(" & Hex(rid) & ")"
+    End Select
+End Function
+
+Function GetProcessOtherInfo(ByVal PID As DWORD, txtInfo As Class_TextBox) As ProcessInfo
+    Dim info As ProcessInfo
+    info.PID = PID
+    Dim outStr As String = ""
+    
+    Dim hProcess As HANDLE = NULL
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(PID)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, 0, PID)
+    End If
+    If hProcess = NULL Then
+        txtInfo.Text = "(failed)"
+        MyLog.PrintLog LOG_ERROR, "打开进程失败,PID=" & PID
+        Return info
+    End If
+    
+    ' 启动时间 + CPU时间
+    Dim ftCreate As FILETIME, ftExit As FILETIME
+    Dim ftKernel As FILETIME, ftUser As FILETIME
+    If GetProcessTimes(hProcess, @ftCreate, @ftExit, @ftKernel, @ftUser) <> 0 Then
+        info.startTimeStr = FileTimeToLocalStr(ftCreate)
+        info.cpuUserSec   = FileTimeToSeconds(ftUser)
+        info.cpuKernelSec = FileTimeToSeconds(ftKernel)
+        
+        outStr += "启动时间     : " & info.startTimeStr & vbCrLf
+        outStr += "CPU 用户态   : " & Format(info.cpuUserSec, "0.000")   & " s" & vbCrLf
+        outStr += "CPU 内核态   : " & Format(info.cpuKernelSec, "0.000") & " s" & vbCrLf
+    Else
+        outStr += "启动时间     : " & "(failed)" & vbCrLf
+        outStr += "CPU 用户态   : " & "(failed)" & vbCrLf
+        outStr += "CPU 内核态   : " & "(failed)" & vbCrLf
+        MyLog.PrintWin32Error "GetProcessOtherInfo", "GetProcessTimes", "PID=" & PID
+    End If
+    
+    ' 内存信息
+    Dim pmcx As PROCESS_MEMORY_COUNTERS_EX
+    pmcx.cb = SizeOf(pmcx)
+    If GetProcessMemoryInfo(hProcess, CPtr(PPROCESS_MEMORY_COUNTERS, @pmcx), pmcx.cb) <> 0 Then
+        info.workingSetKB   = pmcx.WorkingSetSize \ 1024
+        info.privateBytesKB = pmcx.PrivateUsage   \ 1024
+        info.pagedPoolKB    = pmcx.QuotaPagedPoolUsage \ 1024
+        
+        outStr += "工作集(KB)   : " & Str(info.workingSetKB)   & vbCrLf
+        outStr += "私有字节(KB) : " & Str(info.privateBytesKB) & vbCrLf
+        outStr += "分页池(KB)   : " & Str(info.pagedPoolKB) & vbCrLf
+    Else
+        outStr += "工作集(KB)   : " & "(failed)" & vbCrLf
+        outStr += "私有字节(KB) : " & "(failed)" & vbCrLf
+        outStr += "分页池(KB)   : " & "(failed)" & vbCrLf
+        MyLog.PrintWin32Error "GetProcessOtherInfo", "GetProcessMemoryInfo", "PID=" & PID
+    End If
+    
+    ' 句柄、GDI、USER
+    GetProcessHandleCount(hProcess, @info.handleCount)
+    info.gdiObjects  = GetGuiResources(hProcess, GR_GDIOBJECTS)
+    info.userObjects = GetGuiResources(hProcess, GR_USEROBJECTS)
+    
+    outStr += "句柄数量     : " & Str(info.handleCount) & vbCrLf
+    outStr += "GDI 对象数   : " & Str(info.gdiObjects)  & vbCrLf
+    outStr += "USER 对象数  : " & Str(info.userObjects) & vbCrLf
+    
+    ' 完整性级别 MIC
+    Dim hToken As HANDLE, bSuccess As Boolean = False
+    If OpenProcessToken(hProcess, TOKEN_QUERY, @hToken) <> 0 Then
+        Dim buf(0 To 1023) As Byte, nLen As DWORD
+        If GetTokenInformation(hToken, TokenIntegrityLevel, @buf(0), 1024, @nLen) <> 0 Then
+            Dim pTil As PTOKEN_MANDATORY_LABEL = Cast(PTOKEN_MANDATORY_LABEL, @buf(0))
+            Dim pSid As LPDWORD = GetSidSubAuthority(pTil->Label.Sid, 0)
+            info.integrityLevel = IntegrityRidToString( *pSid)
+            outStr += "完整性级别   : " & info.integrityLevel & vbCrLf
+            bSuccess = True
+        Else
+            MyLog.PrintWin32Error "GetProcessOtherInfo", "GetTokenInformation", "PID=" & PID
+        End If
+        CloseHandle(hToken)
+    Else
+        MyLog.PrintWin32Error "GetProcessOtherInfo", "OpenProcessToken", "PID=" & PID
+    End If
+    
+    If Not bSuccess Then outStr += "完整性级别   : " & "(failed)" & vbCrLf
+    
+    ' PPL 标志
+    Dim prot As PS_PROTECTION, retLen As ULong, ret As NTSTATUS
+    ret = ZwQueryInformationProcess(hProcess, ProcessProtectionInformation, @prot, SizeOf(prot), retLen)
+    If NT_SUCCESS(ret) Then
+        ' 手动解析 Level（避免位域编译差异）
+        Dim protLevel  As UByte = prot.Level
+        Dim protType   As UByte = (protLevel Shr 0) And &h07
+        Dim protSigner As UByte = (protLevel Shr 4) And &h0F
+        
+        info.pplLevel  = protLevel
+        info.pplType   = protType
+        info.pplSigner = protSigner
+        info.isPPL     = (protType = 1)
+        
+        ' 保护类型
+        Dim typeStr As String
+        Select Case protType
+            Case 0: typeStr = "无保护"
+            Case 1: typeStr = "PPL (Protected Light)"
+            Case 2: typeStr = "PP (Protected)"
+            Case Else: typeStr = "未知(" & Str(protType) & ")"
+        End Select
+        
+        ' Signer
+        Dim signerStr As String
+        Select Case protSigner
+            Case 0: signerStr = "None"
+            Case 1: signerStr = "Authenticode"
+            Case 2: signerStr = "CodeGen"
+            Case 3: signerStr = "Antimalware"
+            Case 4: signerStr = "Lsa"
+            Case 5: signerStr = "Windows"
+            Case 6: signerStr = "WinTcb"
+            Case 7: signerStr = "WinSystem"
+            Case 8: signerStr = "App"
+            Case Else: signerStr = "未知(" & Str(protSigner) & ")"
+        End Select
+        
+        outStr += "是否PPL进程  : " & IIf(info.isPPL, "是", "否") & vbCrLf
+        outStr += "保护类型     : " & typeStr   & vbCrLf
+        outStr += "Signer       : " & signerStr & vbCrLf
+    Else
+        outStr += "是否PPL进程  : " & "(failed)" & vbCrLf
+        outStr += "保护类型     : " & "(failed)" & vbCrLf
+        outStr += "Signer       : " & "(failed)" & vbCrLf
+        MyLog.PrintNtError "GetProcessOtherInfo", "ZwQueryInformationProcess", ret, "PID=" & PID
+    End If
+    
+    ' 追加到文本框
+    txtInfo.Text = outStr
+    
+    CloseHandle(hProcess)
+    Return info
 End Function
 
 Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer

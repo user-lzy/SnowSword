@@ -83,7 +83,7 @@ Form=.\forms\FrmOtherInfo.Frm|0|816||Yes|
 Form=.\forms\FrmInfo.Frm|0|1214||Yes|
 
 TopTab=.\forms\FrmMain.frm|False|0|50|2046
-TopTab=.\forms\FrmListView.Frm|True|0|298|16892
+TopTab=.\forms\FrmListView.Frm|False|0|258|16892
 TopTab=.\forms\FrmInfo.Frm|False|0|0|1214
 TopTab=.\modules\ModListView.Inc|False|0|60|1096
 TopTab=.\modules\ModIoctl.Inc|False|0|55|6850
@@ -93,6 +93,7 @@ TopTab=.\modules\ModThread.Inc|False|0|1236|55638
 TopTab=.\modules\ModHook.Inc|False|0|500|16648
 TopTab=.\modules\ModModule.Inc|False|0|417|17440
 TopTab=.\modules\ModFile.Inc|False|0|1012|45776
+TopTab=.\modules\ModCallbacks.Inc|True|0|375|15990
 #END_MAIN_PROPERTIES#
 
 

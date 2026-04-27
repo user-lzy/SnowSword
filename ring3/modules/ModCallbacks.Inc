@@ -405,7 +405,7 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
     
     Dim hGroup As MC_HTREELISTITEM, hItem As MC_HTREELISTITEM
     For i As Integer = 0 To UBound(MinifilterArray)
-        'Print MinifilterArray(i).wName
+        Print MinifilterArray(i).wName
         hGroup = lvwMinifilter.AddItem(MC_TLI_ROOT, MinifilterArray(i).wName)
         lvwMinifilter.SetItemText hGroup, 2, GetCorrectPath(MinifilterArray(i).wPath)
         lvwMinifilter.SetItemText hGroup, 3, "0x" & WHex(MinifilterArray(i).hFilter)

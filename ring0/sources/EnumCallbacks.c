@@ -459,16 +459,102 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT Array)
 	RTL_OSVERSIONINFOEXW OSVersion = { 0 };
 	OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
 	RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
+
+	ULONG NameOffset, AltitudeOffset, DriverObjectOffset, FilterUnloadOffset, InstanceSetupOffset, 
+		InstanceQueryTeardownOffset, InstanceTeardownStartOffset, 
+		InstanceTeardownCompleteOffset, PreVolumeMountOffset, PostVolumeMountOffset, GenerateFileNameOffset,
+		NormalizeNameComponentOffset, NormalizeNameComponentExOffset, NormalizeContextCleanupOffset;
 	if (OSVersion.dwMajorVersion >= 10 && OSVersion.dwBuildNumber >= 26100) {
+		/*
+		lkd> dt fltmgr!_FLT_FILTER
+		+0x000 Base             : _FLT_OBJECT
+		+0x038 Frame            : Ptr64 _FLTP_FRAME
+		+0x040 Name             : _UNICODE_STRING
+		+0x050 DefaultAltitude  : _UNICODE_STRING
+		+0x060 Flags            : _FLT_FILTER_FLAGS
+		+0x068 DriverObject     : Ptr64 _DRIVER_OBJECT
+		+0x070 InstanceList     : _FLT_RESOURCE_LIST_HEAD
+		+0x0f0 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
+		+0x0f8 VerifiedFiltersLink : _LIST_ENTRY
+		+0x108 FilterUnload     : Ptr64     long
+		+0x110 InstanceSetup    : Ptr64     long
+		+0x118 InstanceQueryTeardown : Ptr64     long
+		+0x120 InstanceTeardownStart : Ptr64     void
+		+0x128 InstanceTeardownComplete : Ptr64     void
+		+0x130 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
+		+0x138 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
+		+0x170 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
+		+0x178 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
+		+0x180 GenerateFileName : Ptr64     long
+		+0x188 NormalizeNameComponent : Ptr64     long
+		+0x190 NormalizeNameComponentEx : Ptr64     long
+		+0x198 NormalizeContextCleanup : Ptr64     void
+		*/
 		// Windows 11及以上，使用对应偏移
 		lOperationsOffset = 0x1B0;
+		NameOffset = 0x40;
+		AltitudeOffset = 0x50;
+		DriverObjectOffset = 0x68;
+		FilterUnloadOffset = 0x108;
+		InstanceSetupOffset = 0x110;
+		InstanceQueryTeardownOffset = 0x118;
+		InstanceTeardownStartOffset = 0x120;
+		InstanceTeardownCompleteOffset = 0x128;
+		PreVolumeMountOffset = 0x170;
+		PostVolumeMountOffset = 0x178;
+		GenerateFileNameOffset = 0x180;
+		NormalizeNameComponentOffset = 0x188;
+		NormalizeNameComponentExOffset = 0x190;
+		NormalizeContextCleanupOffset = 0x198;
+
 		DbgPrint("win11");
 	}
 	else {
+		/*
+		lkd> dt fltmgr!_FLT_FILTER
+		+0x000 Base             : _FLT_OBJECT
+		+0x030 Frame            : Ptr64 _FLTP_FRAME
+		+0x038 Name             : _UNICODE_STRING
+		+0x048 DefaultAltitude  : _UNICODE_STRING
+		+0x058 Flags            : _FLT_FILTER_FLAGS
+		+0x060 DriverObject     : Ptr64 _DRIVER_OBJECT
+		+0x068 InstanceList     : _FLT_RESOURCE_LIST_HEAD
+		+0x0e8 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
+		+0x0f0 VerifiedFiltersLink : _LIST_ENTRY
+		+0x100 FilterUnload     : Ptr64     long 
+		+0x108 InstanceSetup    : Ptr64     long 
+		+0x110 InstanceQueryTeardown : Ptr64     long 
+		+0x118 InstanceTeardownStart : Ptr64     void 
+		+0x120 InstanceTeardownComplete : Ptr64     void 
+		+0x128 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
+		+0x130 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
+		+0x168 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS 
+		+0x170 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS 
+		+0x178 GenerateFileName : Ptr64     long 
+		+0x180 NormalizeNameComponent : Ptr64     long 
+		+0x188 NormalizeNameComponentEx : Ptr64     long 
+		+0x190 NormalizeContextCleanup : Ptr64     void 
+		*/
 		// 旧版本偏移
-		//lOperationsOffset = 0x1A8;
-		DbgPrint("暂不支持的系统版本!");
-		return 0;
+		lOperationsOffset = 0x1A8;
+		NameOffset = 0x38;
+		AltitudeOffset = 0x48;
+		DriverObjectOffset = 0x60;
+		FilterUnloadOffset = 0x100;
+		InstanceSetupOffset = 0x108;
+		InstanceQueryTeardownOffset = 0x110;
+		InstanceTeardownStartOffset = 0x118;
+		InstanceTeardownCompleteOffset = 0x120;
+		PreVolumeMountOffset = 0x168;
+		PostVolumeMountOffset = 0x170;
+		GenerateFileNameOffset = 0x178;
+		NormalizeNameComponentOffset = 0x180;
+		NormalizeNameComponentExOffset = 0x188;
+		NormalizeContextCleanupOffset = 0x190;
+
+		DbgPrint("win10");
+		//DbgPrint("暂不支持的系统版本!");
+		//return 0;
 	}
 
 	if (!Array) {
@@ -499,54 +585,29 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT Array)
 				}
 			}
 			Array[i].hFilter = ppFilterList[i];
-			/*
-			lkd> dt fltmgr!_FLT_FILTER
-			   +0x000 Base             : _FLT_OBJECT
-			   +0x038 Frame            : Ptr64 _FLTP_FRAME
-			   +0x040 Name             : _UNICODE_STRING
-			   +0x050 DefaultAltitude  : _UNICODE_STRING
-			   +0x060 Flags            : _FLT_FILTER_FLAGS
-			   +0x068 DriverObject     : Ptr64 _DRIVER_OBJECT
-			   +0x070 InstanceList     : _FLT_RESOURCE_LIST_HEAD
-			   +0x0f0 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
-			   +0x0f8 VerifiedFiltersLink : _LIST_ENTRY
-			   +0x108 FilterUnload     : Ptr64     long
-			   +0x110 InstanceSetup    : Ptr64     long
-			   +0x118 InstanceQueryTeardown : Ptr64     long
-			   +0x120 InstanceTeardownStart : Ptr64     void
-			   +0x128 InstanceTeardownComplete : Ptr64     void
-			   +0x130 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
-			   +0x138 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
-			   +0x170 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
-			   +0x178 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
-			   +0x180 GenerateFileName : Ptr64     long
-			   +0x188 NormalizeNameComponent : Ptr64     long
-			   +0x190 NormalizeNameComponentEx : Ptr64     long
-			   +0x198 NormalizeContextCleanup : Ptr64     void
-			*/
-			//Array[i].Name = *(PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x40);
-			//Array[i].Altitude = *(PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x50);
-			PDRIVER_OBJECT pDriverObject = *(PDRIVER_OBJECT*)((PUCHAR)ppFilterList[i] + 0x68);
-			RtlStringCbCopyUnicodeString(Array[i].Name, sizeof(Array[i].Name), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x40));
+			
+			PDRIVER_OBJECT pDriverObject = *(PDRIVER_OBJECT*)((PUCHAR)ppFilterList[i] + DriverObjectOffset);
+			RtlStringCbCopyUnicodeString(Array[i].Name, sizeof(Array[i].Name), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + NameOffset));
 			// 获取驱动路径
 			PLDR_DATA_TABLE_ENTRY pLdr = (PLDR_DATA_TABLE_ENTRY)pDriverObject->DriverSection;
 			RtlStringCbCopyW(Array[i].Path, sizeof(Array[i].Path), pLdr->FullDllName.Buffer);
-			RtlStringCbCopyUnicodeString(Array[i].Altitude, sizeof(Array[i].Altitude), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x50));
+			RtlStringCbCopyUnicodeString(Array[i].Altitude, sizeof(Array[i].Altitude), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + AltitudeOffset));
 			Array[i].hFilter = ppFilterList[i];
 			
-			DbgPrint("DriverName:%wZ, hFilter:0x%p, Altitude:%wS", (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x40), Array[i].hFilter, Array[i].Altitude);
-			//RtlStringCbCopyW(Array[i].Name, sizeof(Array[i].Name), ((PUNICODE_STRING)((PUCHAR)ppFilterList[i] + 0x40))->Buffer);
-			Array[i].FilterFunc[0] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x108);
-			Array[i].FilterFunc[1] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x110);
-			Array[i].FilterFunc[2] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x118);
-			Array[i].FilterFunc[3] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x120);
-			Array[i].FilterFunc[4] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x128);
-			Array[i].FilterFunc[5] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x170);
-			Array[i].FilterFunc[6] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x178);
-			Array[i].FilterFunc[7] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x180);
-			Array[i].FilterFunc[8] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x188);
-			Array[i].FilterFunc[9] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x190);
-			Array[i].FilterFunc[10] = *(PVOID*)((PUCHAR)ppFilterList[i] + 0x198);
+			DbgPrint("DriverName:%wZ, hFilter:0x%p, Altitude:%wS", (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + NameOffset), Array[i].hFilter, Array[i].Altitude);
+			
+			Array[i].FilterFunc[0] = *(PVOID*)((PUCHAR)ppFilterList[i] + FilterUnloadOffset);
+			Array[i].FilterFunc[1] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceSetupOffset);
+			Array[i].FilterFunc[2] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceQueryTeardownOffset);
+			Array[i].FilterFunc[3] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceTeardownStartOffset);
+			Array[i].FilterFunc[4] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceTeardownCompleteOffset);
+			Array[i].FilterFunc[5] = *(PVOID*)((PUCHAR)ppFilterList[i] + PreVolumeMountOffset);
+			Array[i].FilterFunc[6] = *(PVOID*)((PUCHAR)ppFilterList[i] + PostVolumeMountOffset);
+			Array[i].FilterFunc[7] = *(PVOID*)((PUCHAR)ppFilterList[i] + GenerateFileNameOffset);
+			Array[i].FilterFunc[8] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeNameComponentOffset);
+			Array[i].FilterFunc[9] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeNameComponentExOffset);
+			Array[i].FilterFunc[10] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeContextCleanupOffset);
+
 			Array[i].bMajorFunction = TRUE;
 			// 同一过滤器下的回调信息
 			while (IRP_MJ_OPERATION_END != pFltOperationRegistration->MajorFunction)

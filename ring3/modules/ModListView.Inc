@@ -126,6 +126,8 @@ Const FB_GoldenYellow As COLORREF = BGR(255, 240, 128)
 Const FB_White As COLORREF = BGR(255, 255, 255)
 Const FB_Black As COLORREF = BGR(0, 0, 0)
 Const FB_LightGreen As COLORREF = BGR(50, 200, 50)
+Const FB_Grey As COLORREF = BGR(212, 212, 212)
+Const FB_BoheGreen As COLORREF = BGR(220, 240, 212)
 
 Dim Shared CurrentInformationArray() As CURRENT_INFORMATION
 Dim Shared pOldWindowProc As PVOID
@@ -183,7 +185,9 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 '.AddColumn "公司名",, 200
             Case Windows
                 .AddColumn "句柄",, 150
+                .AddColumn "父窗口句柄",, 150
                 .AddColumn "名称",, 300
+                .AddColumn "当前WndProc",, 150
                 .AddColumn "类名",, 300
                 .AddColumn "TID",, 100
                 .AddColumn "所属模块",, 400

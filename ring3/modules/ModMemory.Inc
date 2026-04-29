@@ -49,7 +49,7 @@ Private Function GetTypeString(ByVal MemoryType As Long) As String
 End Function
 
 ' 增强的GetProtectString函数，处理更多情况
-Private Function GetProtectString(ByVal Protect As Long) As String
+Private Function GetProtectString(ByVal Protect As ULong) As String
     ' 首先检查是否为0
     If Protect = 0 Then
         GetProtectString = "PAGE_NOACCESS"
@@ -136,9 +136,46 @@ Private Function GetProtectString(ByVal Protect As Long) As String
     End Select
 End Function
 
+' ==============================================
+' 函数功能：将保护属性字符串 转换为 数值常量
+' 输入：如 "PAGE_READWRITE | PAGE_GUARD"
+' 输出：合并后的保护标志值 (ULong)
+' ==============================================
+Function ParseProtectString(ByVal protectStr As String) As ULong
+    Dim result As ULong = 0
+    Dim parts() As String
+    Dim part As String
+    Dim i As Integer
+    
+    ' 1. 按 | 分割字符串（兼容带空格/不带空格）
+    Split FF_Replace(protectStr, " ", ""), "|", parts()
+    
+    ' 2. 遍历每个标志并匹配常量
+    For i = LBound(parts) To UBound(parts)
+        part = Trim(parts(i))
+        If part = "" Then Continue For
+        
+        Select Case UCase(part)
+            Case "PAGE_NOACCESS"          : result Or= PAGE_NOACCESS
+            Case "PAGE_READONLY"          : result Or= PAGE_READONLY
+            Case "PAGE_READWRITE"         : result Or= PAGE_READWRITE
+            Case "PAGE_WRITECOPY"         : result Or= PAGE_WRITECOPY
+            Case "PAGE_EXECUTE"           : result Or= PAGE_EXECUTE
+            Case "PAGE_EXECUTE_READ"      : result Or= PAGE_EXECUTE_READ
+            Case "PAGE_EXECUTE_READWRITE" : result Or= PAGE_EXECUTE_READWRITE
+            Case "PAGE_EXECUTE_WRITECOPY" : result Or= PAGE_EXECUTE_WRITECOPY
+            Case "PAGE_GUARD"             : result Or= PAGE_GUARD
+            Case "PAGE_NOCACHE"           : result Or= PAGE_NOCACHE
+            Case "PAGE_WRITECOMBINE"      : result Or= PAGE_WRITECOMBINE
+        End Select
+    Next
+    
+    Function = result
+End Function
+
 ' 辅助函数：直接添加内存块
 Private Sub AddMemoryBlockDirectly(ByRef lvwMemory As Class_ListView, ByVal dwProcessId As DWORD, ByRef mbi As MEMORY_BASIC_INFORMATION)
-    Dim actualProtect As Long = mbi.Protect
+    Dim actualProtect As ULong = mbi.Protect
     If actualProtect = 0 And mbi.State = MEM_COMMIT Then
         actualProtect = mbi.AllocationProtect
     End If
@@ -149,6 +186,13 @@ Private Sub AddMemoryBlockDirectly(ByRef lvwMemory As Class_ListView, ByVal dwPr
     
     Dim ItemIndex As Long = AddItemColListEx(lvwMemory, 7,,, "0x" & WHex(mbi.BaseAddress), "0x" & WHex(mbi.RegionSize), WStr(GetProtectString(actualProtect)), _
     WStr(GetStateString(mbi.State)), WStr(GetTypeString(mbi.Type)), "0x" & WHex(mbi.AllocationBase), szModuleName)
+    If mbi.State <> MEM_COMMIT Then ' 未提交内存
+        SetItemColor lvwMemory, ItemIndex, FB_Black, FB_Grey
+    ElseIf mbi.State = MEM_IMAGE Then ' 映像内存
+        SetItemColor lvwMemory, ItemIndex, FB_Black, FB_GoldenYellow
+    ElseIf mbi.Protect = PAGE_EXECUTE OrElse mbi.Protect = PAGE_EXECUTE_READ OrElse mbi.Protect = PAGE_EXECUTE_WRITECOPY OrElse mbi.Protect = PAGE_EXECUTE_READWRITE Then ' 可执行内存
+        SetItemColor lvwMemory, ItemIndex, FB_Black, FB_BoheGreen
+    End If
     'VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, szModuleName
 End Sub
 

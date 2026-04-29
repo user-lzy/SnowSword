@@ -1,4 +1,6 @@
-﻿Function BinarySearch_DWord(arr() As DWORD, target As DWORD) As Integer
+﻿'Extern MemoryInfo As MEMORY_CHANGE
+
+Function BinarySearch_DWord(arr() As DWORD, target As DWORD) As Integer
     Dim As Integer low, high, mid1
     
     low = LBound(arr)

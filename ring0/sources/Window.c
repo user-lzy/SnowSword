@@ -311,7 +311,7 @@ NTSTATUS EnumProcessTimers(
                     // ====================== PID/TID 解析（你的原有逻辑完全保留）======================
                     PVOID pti = NULL;
                     if (g_TimerCtx.isV2) {
-                        pti = pTimer.Win11->threadInfo;
+                        pti = pTimer.Win11->pti;
                     }
                     else {
                         pti = pTimer.Win10->head.threadInfo;
@@ -331,11 +331,6 @@ NTSTATUS EnumProcessTimers(
                     PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
                     if (!pEthread) continue;
                     HANDLE dwThreadId = PsGetThreadId(pEthread);
-
-                    // 打印日志（保留）
-                    DbgPrint("[TIMER_ENUM] 找到定时器！PID=%llu, TID=%llu, nIDEvent=%lld\n",
-                        (ULONG64)currentPid, (ULONG64)dwThreadId,
-                        g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent);
 
                     // ====================== 内存分配（你的原有逻辑完全保留）======================
                     PWINDOW_TIMER pNewArray = (PWINDOW_TIMER)ExAllocatePool2(
@@ -359,11 +354,26 @@ NTSTATUS EnumProcessTimers(
                     pNewArray[timerCount].nIDEvent = g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent;
                     pNewArray[timerCount].ThreadId = dwThreadId;
                     pNewArray[timerCount].ProcessId = currentPid;
-                    // ✅ 修复你原代码的致命错误：hWnd 错误写成 nIDEvent
-                    PVOID pWnd = g_TimerCtx.isV2 ? pTimer.Win11->windowPtr : pTimer.Win10->windowPtr;
+                    
+                    PVOID pWnd = NULL;
                     pNewArray[timerCount].hWnd = NULL;
-                    if (pWnd && MmIsAddressValid(pWnd))
-                        pNewArray[timerCount].hWnd = *(PVOID*)pWnd;
+                    if (g_TimerCtx.isV2) {
+                        pWnd = pTimer.Win11->pWnd;
+                        if (pWnd && MmIsAddressValid(pWnd))
+                            pNewArray[timerCount].hWnd = *(PVOID*)pWnd;
+                    }
+                    else {
+                        pWnd = pTimer.Win10->windowPtr;
+                        if (pWnd && MmIsAddressValid(pWnd))
+                            pNewArray[timerCount].hWnd = *(PVOID*)pWnd;
+                    }
+
+                    // 打印日志（保留）
+                    DbgPrint("[TIMER_ENUM] 找到定时器！pTimer=0x%p, PID=%llu, TID=%llu, nIDEvent=%lld, pWnd=0x%p, hWnd=0x%p\n",
+                        pTimer, (ULONG64)currentPid, (ULONG64)dwThreadId,
+                        g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent, 
+                        pWnd, pNewArray[timerCount].hWnd);
+
 
                     pResultArray = pNewArray;
                     timerCount++;

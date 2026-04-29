@@ -130,6 +130,7 @@
     <ClInclude Include="include\ioctl.h" />
     <ClInclude Include="include\Memory.h" />
     <ClInclude Include="include\Module.h" />
+    <ClInclude Include="include\Netstat.h" />
     <ClInclude Include="include\ObjectInfo.h" />
     <ClInclude Include="include\OtherFunctions.h" />
     <ClInclude Include="include\OtherTools.h" />
@@ -154,6 +155,7 @@
     <ClCompile Include="sources\main\Driver.c" />
     <ClCompile Include="sources\Memory.c" />
     <ClCompile Include="sources\Module.c" />
+    <ClCompile Include="sources\Netstat.c" />
     <ClCompile Include="sources\ObjectInfo.c" />
     <ClCompile Include="sources\OtherFunctions.c" />
     <ClCompile Include="sources\OtherTools.c" />

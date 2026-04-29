@@ -9,6 +9,7 @@
 #include "ioctl.h"
 #include "Memory.h"
 #include "Module.h"
+#include "Netstat.h"
 #include "ObjectInfo.h"
 #include "OtherFunctions.h"
 #include "Process.h"
@@ -86,7 +87,38 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
 
-    //EnumWorkerThreads();
+    // 测试打印代码（修正版）
+    PNDIS_FILTER_INFO pFilterArray = NULL;
+    ULONG filterCount = 0;
+
+    status = EnumNdisFilterDrivers(&pFilterArray, &filterCount);
+    if (NT_SUCCESS(status))
+    {
+        DbgPrint("==================== 枚举结果 ====================\n");
+        for (ULONG i = 0; i < filterCount; i++)
+        {
+            if (pFilterArray[i].bValid)
+            {
+                // ✅ 正确打印UNICODE_STRING
+                // ✅ 正确打印GUID（修复%wG错误）
+                DbgPrint("驱动%d: %wZ GUID:{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
+                    i + 1,
+                    &pFilterArray[i].FilterName,
+                    pFilterArray[i].FilterGuid.Data1,
+                    pFilterArray[i].FilterGuid.Data2,
+                    pFilterArray[i].FilterGuid.Data3,
+                    pFilterArray[i].FilterGuid.Data4[0],
+                    pFilterArray[i].FilterGuid.Data4[1],
+                    pFilterArray[i].FilterGuid.Data4[2],
+                    pFilterArray[i].FilterGuid.Data4[3],
+                    pFilterArray[i].FilterGuid.Data4[4],
+                    pFilterArray[i].FilterGuid.Data4[5],
+                    pFilterArray[i].FilterGuid.Data4[6],
+                    pFilterArray[i].FilterGuid.Data4[7]);
+            }
+        }
+        FreeNdisFilterArray(pFilterArray);
+    }
     
     return STATUS_SUCCESS;
 }

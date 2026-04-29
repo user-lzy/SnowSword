@@ -354,7 +354,7 @@ Private Function MyZwTerminateProcess Naked(ByVal ProcessHandle As HANDLE, ByVal
     'Return st
 End Function
 
-Function MyOpenProcess(ByVal dwDesiredAccess As DWORD = PROCESS_ALL_ACCESS, ByVal bInheritHandle As WINBOOL = False, ByVal dwProcessId As DWORD) As HANDLE
+/'Function MyOpenProcess(ByVal dwDesiredAccess As DWORD = PROCESS_ALL_ACCESS, ByVal bInheritHandle As WINBOOL = False, ByVal dwProcessId As DWORD) As HANDLE
     Dim ProcessHandle As HANDLE = NULL
     Dim ClientId As CLIENT_ID
     Dim ObjectAttributes As OBJECT_ATTRIBUTES
@@ -368,13 +368,8 @@ Function MyOpenProcess(ByVal dwDesiredAccess As DWORD = PROCESS_ALL_ACCESS, ByVa
 
     '调用 ZwOpenProcess 打开进程
     Dim st As NTSTATUS = MyZwOpenProcess(@ProcessHandle, dwDesiredAccess, @ObjectAttributes, @ClientId)
-    Print Hex(st)
-    If (Not NT_SUCCESS(st)) Then
-        Print "MyZwOpenProcess Failed!(" & Hex(st) & ")"
-        Return NULL
-    End If
     Return ProcessHandle
-End Function
+End Function'/
 
 Function LzOpenProcess(PID As DWORD) As HANDLE
     Dim st As NTSTATUS
@@ -435,17 +430,15 @@ Function ForceKillProcess(ByVal dwProcessId As DWORD) As Boolean
 
     '调用 ZwOpenProcess 打开进程
     Dim st As NTSTATUS = MyZwOpenProcess(@ProcessHandle, PROCESS_TERMINATE, @ObjectAttributes, @ClientId)
-    Print Hex(st)
     If (Not NT_SUCCESS(st)) Then
-        Print "ZwOpenProcess Failed!(" & Hex(st) & ")"
+        MyLog.PrintNtError "ForceKillProcess", "MyZwOpenProcess", st, "dwProcessId=" & dwProcessId
         Return False
     End If
     Print ProcessHandle
     '调用 ZwTerminateProcess 结束进程
     st = MyZwTerminateProcess(ProcessHandle, 0)
-    Print Hex(st)
     If (Not NT_SUCCESS(st)) Then
-        Print "ZwTerminateProcess Failed!(" & Hex(st) & ")"
+        MyLog.PrintNtError "ForceKillProcess", "MyZwTerminateProcess", st, "dwProcessId=" & dwProcessId
         ZwClose ProcessHandle
         Return False
     End If
@@ -1466,14 +1459,13 @@ Public Function KillProcess(ByVal dwProcessId As DWORD) As Boolean
     End If
     Dim hProcess As HANDLE = OpenProcess(PROCESS_TERMINATE, False, dwProcessId)
     If (hProcess = 0) Then
-        Print "打开进程失败,原因:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "KillProcess", "OpenProcess", "dwProcessId=" & dwProcessId
         Goto Err1
     End If
     If (TerminateProcess(hProcess, 0) = 0) Then
-        Print "结束进程失败,原因:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "KillProcess", "TerminateProcess", "dwProcessId=" & dwProcessId
         Goto Err1
     End If
-    Print "结束进程成功!"
     Return True
     Err1 : 
     CloseHandle hProcess

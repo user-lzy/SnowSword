@@ -68,9 +68,9 @@ Tag=
 Name=mnuMemory
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuMemory_mnuRefresh0-10-FrmListView_mnuMemory_mnuStep10-10查看/编辑内存FrmListView_mnuMemory_mnuEditMemory0-10复制FrmListView_mnuMemory_mnuCopy0-10{复制单格数据FrmListView_mnuMemory_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuMemory_mnuLocateFilePath0-10
-Left=560
-Top=160
+Menu=刷新FrmListView_mnuMemory_mnuRefresh0-10-FrmListView_mnuMemory_mnuStep10-10定位内存FrmListView_mnuMemory_mnuLocateMemoryCtrl+G0-10修改内存属性FrmListView_mnuMemory_mnuChangeMemory0-10查看/编辑内存FrmListView_mnuMemory_mnuEditMemory0-10复制FrmListView_mnuMemory_mnuCopy0-10{复制单格数据FrmListView_mnuMemory_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuMemory_mnuLocateFilePath0-10
+Left=550
+Top=180
 Tag=
 
 [Label]
@@ -803,6 +803,29 @@ Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd,wID As ULong)
             GetMemoryBlockList CurrentPID, ListView
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuMemory_mnuLocateMemory ' 定位内存
+            Dim LocatedAddr As UInteger = ValULng(FF_Replace(AfxInputBox(,,, "定位内存", "请输出需要定位的内存地址:(例:0x7FFC18B9C000)"), "0x", "&H"))
+            Dim Addr As UInteger, Size As ULong
+            For i As Integer = 0 To ListView.ItemCount - 1
+                Addr = ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H"))
+                Size = ValUInt(FF_Replace(ListView.GetItemText(i, 1), "0x", "&H"))
+                Print "Addr:0x" & WHex(Addr) & " Size:0x" & WHex(Size) & " LocatedAddr:0x" & WHex(LocatedAddr) & " Addr+Size:0x" & WHex(Addr + Size)
+                If Addr <= LocatedAddr AndAlso Addr + Size >= LocatedAddr Then ' 定位成功
+                    Print "找到"
+                    ListView.UnselectAllItems
+                    ListView.SelectedItem = i
+                    ListView.ScrollSelectedItem
+                    Exit For
+                End If
+            Next
+        Case FrmListView_mnuMemory_mnuChangeMemory ' 修改内存属性
+            Dim mc As MEMORY_CHANGE Ptr = Allocate(SizeOf(MEMORY_CHANGE))
+            mc->Addr = ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
+            mc->dwSize = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
+            Dim strProtect As StringW = ListView.GetItemText(ListView.SelectedItem, 2)
+            mc->OldProtect = ParseProtectString(strProtect)
+            FrmMemoryChange.Show,, Cast(Integer, mc)
+        ' 搜索内存
         Case FrmListView_mnuMemory_mnuEditMemory ' 查看/编辑内存
             'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
             'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
@@ -811,7 +834,7 @@ Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd,wID As ULong)
             FrmMemoryEditor.Show,, Addr
         Case FrmListView_mnuMemory_mnuLittleCopy ' 复制单格数据
             Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
+            
             ' ==========================================
             ' 3. 复制到剪贴板
             ' ==========================================
@@ -1305,3 +1328,35 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
     End Select
 End Sub
+'[FrmListView.ListView]事件 : 一个列被点击了
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+'pNMV.iSubItem  当前被点击列的索引。lpNMV.iItem = -1 其它成员均为零 
+Sub FrmListView_ListView_LVN_ColumnClick(hWndForm As hWnd, hWndControl As hWnd, pNMV As NM_LISTVIEW)
+    ' 1. 获取ListView上下文（和你LVN_GETDISPINFO里的获取方式一致）
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(hWndControl, GWLP_USERDATA))
+    
+    ' 2. 安全校验（防止空指针崩溃）
+    If ctx = NULL Then Exit Sub
+    If ctx->Snap = NULL Then Exit Sub
+    If ctx->VisibleCount <= 1 Then Exit Sub ' 不足1行无需排序
+    If pNMV.iSubItem < 0 Then Exit Sub      ' 无效列索引
+    
+    ' 3. 更新排序状态
+    ' 同列重复点击 → 切换升降序
+    If ctx->SortedColumn = pNMV.iSubItem Then
+        ctx->SortAscending = Not ctx->SortAscending
+    Else
+        ' 新列点击 → 默认升序
+        ctx->SortedColumn = pNMV.iSubItem
+        ctx->SortAscending = True
+    End If
+    
+    ' 4. 执行排序（核心排序函数，复用之前的逻辑）
+    SortListViewVisibleIndex(ctx)
+    
+    ' 5. 刷新虚拟ListView（必须手动刷新，否则界面不更新）
+    ListView_RedrawItems(hWndControl, 0, ctx->VisibleCount - 1)
+End Sub
+

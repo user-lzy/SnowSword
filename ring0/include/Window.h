@@ -279,20 +279,39 @@ typedef struct _TIMER_ENTRY_WIN10 {
     LIST_ENTRY HashListEntry;
 } TIMER_ENTRY_WIN10, * PTIMER_ENTRY_WIN10;
 
+//typedef struct _TIMER_ENTRY_WIN11 {
+//    UCHAR           Reserved1[0x18];     // 0x00 ~ 0x17  保留
+//    PVOID           threadInfo;         // 0x18         tagTHREADINFO*（伪代码+3）
+//    WNDPROC         pfn;                // 0x20         定时器回调（伪代码+4）
+//    ULONG           nTimeout;           // 0x28         超时时间（伪代码+10）
+//    ULONG           Reserved2;          // 0x2C         填充
+//    ULONG           flags;              // 0x30         标志位(0x1000=删除)（伪代码+12）
+//    UCHAR           Reserved3[0x18];     // 0x34 ~ 0x4F  保留
+//    PVOID           hWnd;               // 0x50         ✅【核心】用户态窗口句柄（就是你要的0x330554）
+//    UCHAR           Reserved4[0x18];     // 0x58 ~ 0x6F  保留
+//    ULONG64         nIDEvent;           // 0x70         定时器ID（伪代码+14）
+//    LIST_ENTRY      HashListEntry;      // 0x78 ~ 0x87  哈希链表（伪代码+120）
+//    UCHAR           Reserved5[0x8];      // 0x88 ~ 0x8F  补齐到144字节
+//} TIMER_ENTRY_WIN11, * PTIMER_ENTRY_WIN11;
+
 typedef struct _TIMER_ENTRY_WIN11 {
-    UCHAR Reserved1[0x18];        // 0x00-0x17: 保留
-    PVOID threadInfo;              // 0x18: tagTHREADINFO*
-    WNDPROC pfn;                   // 0x20: 回调函数
-    ULONG nTimeout;                // 0x28: 超时时间
-    ULONG Reserved2;               // 0x2C
-    ULONG flags;                   // 0x30: 标志位 (0x1000=待删除)
-    ULONG nTimeout2;               // 0x34: 超时时间副本
-    UCHAR Reserved3[0x10];         // 0x38-0x47
-    LIST_ENTRY TmrListEntry;       // 0x48-0x57: 全局链表
-    PVOID windowPtr;                // 0x58: tagWND*
-    UCHAR Reserved4[0x10];         // 0x60-0x6F
-    ULONG64 nIDEvent;               // 0x70: 定时器ID
-    LIST_ENTRY HashListEntry;       // 0x78-0x87: 哈希表链表 (修正偏移！)
+    /* 0x00 */ HEAD             head;                // 句柄表头，8字节
+    /* 0x08 */ PVOID           unk_08;
+    /* 0x10 */ PVOID           unk_10;
+    /* 0x18 */ PVOID           pti;                 // 与旧版 threadInfo 一致
+    /* 0x20 */ PVOID           pfn;                 // 回调函数 / 上下文
+    /* 0x28 */ ULONG           nTimeout;            // 到期时间
+    /* 0x2C */ ULONG           dwContextId;         // 若 dwFlags & 0x200
+    /* 0x30 */ ULONG           flags;               // 标志位 (0x1000=已删除)
+    /* 0x34 */ ULONG           msPeriod;            // 周期
+    /* 0x38 */ LIST_ENTRY      ReadyListEntry;      // 自环就绪链表
+    /* 0x48 */ LIST_ENTRY      GlobalListEntry;     // 全局定时器链表（非哈希）
+    /* 0x58 */ LIST_ENTRY      FreezeThawList;      // 冻结/解冻异步链表
+    /* 0x68 */ PVOID           pWnd;                // ✅ 正确的窗口指针
+    /* 0x70 */ UINT_PTR        nIDEvent;            // 定时器 ID
+    /* 0x78 */ LIST_ENTRY      HashListEntry;       // ✅ 窗口定时器哈希链表
+    /* 0x88 */ ULONG           dwTimeStamp;
+    /* 0x8C */ ULONG           dwPadding;           // 对齐至 0x90
 } TIMER_ENTRY_WIN11, * PTIMER_ENTRY_WIN11;
 
 // 联合体：同时容纳 Win10/Win11 结构体

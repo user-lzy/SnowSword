@@ -1369,18 +1369,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             For i As Integer = ListView1.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView1, i) Then
                     dwProcessId = ValULng(ListView1.GetItemText(i, 0))
-                    Dim IsCritical As Boolean
-                    If (IsProcessCritical(dwProcessId, @IsCritical)) AndAlso IsCritical Then
-                        If AfxMsg("进程" & dwProcessId & "处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDYES Then
-                            SetCriticalProcess dwProcessId, False
-                        Else
-                            Exit Sub
-                        End If
-                    End If
-                    If Not KillProcess(dwProcessId) Then
-                        AfxMsg "结束进程" & dwProcessId & "失败!"
-                        Continue For
-                    End If
+                    If Not KillProcess(dwProcessId) Then Continue For
                     DeleteItemEx ListView1, i, False
                 End If
             Next
@@ -1414,8 +1403,11 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                             Exit Sub
                         End If
                     End If
-                    IoControl hDrv, IOCTL_KillProcess, @dwPID, SizeOf(HANDLE)
-                    DeleteItemEx ListView1, i, False
+                    If IoControl(hDrv, IOCTL_KillProcess, @dwPID, SizeOf(HANDLE)) <> 0 Then
+                        DeleteItemEx ListView1, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmMain_mnuProcess_mnuForceTerminateProcess", "IOCTL_KillProcess", "dwPID=" & dwPID
+                    End If
                 End If
             Next
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)

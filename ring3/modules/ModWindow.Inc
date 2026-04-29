@@ -122,11 +122,9 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
     Dim window_Class As WString * MAX_PATH
     Dim titleLength As Long
     Dim classLength As Long
-    'Dim PID As DWORD
     
     memset @hWindows(0), 0, SizeOf(hWnd) * (UBound(hWindows) + 1)
     EnumWindows @EnumProc, Cast(lParam, ProcessId)
-    'lvwWindow.DeleteAllItems
     WindowCount = 0
     
     InitListViewData lvwWindow
@@ -143,24 +141,23 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
         window_Class = Wstring(MAX_PATH, 0)
         GetClassName hWindows(i), @window_Class, MAX_PATH
         window_Class = Left(window_Class, MAX_PATH - 1)
-        'Print "0x" & WHex(hWindows(i)) & " " & window_Title & " " & window_Class
+        ' 获取父窗口句柄
+        Dim ParenthWnd As hWnd = GetParent(hWindows(i))
+        ' 获取WndProc
+        Dim pWndProc As LONG_PTR = GetClassLongPtr(hWindows(i), GCLP_WNDPROC) ' GetWindowLongPtr(hWindows(i), GWL_WNDPROC)
+        'Print "0x" & WHex(pWndProc)
         '获取TID和所属模块
         Dim dwProcessId As DWORD
-        Dim dwThreadId As DWORD = GetWindowThreadProcessId(hWIndows(i), @dwProcessId)
-        'Print dwProcessId & " " & dwThreadId
-        'Dim ThreadStartAddress As PVOID = GetThreadStartAddr(dwThreadId)
+        Dim dwThreadId As DWORD = GetWindowThreadProcessId(hWindows(i), @dwProcessId)
         Dim strModulePath As WString * MAX_PATH
-        'PID = GetPIDFromHWND(hWindows(i))
         strModulePath = GetProcessPath(dwProcessId)
-        'GetModuleByAddress dwProcessId, ThreadStartAddress, @strModulePath
-        'GetWindowModuleFileName hWindows(i), @strModulePath, MAX_PATH
-        
-        AddItemColListEx lvwWindow, 5,,, WStr("0x" & WHex(hWindows(i))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
+        'Print "Window:" & "0x" & WHex(hWindows(i)) & " " & window_Class
+        AddItemColListEx lvwWindow, 7,,, WStr("0x" & WHex(hWindows(i))), IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), WStr(window_Title), _
+        "0x" & WHex(pWndProc), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         
         ChildWindowCount = 0
         memset @hChildWindows(0), 0, SizeOf(hWnd) * (UBound(hChildWindows) + 1)
         EnumChildWindows hWindows(i), @EnumChildProc, Cast(lParam, ProcessId)
-        'Dim ItemIndex As Integer = lvwWindow.ItemCount
         For j As Integer = 0 To UBound(hChildWindows)
             If hChildWindows(j) = NULL Then Continue For
             ' 获取窗口标题
@@ -173,19 +170,18 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
             window_Class = Wstring(MAX_PATH, 0)
             GetClassName hChildWindows(j), @window_Class, MAX_PATH
             window_Class = Left(window_Class, MAX_PATH - 1)
-            'Print "0x" & WHex(hChildWindows(j)) & " " & window_Title & " " & window_Class
+            ' 获取父窗口句柄
+            ParenthWnd = GetParent(hChildWindows(j))
+            ' 获取WndProc
+            pWndProc = GetClassLongPtr(hChildWindows(j), GCLP_WNDPROC) ' GetWindowLongPtr(hChildWindows(j), GWLP_WNDPROC)
+            'Print "0x" & WHex(pWndProc)
             '获取TID和所属模块
             dwThreadId = GetWindowThreadProcessId(hChildWindows(j), @dwProcessId)
-            'Print dwProcessId & " " & dwThreadId
-            'Print ""
-            'Dim ThreadStartAddress As PVOID = GetThreadStartAddr(dwThreadId)
             Dim strModulePath As WString * MAX_PATH
-            'GetModuleByAddress dwProcessId, ThreadStartAddress, @strModulePath
-            'PID = GetPIDFromHWND(hChildWindows(j))
             strModulePath = GetProcessPath(dwProcessId)
-            'GetWindowModuleFileName hChildWindows(j), @strModulePath, MAX_PATH
-            
-            AddItemColListEx lvwWindow, 6,,, WStr("0x" & WHex(hChildWindows(j))), WStr(window_Title), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
+            'Print "Child Window:" & "0x" & WHex(hChildWindows(j)) & " " & window_Title & " " & window_Class & " " & dwThreadId & " " & strModulePath
+            AddItemColListEx lvwWindow, 7,,, WStr("0x" & WHex(hChildWindows(j))), IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), WStr(window_Title), _
+            "0x" & WHex(pWndProc), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         Next
     Next
     CommitListViewView lvwWindow

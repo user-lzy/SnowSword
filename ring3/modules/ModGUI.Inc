@@ -148,7 +148,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -284,7 +284,7 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -415,7 +415,7 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True

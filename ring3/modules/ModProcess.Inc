@@ -1331,7 +1331,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)) ' 可以在第一次调用GetProcessList时直接AddItemColList
-            VerifyFileSignAsync FrmMain.hWnd, "ListView", ItemIndex, strPath
+            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
             'InvalidateRect lvwProcess.hWnd, NULL, True
             ProcessCount += 1
             'FF_DoEvents
@@ -1485,7 +1485,7 @@ Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_List
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True

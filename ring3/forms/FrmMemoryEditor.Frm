@@ -618,7 +618,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "驱动加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If hDrv = INVALID_HANDLE_VALUE Then
             AfxMsg "驱动打开失败!"
             Exit Sub

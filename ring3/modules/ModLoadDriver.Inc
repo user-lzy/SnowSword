@@ -5,9 +5,10 @@
 Type PUNICODE_STRING As UNICODE_STRING Ptr
 #define STATUS_IMAGE_ALREADY_LOADED Cast(NTSTATUS, &HC000010E)
 
-Function OpenDrv(ByVal szDrvLinkName As String) As HANDLE
-    Dim hDrvHandle As HANDLE
-    hDrvHandle = CreateFile(szDrvLinkName, GENERIC_READ Or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+Function OpenDrv(ByVal szDrvLinkName As String, IsAsycn As Boolean = False) As HANDLE
+    Dim hDrvHandle As HANDLE, dwFlags As DWORD = FILE_ATTRIBUTE_NORMAL
+    If IsAsycn Then dwFlags Or= FILE_FLAG_OVERLAPPED
+    hDrvHandle = CreateFile(szDrvLinkName, GENERIC_READ Or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, dwFlags, NULL)
     If (hDrvHandle = INVALID_HANDLE_VALUE) Then Print WinErrorMsg(GetLastError) & "(CreateFile)"
     Return hDrvHandle
 End Function

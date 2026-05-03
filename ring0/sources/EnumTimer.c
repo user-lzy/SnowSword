@@ -145,12 +145,12 @@ VOID FindKiWaitXXX(PVOID KeSetTimerEx, PVOID* KiWaitNever, PVOID* KiWaitAlways)
 
     // 指定特征码
     UCHAR pSpecialCode[256] = { 0x48,0x8b,0x05 };
-
+    
     // 指定特征码长度
     ULONG ulSpecialCodeLength = 3;
-
+	DbgPrint("正在尝试第一种搜索方法...");
     // 开始搜索,找到后返回首地址
-    PVOID result = SearchSpecialCode(StartSearchAddress, size, pSpecialCode, ulSpecialCodeLength);
+    PVOID result = SearchSpecialCode(StartSearchAddress + 0x20, size, pSpecialCode, ulSpecialCodeLength);
     if (NULL == result)
     {
         DbgPrint("正在尝试第二种搜索方法...");
@@ -219,11 +219,15 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
         RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
 
         // 计算 TimerTable 在 _KPRCB 结构中的偏移
-        PKTIMER_TABLE p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3c00);
-        /*if (OSVersion.dwMajorVersion == 10 && OSVersion.dwMinorVersion == 0)
+        PKTIMER_TABLE p_TimeTable = NULL;
+        if (OSVersion.dwMajorVersion == 11) {
+            // Windows 11
+			p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x4100);
+        }
+        else if (OSVersion.dwMajorVersion == 10 && OSVersion.dwMinorVersion == 0)
         {
             // Windows 10
-            p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3680);
+            p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3c00);
         }
         else if (OSVersion.dwMajorVersion == 6 && OSVersion.dwMinorVersion == 1)
         {
@@ -234,7 +238,7 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
         {
 			DbgPrint("Unsupported OS Version!");
             return;
-        }*/
+        }
 
         __try
         {
@@ -254,9 +258,14 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
 
                     PKTIMER p_Timer = CONTAINING_RECORD(p_ListEntry, KTIMER, TimerListEntry);
 
-                    // 硬编码取 KiWaitNever 和 KiWaitAlways 
+                    // 硬编码取 KiWaitNever 和 KiWaitAlways
+					//DbgPrint("正在获取 KiWaitNever 和 KiWaitAlways 地址...");
                     ULONG_PTR never = 0, always = 0, KeSetTimerEx = (ULONG_PTR)FindKeSetTimerEx();
-                    FindKiWaitXXX((PVOID)KeSetTimerEx, (PVOID*)&never, (PVOID*)&always);
+                    if (!KeSetTimerEx)
+                        FindKiWaitXXX((PVOID)KeSetTimer, (PVOID*)&never, (PVOID*)&always);
+                    else
+                        FindKiWaitXXX((PVOID)KeSetTimerEx, (PVOID*)&never, (PVOID*)&always);
+                    
                     if (never == 0 || always == 0)
                     {
                         DbgPrint("Get KiWaitNever or KiWaitAlways Failed!");

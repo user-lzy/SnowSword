@@ -243,7 +243,7 @@ End Function
 '-------------------------------------------------------------------------------
 Sub Logger.OutputToUI(text As String)
     ' 安全UI更新（仅追加文本，避免全量替换）
-    m_TextBox.Text = m_TextBox.Text & text & Chr(13,10)
+    strLog = strLog & text & Chr(13,10)
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -404,7 +404,7 @@ Sub InitLog()
     MyLog.Start()
     
     MyLog.SetOutput(True, False)
-    MyLog.SetTextBox(FrmLog.txtLog)
+    'MyLog.SetTextBox(FrmLog.txtLog)
     MyLog.SetEncoding(False)
     MyLog.SetFilterLevel(LOG_DEBUG)
 

@@ -104,7 +104,11 @@ Type ListViewContext
     SortAscending As Boolean ' 升降序标记
     
     ' ===================== 新增：列类型缓存（性能优化核心） =====================
-    ColumnIsNumber(Any) As Boolean  ' 缓存列是否为纯数字列
+    ColumnIsNumber(Any) As Boolean ' 缓存列是否为纯数字列
+    
+    ' -------------- 新增修复字段 --------------
+    IsValid As Boolean         ' 上下文有效标记（核心）
+    InstanceId As ULong         ' 唯一实例ID（核心）
 End Type
 
 ' 2. 模块缓存核心结构体：存储单个模块的所有状态
@@ -203,7 +207,7 @@ Public Sub InitializeListView(ByVal ListView As Class_ListView, ByVal TreeList A
                 .AddColumn "名称",, 400
                 .AddColumn "状态",, 200
                 .AddColumn "描述",, 400
-                .AddColumn "属性",, 100
+                '.AddColumn "属性",, 100
             Case ProcessTimer
                 .AddColumn "定时器ID",, 150
                 .AddColumn "超时时间",, 150
@@ -1007,6 +1011,41 @@ Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
 End Sub
 
 Sub InitListViewData(ListView As Class_ListView)
+    Dim oldCtx As ListViewContext Ptr = GetCtx(ListView)
+    If oldCtx <> NULL Then
+        ' 先使旧上下文失效，避免滞留消息命中
+        oldCtx->IsValid = False
+        oldCtx->Snap = NULL       ' 悬空指针隔离
+        Deallocate oldCtx        ' 彻底销毁
+    End If
+
+    ' 创建全新上下文（不在旧内存上清洗）
+    Dim ctx As ListViewContext Ptr = CAllocate(1, SizeOf(ListViewContext))
+    ctx->hLV = ListView.hWnd
+
+    Static g_InstanceId As ULong = 0
+    g_InstanceId += 1
+    ctx->InstanceId = g_InstanceId
+    ctx->IsValid = True
+
+    ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
+    ctx->Snap->RowCount = 0
+    ReDim ctx->Snap->Rows(-1)
+
+    ReDim ctx->VisibleIndex(-1)
+    ctx->VisibleCount = 0
+    ctx->Filter = 0
+    ctx->SortedColumn = -1
+    ctx->SortAscending = True
+
+    SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
+
+    ListView.DeleteAllItems
+    ListView_SetUnicodeFormat(ListView.hWnd, True)
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
+End Sub
+
+/'Sub InitListViewData(ListView As Class_ListView)
     Dim ctx As ListViewContext Ptr = GetCtx(ListView)
     If ctx <> NULL Then
         ' 已有上下文，清理旧数据而不是重新创建
@@ -1016,7 +1055,13 @@ Sub InitListViewData(ListView As Class_ListView)
     ctx = CAllocate(1, SizeOf(ListViewContext))
     
     ctx->hLV = ListView.hWnd
-
+    
+    ' -------------- 新增修复代码 --------------
+    Static g_InstanceId As ULong = 0
+    ctx->InstanceId = g_InstanceId + 1  ' 全局自增唯一ID
+    g_InstanceId = ctx->InstanceId
+    ctx->IsValid = True ' 标记为有效
+    
     ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
     ctx->Snap->RowCount = 0
     ReDim ctx->Snap->Rows(-1)
@@ -1033,7 +1078,7 @@ Sub InitListViewData(ListView As Class_ListView)
     ListView.DeleteAllItems
     ListView_SetUnicodeFormat(ListView.hWnd, True)
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
-End Sub
+End Sub'/
 
 Private Function CreateLVRow( _
     ColCount As Long, _
@@ -1184,11 +1229,15 @@ Sub SetListViewFilter(ListView As Class_ListView, s As StringW)
     End If
 End Sub
 
-Sub SetItemColor(ListView As Class_ListView, Row As Long, Fore As COLORREF, Back As COLORREF)
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
-    ctx->Snap->Rows(Row)->Fore = Fore
-    ctx->Snap->Rows(Row)->Back = Back
+Sub SetItemColor(lvw As Class_ListView, Row As Long, Fore As COLORREF, Back As COLORREF)
+    Dim ctx As ListViewContext Ptr = GetCtx(lvw)
+    If ctx = 0 Then Exit Sub
+    If ctx->Snap = 0 Then Exit Sub
+    If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
+    Dim r As LVRow Ptr = ctx->Snap->Rows(Row)
+    If r = 0 Then Print "行指针已释放" : Exit Sub       ' 捕获已释放的行指针
+    r->Fore = Fore
+    r->Back = Back
 End Sub
 
 Sub SetItemColorByHwnd(hListView As hWnd, Row As Long, Fore As COLORREF, Back As COLORREF)
@@ -1377,6 +1426,9 @@ Sub UninitListViewData(ListView As Class_ListView)
         For i As Long = 0 To ctx->Snap->RowCount - 1
             FreeLVRow(ctx->Snap->Rows(i))
         Next
+        
+        ctx->IsValid = False   ' 先标记失效！！！
+        ctx->Snap = NULL       ' 先清空指针！！！
         Deallocate(ctx->Snap)
     End If
 

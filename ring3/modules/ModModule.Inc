@@ -439,7 +439,7 @@ Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListV
         For i As Integer = 0 To ModuleCount - 1
             ItemIndex = AddItemColListEx(lvwModule, 6,,, WStr(i + 1), WStr(ModuleInformation1(i).szName), WStr("0x" & WHex(ModuleInformation1(i).BaseAddr)), _
             WStr("0x" & WHex(ModuleInformation1(i).dwSize)), WStr(ModuleInformation1(i).szPath), WStr(GetFileCompany(ModuleInformation1(i).szPath)))
-            VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, ModuleInformation1(i).szPath
+            VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, ModuleInformation1(i).szPath
             'SetItemColor lvwModule, ItemIndex, FB_Red, FB_White ' FB_Black, FB_White
         Next
     End If
@@ -452,7 +452,7 @@ Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListV
             Print "隐藏模块:" & ModuleInformation2(j).szPath
             ItemIndex = AddItemColListEx(lvwModule, 6, FB_Red, , WStr(lvwModule.ItemCount + 1), WStr(ModuleInformation2(j).szName), WStr("0x" & WHex(ModuleInformation2(j).BaseAddr)), _
             WStr("0x" & WHex(ModuleInformation2(j).dwSize)), WStr(ModuleInformation2(j).szPath), WStr(GetFileCompany(ModuleInformation1(i).szPath)))
-            VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, ModuleInformation2(i).szPath
+            VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, ModuleInformation2(i).szPath
             'SetItemColor lvwModule, lvwModule.ItemCount, FB_Red, FB_White
             i += 1
         End If

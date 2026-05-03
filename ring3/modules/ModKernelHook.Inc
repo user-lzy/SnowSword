@@ -118,24 +118,22 @@ End Function
 
 ' ==================== 核心：从 MOV 指令向前回溯 LEA 指令 ====================
 Function FindLeaForMov(pDump As UByte Ptr, movStartFoa As ULong, fileSize As ULong, ByRef outFuncRva As ULong) As Boolean
-    Const MAX_BACKTRACE = 16 ' 最多向前回溯16字节（LEA和MOV紧挨着）
+    Const MAX_BACKTRACE = 64     ' ← 从 16 改为 64，覆盖批量 MOV 序列
     outFuncRva = 0
 
     For i As Integer = 1 To MAX_BACKTRACE
         Dim leaFoa As Long = movStartFoa - i
         If leaFoa < 0 Or (leaFoa + 7) > fileSize Then Return False
 
-        ' 精准匹配 LEA RAX, [RIP+imm32] 固定机器码 48 8D 05
         Dim b0 As Integer = GetByte(pDump, leaFoa, fileSize)
         Dim b1 As Integer = GetByte(pDump, leaFoa+1, fileSize)
         Dim b2 As Integer = GetByte(pDump, leaFoa+2, fileSize)
         
         If b0 = &H48 And b1 = &H8D And b2 = &H05 Then
-            ' 计算目标函数 RVA
             Dim leaRva As ULong = FoaToRva(pDump, leaFoa)
             If leaRva = 0 Then Return False
 
-            Dim nextRva As ULong = leaRva + 7 ' LEA 下一条指令的 RVA
+            Dim nextRva As ULong = leaRva + 7
             Dim imm32 As Long = 0
             CopyMemory(@imm32, pDump + leaFoa + 3, 4)
             outFuncRva = CULng(CLng(nextRva) + imm32)
@@ -146,7 +144,10 @@ Function FindLeaForMov(pDump As UByte Ptr, movStartFoa As ULong, fileSize As ULo
     Return False
 End Function
 
-' ==================== 主恢复函数 ====================
+' ==================== 状态机版 RecoverDispatchFromDump ====================
+' 解析 DRIVER_OBJECT.MajorFunction[] 的初始化序列
+' 匹配模式：LEA RAX, [func] 后紧跟一至多条 MOV [r12+idx*8+0x70], RAX
+
 Function RecoverDispatchFromDump( _
     ByVal pDump As UByte Ptr, _
     ByVal fileSize As ULong, _
@@ -154,9 +155,9 @@ Function RecoverDispatchFromDump( _
 
     Const DISPATCH_BASE = &H70
     Const DISPATCH_STEP = 8
-    Const SCAN_RANGE = &H2000 ' 扫描 DriverEntry 前后 8KB
+    Const SCAN_RANGE = &H2000
 
-    ' 初始化结果
+    ' 初始化
     outResult->HitCount = 0
     outResult->Confidence = 0
     For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
@@ -165,209 +166,306 @@ Function RecoverDispatchFromDump( _
 
     ' PE 校验
     Dim dos As IMAGE_DOS_HEADER Ptr = Cast(IMAGE_DOS_HEADER Ptr, pDump)
-    If dos->e_magic <> &H5A4D Then
-        Print "无效 PE 文件"
-        Return False
-    End If
+    If dos->e_magic <> &H5A4D Then Return False
 
-    ' 获取 DriverEntry 地址
-    Dim entryRva As ULong = GetDriverEntryRVA(pDump)
-    Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
-    If entryFoa = 0 Then
-        Print "无法获取 DriverEntry 入口点"
-        Return False
-    End If
-
-    Print "==================== PE 解析结果 ===================="
-    Print "DriverEntry RVA: 0x"; Hex(entryRva)
-    Print "DriverEntry FOA: 0x"; Hex(entryFoa)
-    Print "文件大小: 0x"; Hex(fileSize)
-    Print "扫描范围: 0x"; Hex(IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)); " ~ 0x"; Hex(entryFoa + SCAN_RANGE)
-    Print
-
-    ' 安全扫描范围
-    Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
-    Dim scanEnd As ULong = entryFoa + SCAN_RANGE
-    If scanEnd > fileSize Then scanEnd = fileSize
-
-    Dim movTotal As ULong = 0
-    Dim hitCount As ULong = 0
-
-    ' 核心扫描：先找 MOV [reg+disp], RAX 指令
-    Dim pc As ULong = scanStart
-    While pc < scanEnd
-        If pc + 8 > fileSize Then Exit While ' 最长指令不超过8字节
-
-        ' 1. 匹配 REX.W 前缀（支持 0x48/0x49，对应 rax/r12 等寄存器）
-        Dim rex As Integer = GetByte(pDump, pc, fileSize)
-        If (rex And &H40) = 0 Or (rex And &H8) = 0 Then
-            pc += 1
-            Continue While
-        End If
-
-        ' 2. 匹配 MOV r/m64, r64 操作码 0x89
-        Dim opc As Integer = GetByte(pDump, pc+1, fileSize)
-        If opc <> &H89 Then
-            pc += 1
-            Continue While
-        End If
-
-        ' 3. 解析 ModRM 字节
-        Dim modrm As Integer = GetByte(pDump, pc+2, fileSize)
-        Dim srcReg As Integer = (modrm Shr 3) And 7
-        Dim mode As Integer = (modrm Shr 6) And 3
-        Dim rm As Integer = modrm And 7
-
-        ' 源寄存器必须是 RAX（reg=0）
-        If srcReg <> 0 Then
-            pc += 1
-            Continue While
-        End If
-
-        movTotal += 1
-        Dim movStartFoa As ULong = pc
-        Dim disp As Long = 0
-        Dim instrLen As ULong = 3 ' REX + Opcode + ModRM
-        Dim hasSib As Boolean = False
-
-        ' 4. 解析 SIB 字节（rm=4 且 mode!=3 时必须有）
-        If rm = 4 And mode <> 3 Then
-            hasSib = True
-            instrLen += 1
-            If pc + instrLen > fileSize Then
-                pc += 1
-                Continue While
-            End If
-            ' SIB 字节无需解析，不影响偏移计算
-        End If
-
-        ' 5. 解析偏移量 disp（仅处理带偏移的模式）
-        Dim dispValid As Boolean = False
-        Select Case mode
-            Case 1 ' [reg+disp8]
-                If pc + instrLen + 1 > fileSize Then Exit Select
-                Dim disp8 As Byte = CByte(GetByte(pDump, pc + instrLen, fileSize))
-                disp = CShort(disp8) ' 符号扩展
-                instrLen += 1
-                dispValid = True
-            Case 2 ' [reg+disp32]
-                If pc + instrLen + 4 > fileSize Then Exit Select
-                CopyMemory(@disp, pDump + pc + instrLen, 4)
-                instrLen += 4
-                dispValid = True
-        End Select
-
-        ' 6. 过滤无效偏移
-        If dispValid = False Or disp < DISPATCH_BASE Then
-            pc += instrLen
-            Continue While
-        End If
-
-        ' 7. 计算 IRP_MJ 索引
-        Dim offsetDelta As ULong = CULng(disp) - DISPATCH_BASE
-        If offsetDelta Mod DISPATCH_STEP <> 0 Then
-            pc += instrLen
-            Continue While
-        End If
-
-        Dim irpIndex As ULong = offsetDelta \ DISPATCH_STEP
-        If irpIndex > IRP_MJ_MAXIMUM_FUNCTION Then
-            pc += instrLen
-            Continue While
-        End If
-
-        ' 8. 向前回溯对应的 LEA 指令，获取函数地址
-        Dim funcRva As ULong = 0
-        If FindLeaForMov(pDump, movStartFoa, fileSize, funcRva) = False Then
-            pc += instrLen
-            Continue While
-        End If
-
-        ' 9. 赋值结果（直接覆盖，保证最新的正确地址）
-        outResult->MajorFunction(irpIndex) = Cast(Any Ptr, Cast(ULONG_PTR, funcRva))
-        hitCount += 1
-        Print "[命中] IRP_MJ_"; irpIndex; " (0x"; Hex(disp); ") → RVA: 0x"; Hex(funcRva)
-
-        pc += instrLen
-    Wend
-
-    ' 统计结果
-    outResult->HitCount = hitCount
-    outResult->Confidence = IIf(hitCount >= 20, 100, hitCount * 5)
-
-    Print
-    Print "==================== 扫描统计 ===================="
-    Print "扫描到有效 MOV 指令数: "; movTotal
-    Print "成功恢复派遣函数数: "; hitCount
-    Print "置信度: "; outResult->Confidence; "%"
-    Print
-
-    Return hitCount > 0
-End Function
-
-' ==================== 核心：扫描 FastIO 原始地址 ====================
-' ==================== 核心：FastIO 顺序解析（按获取顺序连续写入） ====================
-Function RecoverFastIoFromDump( _
-    ByVal pDump As UByte Ptr, _
-    ByVal fileSize As ULong, _
-    ByVal outResult As FAST_IO_DISPATCH_ORIGINAL Ptr) As Boolean
-
-    Const SCAN_RANGE = &H2000
-    ' 初始化：清空所有指针
-    outResult->HitCount = 0
-    outResult->Confidence = 0
-    For i As ULong = 0 To FAST_IO_MAX_COUNT - 1
-        outResult->Functions(i) = 0
-    Next
-    
-    ' 获取 DriverEntry 扫描范围
     Dim entryRva As ULong = GetDriverEntryRVA(pDump)
     Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
     If entryFoa = 0 Then Return False
 
+    Print "DriverEntry RVA: 0x" & Hex(entryRva)
+    Print "DriverEntry FOA: 0x" & Hex(entryFoa)
+
     Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
     Dim scanEnd As ULong = entryFoa + SCAN_RANGE
     If scanEnd > fileSize Then scanEnd = fileSize
 
     Dim pc As ULong = scanStart
-    Dim currentIndex As ULong = 0 ' 顺序索引：自动递增，无手动分配
+    Dim currentFuncRva As ULong = 0    ' 当前未决的函数 RVA（来自上一条 LEA）
+    Dim inProlog As Boolean = False    ' 是否处于 LEA 后的匹配状态
+    Dim hitCount As ULong = 0
 
-    Print "==================== FastIO 顺序扫描 ===================="
+    While pc < scanEnd
+        If pc + 8 > fileSize Then Exit While
 
-    While pc < scanEnd And currentIndex < FAST_IO_MAX_COUNT
-        If pc + 7 > fileSize Then Exit While
-
-        ' 匹配 FastIO 专属指令：MOV CS:qword, RAX → 48 89 05
+        ' 读取指令首字节
         Dim b0 As Integer = GetByte(pDump, pc, fileSize)
         Dim b1 As Integer = GetByte(pDump, pc+1, fileSize)
         Dim b2 As Integer = GetByte(pDump, pc+2, fileSize)
 
-        If b0 = &H48 And b1 = &H89 And b2 = &H05 Then
-            Dim funcRva As ULong = 0
-            ' 复用你原有的 LEA 回溯函数（无需修改）
-            If FindLeaForMov(pDump, pc, fileSize, funcRva) Then
-                ' ==================== 核心：按顺序直接写入 ====================
-                outResult->Functions(currentIndex) = Cast(Any Ptr, Cast(ULONG_PTR, funcRva))
-                ' 打印日志（索引+名称+地址）
-                Print "[顺序写入] Index:"; currentIndex; _
-                      " 名称:"; FastIoIndexToName(currentIndex); _
-                      " RVA:0x"; Hex(funcRva)
-                
-                currentIndex += 1
-                outResult->HitCount = currentIndex
+        ' ─── 优先检测 LEA RAX, [RIP+imm32] (48 8D 05) ───
+        If b0 = &H48 And b1 = &H8D And b2 = &H05 Then
+            ' 计算该 LEA 指向的函数 RVA
+            Dim leaRva As ULong = FoaToRva(pDump, pc)
+            If leaRva <> 0 Then
+                Dim nextRva As ULong = leaRva + 7
+                Dim imm32 As Long = 0
+                CopyMemory(@imm32, pDump + pc + 3, 4)
+                currentFuncRva = CULng(CLng(nextRva) + imm32)
+                inProlog = True ' 进入待命状态
+                Print "[LEA] 函数 RVA: 0x" & Hex(currentFuncRva)
             End If
-            pc += 7 ' 固定7字节指令
+            pc += 7 ' 跳过 LEA 指令（固定 7 字节）
             Continue While
+        End If
+
+        ' ─── 若处于待命状态，尝试匹配 MOV [r12+disp], RAX ───
+        If inProlog Then
+            ' 匹配 REX.W (0x48/0x49) + MOV r/m64, r64 (0x89)
+            If (b0 = &H48 Or b0 = &H49) And b1 = &H89 Then
+                Dim modrm As Integer = b2
+                Dim srcReg As Integer = (modrm Shr 3) And 7
+                Dim mode As Integer = (modrm Shr 6) And 3
+                Dim rm As Integer = modrm And 7
+                
+                If srcReg = 0 Then ' 源是 RAX
+                    Dim instrLen As ULong = 3 ' REX + Opcode + ModRM
+                    Dim disp As Long = 0
+                    Dim dispValid As Boolean = False
+
+                    ' 解析 SIB
+                    If rm = 4 And mode <> 3 Then instrLen += 1
+
+                    ' 解析 disp
+                    Select Case mode
+                        Case 1 ' disp8
+                            If pc + instrLen + 1 <= fileSize Then
+                                disp = CByte(GetByte(pDump, pc + instrLen, fileSize))
+                                instrLen += 1
+                                dispValid = True
+                            End If
+                        Case 2 ' disp32
+                            If pc + instrLen + 4 <= fileSize Then
+                                CopyMemory(@disp, pDump + pc + instrLen, 4)
+                                instrLen += 4
+                                dispValid = True
+                            End If
+                    End Select
+
+                    If dispValid AndAlso disp >= DISPATCH_BASE Then
+                        Dim offsetDelta As ULong = CULng(disp) - DISPATCH_BASE
+                        If (offsetDelta Mod DISPATCH_STEP) = 0 Then
+                            Dim irpIndex As ULong = offsetDelta \ DISPATCH_STEP
+                            If irpIndex <= IRP_MJ_MAXIMUM_FUNCTION Then
+                                ' 有效的派遣槽位，记录
+                                outResult->MajorFunction(irpIndex) = Cast(Any Ptr, Cast(ULONG_PTR, currentFuncRva))
+                                hitCount += 1
+                                Print "[命中] IRP_MJ_" & irpIndex & " (0x" & Hex(disp) & ") → RVA: 0x" & Hex(currentFuncRva)
+                                pc += instrLen
+                                Continue While
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+            ' 若是其他指令，则退出待命状态（当前 LEA 的序列结束）
+            inProlog = False
+            currentFuncRva = 0
+        End If
+
+        pc += 1 ' 逐字节推进（仅在非匹配指令时）
+    Wend
+
+    outResult->HitCount = hitCount
+    outResult->Confidence = IIf(hitCount >= 20, 100, hitCount * 5)
+
+    Print "成功恢复派遣函数数: " & hitCount
+    Return hitCount > 0
+End Function
+
+Function RecoverFastIoFromDump( _
+    ByVal pDump As UByte Ptr, _
+    ByVal fileSize As ULong, _
+    ByVal ImageBase As ULONG_PTR, _
+    ByVal outFastIo As FAST_IO_DISPATCH_ORIGINAL Ptr) As Boolean
+
+    Const SCAN_RANGE = &H2000
+    Const FAST_IO_DISPATCH_OFFSET_DEVICE = &H50
+    Const FAST_IO_HEADER_SIZE = 8
+
+    outFastIo->HitCount = 0
+    outFastIo->Confidence = 0
+    For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
+        outFastIo->Functions(i) = 0
+    Next
+
+    Dim dos As IMAGE_DOS_HEADER Ptr = Cast(IMAGE_DOS_HEADER Ptr, pDump)
+    If dos->e_magic <> &H5A4D Then Return False
+
+    Dim entryRva As ULong = GetDriverEntryRVA(pDump)
+    Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
+    If entryFoa = 0 Then Return False
+
+    Print "==================== RecoverFastIoFromDump 开始 ===================="
+
+    Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
+    Dim scanEnd As ULong = entryFoa + SCAN_RANGE
+    If scanEnd > fileSize Then scanEnd = fileSize
+
+    Dim pc As ULong = scanStart
+    Dim FastIoDispatchBaseRva As ULong = 0
+    Dim foundBaseAddr As Boolean = False
+
+    ' 第一阶段：定位 FastIoDispatch 全局变量（Size 字段地址）
+    While pc < scanEnd AndAlso foundBaseAddr = False
+        If pc + 15 > fileSize Then Exit While
+
+        Dim rex As Integer = GetByte(pDump, pc, fileSize)
+        Dim opc As Integer = GetByte(pDump, pc+1, fileSize)
+
+        If (rex And &H40) <> 0 AndAlso opc = &H89 Then
+            Dim modrm As Integer = GetByte(pDump, pc+2, fileSize)
+            Dim mode As Integer = (modrm Shr 6) And 3
+            Dim rm As Integer = modrm And 7
+            Dim srcReg As Integer = (modrm Shr 3) And 7
+
+            If srcReg = 0 Then
+                Dim instrLen As ULong = 3
+                Dim disp As Long = 0
+                Dim dispValid As Boolean = False
+
+                If rm = 4 And mode <> 3 Then instrLen += 1
+
+                Select Case mode
+                    Case 1
+                        If pc + instrLen + 1 > fileSize Then Exit Select
+                        disp = CByte(GetByte(pDump, pc + instrLen, fileSize))
+                        instrLen += 1
+                        dispValid = True
+                    Case 2
+                        If pc + instrLen + 4 > fileSize Then Exit Select
+                        CopyMemory(@disp, pDump + pc + instrLen, 4)
+                        instrLen += 4
+                        dispValid = True
+                End Select
+
+                If dispValid AndAlso disp = FAST_IO_DISPATCH_OFFSET_DEVICE Then
+                    Dim backtrackPc As Long = pc - 10
+                    If backtrackPc < 0 Then backtrackPc = 0
+
+                    While backtrackPc < pc
+                        Dim b0 As Integer = GetByte(pDump, backtrackPc, fileSize)
+                        Dim b1 As Integer = GetByte(pDump, backtrackPc+1, fileSize)
+                        Dim b2 As Integer = GetByte(pDump, backtrackPc+2, fileSize)
+
+                        If b0 = &H48 And b1 = &H8D And b2 = &H05 Then
+                            Dim leaRva As ULong = FoaToRva(pDump, backtrackPc)
+                            If leaRva <> 0 Then
+                                Dim nextRva As ULong = leaRva + 7
+                                Dim imm32 As Long = 0
+                                CopyMemory(@imm32, pDump + backtrackPc + 3, 4)
+                                FastIoDispatchBaseRva = CULng(CLng(nextRva) + imm32)
+                                foundBaseAddr = True
+                                pc = pc + instrLen
+                                Print "[基址] FastIoDispatch Size 字段 RVA: 0x" & Hex(FastIoDispatchBaseRva)
+                                Exit While
+                            End If
+                        End If
+                        backtrackPc += 1
+                    Wend
+                End If
+            End If
+        End If
+
+        If foundBaseAddr = False Then pc += 1
+    Wend
+
+    If foundBaseAddr = False Then
+        Print "[错误] 无法定位 FastIoDispatch 基址"
+        Return False
+    End If
+
+    FastIoDispatchBaseRva += FAST_IO_HEADER_SIZE
+    Print "[修正] 第一个函数指针基址 RVA: 0x" & Hex(FastIoDispatchBaseRva)
+
+    ' 第二阶段：扫描所有 FastIo 槽位，自动解析 IAT
+    Dim hitCount As ULong = 0
+    Dim scanEndPhase2 As ULong = pc + &H500
+    If scanEndPhase2 > fileSize Then scanEndPhase2 = fileSize
+
+    While pc < scanEndPhase2 AndAlso hitCount < FAST_IO_MAX_COUNT
+        If pc + 15 > fileSize Then Exit While
+
+        Dim b0 As Integer = GetByte(pDump, pc, fileSize)
+        Dim b1 As Integer = GetByte(pDump, pc+1, fileSize)
+        Dim b2 As Integer = GetByte(pDump, pc+2, fileSize)
+
+        Dim isLea As Boolean = (b0 = &H48 And b1 = &H8D And b2 = &H05)
+        Dim isMovLoad As Boolean = (b0 = &H48 And b1 = &H8B And b2 = &H05)
+
+        If isLea Or isMovLoad Then
+            Dim loadFoa As ULong = pc
+            Dim loadRva As ULong = FoaToRva(pDump, loadFoa)
+            If loadRva = 0 Then
+                pc += 1
+                Continue While
+            End If
+
+            Dim nextRvaLoad As ULong = loadRva + 7
+            Dim imm32Load As Long = 0
+            CopyMemory(@imm32Load, pDump + loadFoa + 3, 4)
+            Dim srcRva As ULong = CULng(CLng(nextRvaLoad) + imm32Load)
+
+            Dim movPc As ULong = pc + 7
+            If movPc + 7 > fileSize Then
+                pc += 1
+                Continue While
+            End If
+
+            Dim rexMov As Integer = GetByte(pDump, movPc, fileSize)
+            Dim opcMov As Integer = GetByte(pDump, movPc+1, fileSize)
+            Dim modrmMov As Integer = GetByte(pDump, movPc+2, fileSize)
+
+            If rexMov = &H48 And opcMov = &H89 And modrmMov = &H05 Then
+                Dim movRva As ULong = FoaToRva(pDump, movPc)
+                Dim nextRvaMov As ULong = movRva + 7
+                Dim imm32Mov As Long = 0
+                CopyMemory(@imm32Mov, pDump + movPc + 3, 4)
+                Dim targetMemRva As ULong = CULng(CLng(nextRvaMov) + imm32Mov)
+
+                Dim delta As Long = CLng(targetMemRva) - CLng(FastIoDispatchBaseRva)
+
+                If delta >= 0 And (delta Mod 8) = 0 Then
+                    Dim index As ULong = CULng(delta) \ 8
+                    If index < FAST_IO_MAX_COUNT Then
+                        ' 计算最终地址
+                        Dim finalAddr As ULONG_PTR = 0
+                        If isMovLoad Then
+                            ' 导入函数：从 IAT 解引用
+                            Dim iatAddr As ULONG_PTR = ImageBase + srcRva
+                            If (Not ReadKernelMemory(iatAddr, 8, @finalAddr)) OrElse finalAddr = 0 Then
+                                Print "[警告] IAT 条目为空，使用 RVA"
+                                finalAddr = ImageBase + srcRva
+                            End If
+                            Print "[导入函数] 索引 " & index & " " & FastIoIndexToName(index) & _
+                                  " -> VA: 0x" & Hex(finalAddr)
+                        Else
+                            ' 内部函数：直接计算 VA
+                            finalAddr = ImageBase + srcRva
+                            Print "[内部函数] 索引 " & index & " " & FastIoIndexToName(index) & _
+                                  " -> VA: 0x" & Hex(finalAddr)
+                        End If
+
+                        outFastIo->Functions(index) = Cast(Any Ptr, finalAddr)
+                        hitCount += 1
+                        pc = movPc + 7
+                        Continue While
+                    End If
+                End If
+            End If
         End If
 
         pc += 1
     Wend
 
-    ' 计算置信度
-    outResult->Confidence = IIf(outResult->HitCount >= 15, 100, outResult->HitCount * 7)
-    Print "=========================================================="
-    Print "FastIO 扫描完成，总恢复数："; outResult->HitCount; " 置信度："; outResult->Confidence; "%"
-    Return outResult->HitCount > 0
+    outFastIo->HitCount = hitCount
+    outFastIo->Confidence = IIf(hitCount >= 20, 100, hitCount * 5)
+
+    Print "==================== FastIO 扫描统计 ===================="
+    Print "成功恢复 FastIO 函数数: " & hitCount
+    Print "置信度: " & outFastIo->Confidence & "%"
+    Print
+
+    Return hitCount > 0
 End Function
 
 ' ==================== 测试入口 ====================
@@ -399,7 +497,7 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
         For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
             If rd.MajorFunction(i) <> 0 Then
                 Dim va As ULONG_PTR = imageBase + CUInt(rd.MajorFunction(i))
-                Print IRP_MJ_ToString(i) ; " | 0x"; Hex(rd.MajorFunction(i)) ; " | 0x"; Hex(va)
+                Print IRP_MJ_ToString(i)  & " | 0x" & Hex(rd.MajorFunction(i))  & " | 0x" & Hex(va)
                 OriginalDriverInfo.MajorFunctionAddr(i) = va
             Else
                 Dim IopInvalidDeviceRequestAddr As UInteger = NULL
@@ -410,7 +508,7 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
                 Else
                     OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
                 End If
-                Print IRP_MJ_ToString(i); " | 未恢复（" & IopInvalidDeviceRequestAddr & "）"
+                Print IRP_MJ_ToString(i) & " | 未恢复（" & IopInvalidDeviceRequestAddr & "）"
             End If
         Next
     Else
@@ -418,14 +516,15 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
         Return False
     End If
     
-    If RecoverFastIoFromDump(pDump, fileSize, @fastIo) Then ' 新增
+    If RecoverFastIoFromDump(pDump, fileSize, imageBase, @fastIo) Then ' 新增
+        ' MyLog.PrintLog LOG_INFO,,, 
         Print "==================== 最终恢复结果 ===================="
         Print "FastIO | 函数 RVA | 虚拟地址(VA)"
         Print "-----------------------------------------"
         For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
             If fastIo.Functions(i) <> 0 Then
-                Dim va As ULONG_PTR = imageBase + CUInt(fastIo.Functions(i))
-                Print FastIoIndexToName(i) ; " | 0x"; Hex(fastIo.Functions(i)) ; " | 0x"; Hex(va)
+                Dim va As ULONG_PTR = CUInt(fastIo.Functions(i)) ' imageBase + CUInt(fastIo.Functions(i))
+                Print FastIoIndexToName(i)  & " | 0x" & Hex(fastIo.Functions(i))  & " | 0x" & Hex(va)
                 OriginalDriverInfo.FastIOFunctionAddr(i) = va
             Else
                 /'Dim IopInvalidDeviceRequestAddr As UInteger = NULL
@@ -436,7 +535,7 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
                 Else
                     OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
                 End If'/
-                Print FastIoIndexToName(i); " | 未恢复（0）"
+                Print FastIoIndexToName(i) & " | 未恢复（0）"
             End If
         Next
     Else

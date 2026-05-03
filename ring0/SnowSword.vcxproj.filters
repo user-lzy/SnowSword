@@ -94,6 +94,9 @@
     <ClInclude Include="include\Netstat.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\Symbol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources\DriverControl.c">
@@ -163,6 +166,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sources\Netstat.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Symbol.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

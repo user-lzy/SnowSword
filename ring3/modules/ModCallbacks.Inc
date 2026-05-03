@@ -121,7 +121,7 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -147,10 +147,11 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
     IoControl hDrv, IOCTL_EnumCallbacks, NULL, 0, @CallbackArray(0), (UBound(CallbackArray) + 1) * SizeOf(CallbackInfo), @lpRet
     For i As Integer = 0 To UBound(CallbackArray)
         If Not (InStr(CallbackArray(i).TheType, "Ob") > 0 And CallbackArray(i).Func = 0) Then
-            Print "[GetCallbackList]Type:" & CallbackArray(i).TheType & " Address:" & "0x" & WHex(CallbackArray(i).Func)
+            'Print "[GetCallbackList]Type:" & CallbackArray(i).TheType & " Address:" & "0x" & WHex(CallbackArray(i).Func)
+            Dim DriverPath As StringW = GetDriverPathByAddr(CallbackArray(i).Func)
             NewIndex = AddItemEx(lvwCallbacks, CallbackArray(i).TheType)
             SetItemTextEx lvwCallbacks, NewIndex, 1, "0x" & WHex(CallbackArray(i).Func)
-            SetItemTextEx lvwCallbacks, NewIndex, 2, GetDriverPathByAddr(CallbackArray(i).Func)
+            SetItemTextEx lvwCallbacks, NewIndex, 2, DriverPath
             If InStr(CallbackArray(i).TheType, "Ob") > 0 Then
                 SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
                 SetItemTextEx lvwCallbacks, NewIndex, 4, "ObHandle=0x" & WHex(CallbackArray(i).Others(0))
@@ -167,6 +168,7 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
                 SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
                 SetItemTextEx lvwCallbacks, NewIndex, 4, "无"
             End If
+            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", NewIndex, DriverPath
         End If
     Next
     CommitListViewView lvwCallbacks
@@ -178,7 +180,7 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -237,7 +239,7 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -312,7 +314,7 @@ Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -378,7 +380,7 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True

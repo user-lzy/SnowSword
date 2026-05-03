@@ -465,61 +465,77 @@ Private Function CloseProcessHandle(ByVal ProcessId As DWORD, ByVal HandleValue 
     End If
 End Function
 
-Private Function GetHandleType(ByVal ProcessId As DWORD, ByVal hHandle As HANDLE, ByVal strType As LPWSTR) As BOOLEAN
+Private Function GetHandleType(ByVal ProcessId As DWORD, ByVal hHandle As HANDLE, ByVal strType As LPWSTR) As Boolean
     Dim ReturnLength As Long
     Dim st As NTSTATUS
     Dim pObjInfo As OBJECT_TYPE_INFORMATION Ptr
-    
-    ' 获取 NtQueryObject 函数指针
     Dim hNtdll As Any Ptr = GetModuleHandle("ntdll.dll")
     Dim ZwQueryObject As Function(ByVal As HANDLE, ByVal As OBJECT_INFORMATION_CLASS, ByVal As PVOID, ByVal As ULong, ByVal As PULONG) As NTSTATUS = DyLibSymbol(hNtdll, "ZwQueryObject")
-    
-    Dim hProcess As HANDLE = SnowSword_OpenProcess(ProcessId)
+
+    ' 打开目标进程
+    Dim hProcess As HANDLE = NULL
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(ProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_DUP_HANDLE, False, ProcessId)
+    End If
     If hProcess = NULL Then
-        *strType = ""
+        strType[0] = 0
         Return False
     End If
-    
-    '复制句柄
+
+    ' 将句柄复制到本进程上下文
     Dim hTargetHandle As HANDLE
-    DuplicateHandle hProcess, hHandle, GetCurrentProcess, @hTargetHandle, 0, False, DUPLICATE_SAME_ACCESS
-    If hTargetHandle = NULL Then
-        Print "0x" & Hex(hHandle) & "DuplicateHandle失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If DuplicateHandle(hProcess, hHandle, GetCurrentProcess(), @hTargetHandle, 0, False, DUPLICATE_SAME_ACCESS) = 0 Then
+        Print "0x" & Hex(hHandle) & " DuplicateHandle失败: " & WinErrorMsg(GetLastError) & " (" & GetLastError & ")"
         ZwClose hProcess
-        *strType = ""
+        strType[0] = 0
         Return False
     End If
-    'ZwClose hTargetHandle
-    'Return True
-    ' 查询对象类型信息
-    st = ZwQueryObject(hHandle, ObjectTypeInformation, NULL, 0, @ReturnLength)
+
+    ' 第一次查询：获取所需缓冲区大小
+    st = ZwQueryObject(hTargetHandle, ObjectTypeInformation, NULL, 0, @ReturnLength)
     If st = STATUS_INFO_LENGTH_MISMATCH Then
         pObjInfo = Allocate(ReturnLength)
-        st = ZwQueryObject(hHandle, ObjectTypeInformation, pObjInfo, ReturnLength, @ReturnLength)
-        If NT_SUCCESS(st) Then
+        If pObjInfo = NULL Then
             ZwClose hProcess
             ZwClose hTargetHandle
-            *strType = *(pObjInfo->TypeName.buffer)
+            strType[0] = 0
+            Return False
+        End If
+
+        ' 第二次查询：获取类型信息
+        st = ZwQueryObject(hTargetHandle, ObjectTypeInformation, pObjInfo, ReturnLength, @ReturnLength)
+        If NT_SUCCESS(st) Then
+            ' 安全复制类型名称到输出缓冲区
+            Dim nameLength As ULong = pObjInfo->TypeName.Length
+            Dim copyChars As ULong = nameLength \ 2
+            ' 限制最大复制字符数，防止溢出（假设缓冲区至少能容纳 256 个宽字符）
+            If copyChars > 255 Then copyChars = 255
+            If copyChars > 0 Then
+                memcpy(strType, pObjInfo->TypeName.Buffer, copyChars * 2)
+            End If
+            strType[copyChars] = 0   ' 添加终止空字符
+
+            Deallocate(pObjInfo)
+            ZwClose hProcess
+            ZwClose hTargetHandle
             Return True
         Else
-            Print "第二次ZwQueryObject失败,st:" & Hex(st)
-            ZwClose hProcess
-            ZwClose hTargetHandle
-            *strType = ""
-            Return True
+            Print "第二次 ZwQueryObject 失败, st: 0x" & Hex(st)
+            Deallocate(pObjInfo)
         End If
-    ElseIf st = Cast(NTSTATUS, &HC0000008) Then ' STATUS_INVALID_HANDLE
-        ZwClose hProcess
-        ZwClose hTargetHandle
-        *strType = ""
-        Return False
+    ElseIf st = &HC0000008 Then   ' STATUS_INVALID_HANDLE
+        Print "句柄无效 (STATUS_INVALID_HANDLE)"
     Else
-        Print "第一次ZwQueryObject失败,st:" & Hex(st)
-        ZwClose hProcess
-        ZwClose hTargetHandle
-        *strType = ""
-        Return True
+        Print "第一次 ZwQueryObject 失败, st: 0x" & Hex(st)
     End If
+
+    ' 统一清理与失败返回
+    ZwClose hProcess
+    ZwClose hTargetHandle
+    strType[0] = 0
+    Return False
 End Function
 
 Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
@@ -529,7 +545,7 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value =True

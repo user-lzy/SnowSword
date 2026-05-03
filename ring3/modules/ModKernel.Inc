@@ -359,9 +359,6 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
     End If
 
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
-    'Print "Enumerated Drivers:"
-    'Print "Count:" & smi->Count
-    'lvwKernelModule.AddItemCount smi->Count
     For i As Integer = 0 To smi->Count - 1
         Dim DriverName As WString * 20, DriverPath As ZString * MAX_PATH = smi->Modules(i).ImageName
         Dim DriverObject As Integer
@@ -370,51 +367,141 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
         DriverName = Right(DriverPath, Len(DriverPath) - InStrRev(DriverPath, "\"))
         If IsDriverLoaded Then DriverObject = GetDriverObjectAddr(smi->Modules(i).dwBase)
         
-        AddItemColListEx lvwKernelModule, 6,,, WStr(i), WStr(DriverName), "0x" & WHex(smi->Modules(i).dwBase), "0x" & WHex(smi->Modules(i).dwSize), _
-        WStr(DriverPath), "0x" & WHex(DriverObject)
+        Dim ItemIndex As Long = AddItemColListEx(lvwKernelModule, 6,,, WStr(i), WStr(DriverName), "0x" & WHex(smi->Modules(i).dwBase), "0x" & WHex(smi->Modules(i).dwSize), _
+        WStr(DriverPath), "0x" & WHex(DriverObject))
+        VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, DriverPath
     Next
     Deallocate buffer
     CommitListViewView lvwKernelModule
 End Sub
 
+'Public Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize As ULong) As PVOID
+'    Dim st As NTSTATUS
+'    Dim bufferSize As ULong = &H1000
+'    Dim buffer As PVOID = Allocate(bufferSize)
+'    If (buffer = NULL) Then
+'        Print "Failed to allocate memory."
+'        Return NULL
+'    End If
+'    
+'    'First Call To Get the required buffer SIZE
+'    st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, @bufferSize)
+'    If (st = STATUS_INFO_LENGTH_MISMATCH) Then
+'        buffer = Reallocate(buffer, bufferSize)
+'        If (buffer = NULL) Then
+'            Print "Failed to allocate memory."
+'            Return NULL
+'        End If
+'    End If
+'
+'    'Second call to get the actual data
+'    st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
+'    If (st < 0) Then
+'        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
+'        Deallocate buffer
+'        Return NULL
+'    End If
+'    
+'    Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
+'
+'    For i As Integer = 0 To smi->Count - 1
+'        If InStr(UCase(smi->Modules(i).ImageName), UCase(wStrToStr(ModuleName))) > 0 Then
+'            Function = smi->Modules(i).dwBase
+'            ModuleSize = smi->Modules(i).dwSize
+'            Exit For
+'        End If
+'    Next
+'    Deallocate buffer
+'End Function
+
 Public Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize As ULong) As PVOID
     Dim st As NTSTATUS
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
-    If (buffer = NULL) Then
-        Print "Failed to allocate memory."
-        Return NULL
-    End If
+    If (buffer = NULL) Then Return NULL
     
-    'First Call To Get the required buffer SIZE
+    ' 第一次获取缓冲区大小
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, @bufferSize)
     If (st = STATUS_INFO_LENGTH_MISMATCH) Then
         buffer = Reallocate(buffer, bufferSize)
-        If (buffer = NULL) Then
-            Print "Failed to allocate memory."
-            Return NULL
-        End If
+        If (buffer = NULL) Then Return NULL
     End If
-
-    'Second call to get the actual data
+    
+    ' 第二次获取实际数据
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
     If (st < 0) Then
-        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
         Deallocate buffer
         Return NULL
     End If
     
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
+    
+    Dim targetStr As String = "\" & wStrToStr(ModuleName)  ' 前置反斜杠
+    For i As Integer = 0 To smi->Count - 1
+        If InStr(UCase(smi->Modules(i).ImageName), UCase(targetStr)) > 0 Then
+            ModuleSize = smi->Modules(i).dwSize
+            Dim baseAddr As PVOID = smi->Modules(i).dwBase
+            Deallocate buffer
+            Return baseAddr
+        End If
+    Next
+    
+    Deallocate buffer
+    Return NULL
+End Function
+
+Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPath As WString Ptr) As Boolean
+    Dim st As NTSTATUS
+    Dim bufferSize As ULong = &H1000
+    Dim buffer As PVOID = Allocate(bufferSize)
+    If (buffer = NULL) Then
+        Print "Failed to allocate memory."
+        Return False
+    End If
+
+    ' First call to get required buffer size
+    st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, @bufferSize)
+    If (st = STATUS_INFO_LENGTH_MISMATCH) Then
+        buffer = Reallocate(buffer, bufferSize)
+        If (buffer = NULL) Then
+            Print "Failed to allocate memory."
+            Return False
+        End If
+    End If
+
+    ' Second call to get actual data
+    st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
+    If (st < 0) Then
+        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
+        Deallocate buffer
+        Return False
+    End If
+
+    ' 解析模块信息
+    Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
+
+    ' 构建前缀匹配字符串：\ + 文件名
+    Dim target As StringW
+    target = "\" & *ModuleName
+    Dim found As Boolean = False
 
     For i As Integer = 0 To smi->Count - 1
-        If InStr(UCase(smi->Modules(i).ImageName), UCase(wStrToStr(ModuleName))) > 0 Then
-            'Print "smi->Modules(i).ImageName:" & smi->Modules(i).ImageName
-            Function = smi->Modules(i).dwBase
-            ModuleSize = smi->Modules(i).dwSize
+        ' 只打印调试信息（可选）
+        ' Print "Module "; i; ": "; smi->Modules(i).ImageName
+
+        ' 前缀匹配，大小写不敏感
+        If InStr(UCase(smi->Modules(i).ImageName), UCase(wStrToStr(target))) > 0 Then
+            ' 找到模块，将 ANSI ImageName 转成 Unicode
+            Print "smi->Modules(i).ImageName:" & smi->Modules(i).ImageName
+            *OutPath = smi->Modules(i).ImageName
+            Print "OutPath:" & *OutPath
+            found = True
             Exit For
         End If
     Next
+
     Deallocate buffer
+    Return found
 End Function
 
 Function GetKernelProcAddress(ModuleName As StringW, FunctionName As StringW) As ULONG_PTR
@@ -480,7 +567,7 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -605,7 +692,7 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -655,7 +742,7 @@ Function GetSSDT(lvwSSDT As Class_ListView) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -689,7 +776,7 @@ Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -724,7 +811,7 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -774,7 +861,7 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True

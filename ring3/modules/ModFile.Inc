@@ -1,5 +1,7 @@
-﻿#include "win/winerror.bi"
+﻿#inclib "Crypt32"
+#include "win/winerror.bi"
 #include "win/shlobj.bi"
+#include "win/wincrypt.bi"
 #include Once "win/strsafe.bi"
 
 Type WINTRUST_CATALOG_INFO_EX Field = 8
@@ -21,6 +23,7 @@ End Type
 
 Type AsyncTaskParam
     hWndForm As hWnd
+    hWndControl As hWnd
     ctrlType    As Wstring * 20      ' 控件类型
     rowIndex    As Long          ' 行索引
     filePath As Wstring * 202 ' MAX_PATH ' 要验证签名的文件路径（你的耗时数据）
@@ -790,7 +793,88 @@ Function GetFileCompany(FileName As StringW) As StringW
     Return "-"
 End Function
 
-Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Long
+' 辅助函数：从指定文件提取签名证书并判断是否为微软
+Private Function IsMicrosoftSignatureFromFile(ByVal filePath As LPCWSTR) As Boolean
+    Dim hStore As Any Ptr = NULL
+    Dim pMsg As Any Ptr = NULL
+    Dim dwEncoding As DWORD = 0
+    Dim dwContentType As DWORD = 0
+    Dim dwFormatType As DWORD = 0
+    Dim result As Boolean = False
+    Dim dwError As DWORD
+    
+    'Print "===== 调试：检查微软签名 ====="
+    'Print "文件路径：" & *filePath
+    
+    ' 开启内嵌签名验证
+    If CryptQueryObject(CERT_QUERY_OBJECT_FILE, filePath, _
+                        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, _
+                        CERT_QUERY_FORMAT_FLAG_BINARY, _
+                        0, _
+                        @dwEncoding, @dwContentType, @dwFormatType, _
+                        @hStore, @pMsg, ByVal 0) Then
+        'Print "√ CryptQueryObject 成功"
+        
+        If pMsg = NULL Then
+            'Print "× pMsg 为 NULL，无法获取签名信息"
+            Goto Cleanup
+        End If
+        
+        Dim cbSize As DWORD = 0
+        If CryptMsgGetParam(pMsg, CMSG_SIGNER_INFO_PARAM, 0, NULL, @cbSize) Then
+            'Print "√ CryptMsgGetParam (获取大小) 成功，大小：" & cbSize
+            Dim pbSignerInfo As Byte Ptr = Allocate(cbSize)
+            If pbSignerInfo Then
+                If CryptMsgGetParam(pMsg, CMSG_SIGNER_INFO_PARAM, 0, pbSignerInfo, @cbSize) Then
+                    'Print "√ CryptMsgGetParam (获取数据) 成功"
+                    Dim pSignerInfo As PCMSG_SIGNER_INFO = Cast(PCMSG_SIGNER_INFO, pbSignerInfo)
+                    
+                    ' 核心修正：声明 CERT_INFO 结构体并填充 Issuer 和 SerialNumber
+                    Dim certInfo As CERT_INFO
+                    certInfo.Issuer = pSignerInfo->Issuer
+                    certInfo.SerialNumber = pSignerInfo->SerialNumber
+                    
+                    ' 传递 certInfo 的指针，而非 pSignerInfo
+                    Dim certContext As PCCERT_CONTEXT = CertFindCertificateInStore( _
+                        hStore, X509_ASN_ENCODING Or PKCS_7_ASN_ENCODING, _
+                        0, CERT_FIND_SUBJECT_CERT, @certInfo, NULL)
+                    
+                    If certContext Then
+                        'Print "√ 找到证书上下文"
+                        Dim subject As WString * 1024
+                        Dim nStr As DWORD = CertNameToStrW(certContext->dwCertEncodingType, @certContext->pCertInfo->subject, CERT_SIMPLE_NAME_STR, subject, 1024)
+                        'Print "证书主题：" & WStr(subject)
+                        
+                        If InStrW(subject, "MICROSOFT") > 0 Or InStrW(subject, "Microsoft") > 0 Then
+                            result = True
+                            'Print "√ 匹配到微软签名！"
+                        Else
+                            'Print "× 未匹配到 MICROSOFT 关键词"
+                        End If
+                        CertFreeCertificateContext(certContext)
+                    Else
+                        'Print "× 未找到证书，错误码：" & GetLastError()
+                    End If
+                Else
+                    'Print "× CryptMsgGetParam (数据) 失败，错误码：" & GetLastError()
+                End If
+                Deallocate pbSignerInfo
+            End If
+        Else
+            'Print "× CryptMsgGetParam (大小) 失败，错误码：" & GetLastError()
+        End If
+    Else
+        'Print "× CryptQueryObject 失败，错误码：" & GetLastError()
+    End If
+    
+Cleanup:
+    If pMsg Then CryptMsgClose(pMsg)
+    If hStore Then CertCloseStore(hStore, 0)
+    'Print "===== 最终结果：" & result & " ======" & Chr(10,13)
+    Return result
+End Function
+
+Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR, ByVal pIsMicrosoftSign As Boolean Ptr = NULL) As Long
     Dim hCatAdmin As Any Ptr = NULL
     Dim hCatInfo As Any Ptr = NULL
     Dim hFile As HANDLE = INVALID_HANDLE_VALUE
@@ -807,7 +891,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Long
     'Dim StateAction(3) As Long = {WTD_STATEACTION_IGNORE, WTD_STATEACTION_VERIFY, WTD_STATEACTION_AUTO_CACHE, WTD_STATEACTION_AUTO_CACHE_FLUSH}
     Dim StateAction As Long = WTD_STATEACTION_IGNORE
     'Dim ProvFlags(9) As Long = {16, 32, 64, 128, 512, 1024, 2048, 4096, 8192}
-    Dim ProvFlags(1) As Long = {16 + 1024, 16 + 1024} /'似乎存在某种预热机制,
+    Dim ProvFlags As Long = 16 + 1024 ' , 16 + 1024} /'似乎存在某种预热机制,
     '每次改变dwRevocationChecks,StateAction或被验证文件路径都需要重新"预热","预热"时的参数可以与正式验证时的参数一致'/
     'Dim ProvFlags As Long = 16 + 1024
     Dim count As Integer = 0
@@ -873,15 +957,20 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR) As Long
         wtd.dwUnionChoice = WTD_CHOICE_CATALOG
         wtd.fdwRevocationChecks = RevocationChecks
         wtd.dwStateAction = StateAction
-        For a2 As Integer = 0 To 1
-            wtd.dwProvFlags = ProvFlags(a2)
-            
-            ' 5. 调用WinVerifyTrust验证目录签名
-            Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
-            ' 关闭验证状态
-            wtd.dwStateAction = WTD_STATEACTION_CLOSE
-            WinVerifyTrust(NULL, @wvtGUID, @wtd)
-        Next
+        'For a2 As Integer = 0 To 0 ' 1
+        wtd.dwProvFlags = ProvFlags ' (a2)
+        
+        ' 5. 调用WinVerifyTrust验证目录签名
+        Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
+        ' 关闭验证状态
+        wtd.dwStateAction = WTD_STATEACTION_CLOSE
+        WinVerifyTrust(NULL, @wvtGUID, @wtd)
+        
+        ' 成功时判断是否微软签名
+        If Status = ERROR_SUCCESS Then
+            If pIsMicrosoftSign Then *pIsMicrosoftSign = IsMicrosoftSignatureFromFile(catalogInfo.wszCatalogFile)
+        End If
+        'Next
     Else
 CheckFileSign:
         Dim wfi As WINTRUST_FILE_INFO
@@ -909,6 +998,11 @@ CheckFileSign:
         ' 关闭验证状态
         wtd.dwStateAction = WTD_STATEACTION_CLOSE
         WinVerifyTrust(NULL, @wvtGUID, @wtd)
+        
+        ' 成功时判断是否微软签名
+        If Status = ERROR_SUCCESS Then
+            If pIsMicrosoftSign Then *pIsMicrosoftSign = IsMicrosoftSignatureFromFile(pwszFilePath)
+        End If
     End If
     
 cleanup:
@@ -987,21 +1081,24 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
         
         ' 执行签名验证
         If task->filePath <> "" AndAlso FileExists(Str(task->filePath)) <> 0 Then
-            Dim verifyResult As Long = VerifyFileSign(@task->filePath)
+            Dim verifyResult As Long, IsMicrosoftSign As Boolean
+            'Print task->filePath
+            verifyResult = VerifyFileSign(@task->filePath, @IsMicrosoftSign)
             ' 2. 根据验证结果 → 匹配你的5种状态 + 对应颜色
             Select Case verifyResult
                 ' ==============================================
-                ' 状态1：可信 → 浅绿（微软/知名厂商有效签名）
+                ' 状态1：可信 → 白色（微软/知名厂商有效签名）
                 ' ==============================================
                 Case ERROR_SUCCESS
-                    /'If IsMicrosoftOrTrustedVendor(@task->filePath) Then
-                        backColor = FB_LightGreen
-                    Else'/
+                    If IsMicrosoftSign Then
+                        'MyLog.PrintLog LOG_INFO,,, task->filePath
+                        BackColor = FB_White ' FB_LightGreen
+                    Else
                         ' ==============================================
-                        ' 状态2：正常 → 白色（普通第三方有效签名）
+                        ' 状态2：正常 → 金黄（普通第三方有效签名）
                         ' ==============================================
-                        BackColor = FB_White
-                    'End If
+                        BackColor = FB_GoldenYellow
+                    End If
 
                 ' ==============================================
                 ' 状态3：警告 → 金黄（无签名）
@@ -1030,7 +1127,13 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
                 msg->rowIndex = task->rowIndex
                 msg->ForeColor = ForeColor
                 msg->BackColor = BackColor
-                PostMessage task->hWndForm, WM_SignVerify, 0, Cast(LPARAM, msg)
+                
+                Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(task->hWndControl, GWLP_USERDATA))
+                If ctx <> NULL Then
+                    msg->hListView = task->hWndControl
+                    msg->InstanceId = ctx->InstanceId
+                    PostMessage task->hWndForm, WM_SignVerify, 0, Cast(lParam, msg)
+                End If
             End If
         End If
 
@@ -1055,10 +1158,11 @@ End Sub
 ' ===============================
 ' 启动异步验证
 ' ===============================
-Sub VerifyFileSignAsync(hWndForm As hWnd, ctrlType As StringW, rowIndex As Long, filePath As StringW)
+Sub VerifyFileSignAsync(hWndForm As HWND, hWndControl As HWND, ctrlType As StringW, rowIndex As Long, filePath As StringW)
     Dim task As AsyncTaskParam Ptr = Callocate(1, SizeOf(AsyncTaskParam))
     If task = 0 Then Exit Sub
     task->hWndForm = hWndForm
+    task->hWndControl = hWndControl
     task->ctrlType = ctrlType
     task->rowIndex = rowIndex
     task->filePath = filePath

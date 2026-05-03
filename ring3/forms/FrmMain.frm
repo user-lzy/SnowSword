@@ -95,9 +95,9 @@ FontAngle=0
 TextAlign=0 - 左对齐
 Prefix=True
 Ellipsis=False
-Left=640
+Left=557
 Top=440
-Width=100
+Width=190
 Height=20
 Layout=0 - 不锚定
 MousePointer=0 - 默认
@@ -158,7 +158,7 @@ AutoHScroll=True
 AutoVScroll=False
 Left=200
 Top=440
-Width=440
+Width=350
 Height=20
 Layout=0 - 不锚定
 MousePointer=0 - 默认
@@ -918,6 +918,9 @@ Type SIGNVERIFY_MSG
     rowIndex As Long
     ForeColor As COLORREF
     BackColor As COLORREF
+    
+    hListView As hWnd        ' 新增：目标ListView句柄
+    InstanceId As ULong      ' 新增：目标ListView唯一ID
 End Type
 
 ' ===================== 全局变量 =====================
@@ -1183,9 +1186,9 @@ End Sub
 
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     'ChangeWindowMessageFilter(0x0049, MSGFLT_ADD)'允许拖放文件
-    AdjustPrivilege
-    AdjustPrivilege SE_LOAD_DRIVER_NAME
-    AdjustPrivilege SE_SHUTDOWN_NAME
+    AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
+    AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
+    AdjustPrivilege GetCurrentProcessId, SE_SHUTDOWN_NAME, True
     DrawTreeView
     FrmListView.Hide
     ListView_SetExtendedListViewStyleEx(ListView1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
@@ -1211,7 +1214,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     If Command(1) = "-LoadDriver" And IsAdmin Then
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If Not LoadDriver(App.Path & "SnowSword.sys", False) Then AfxMsg "加载失败!"
-            hDrv = OpenDrv("\\.\\SnowSword")
+            hDrv = OpenDrv("\\.\\SnowSword", True)
             If (hDrv <> INVALID_HANDLE_VALUE) Then
                 AfxMsg "加载成功!"
                 Check6.Value =True
@@ -1224,7 +1227,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
         AfxMsg Command(2)
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If Not LoadDriver(App.Path & "SnowSword.sys", False) Then AfxMsg "加载失败!"
-            hDrv = OpenDrv("\\.\\SnowSword")
+            hDrv = OpenDrv("\\.\\SnowSword", True)
             If (hDrv <> INVALID_HANDLE_VALUE) Then
                 AfxMsg "加载成功!"
                 Check6.Value =True
@@ -1248,7 +1251,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     ElseIf Command(1) = "-UnlockFile" Then
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If LoadDriver(App.Path & "SnowSword.sys", False) Then
-                hDrv = OpenDrv("\\.\\SnowSword")
+                hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
                     AfxMsg "加载成功!"
                     Check6.Value =True
@@ -1265,28 +1268,31 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
         End If
     End If
     InitNtUserFunction
-    'EnumGlobalDesktopHooks
     InitAllModuleCache
     Print GetSystemVersion
     'SetMenuText mnuProcess, FrmMain_mnuProcess_mnuTerminateProcess, "1"
     'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
     prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WNDPROC))
     InitCustomTooltip hWndForm
-    'Dim SessionId As DWORD
-    'Print GetProcessSessionId(6744, SessionId) & "SessionId:" & SessionId
-    'Test
-    'Print GetKernelProcAddress("ntoskrnl.exe", "IopInvalidDeviceRequest ")
     Dim bytData() As Byte
     'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
     Dim DriverInfo As DRIVER_INFO
-    'GetOriginalDispatchFunctionAddr "C:\WIndows\System32\drivers\Ntfs.sys", DriverInfo
-    FrmLog.Show
-    FrmLog.Visible = False
     InitLog
     
     InitThreadPool
     CheckUpdate
     bFrmMainShowed = True
+    
+    SymEngine_Init
+    /'Dim buf As WString * MAX_PATH = ""
+
+    If GetKernelModulePath(StrPtrW("ntoskrnl.exe"), @buf) Then
+        Print "Module path: "; buf
+    Else
+        Print "Module path not found"
+    End If'/
+    'UltimateTest
+    'SymbolService_StartThread
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1382,7 +1388,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                     AfxMsg "加载失败!"
                     Exit Sub
                 End If
-                hDrv = OpenDrv("\\.\\SnowSword")
+                hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
                     AfxMsg "加载成功!"
                     Check6.Value =True
@@ -1419,7 +1425,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                     AfxMsg "加载失败!"
                     Exit Sub
                 End If
-                hDrv = OpenDrv("\\.\\SnowSword")
+                hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
                     AfxMsg "加载成功!"
                     Check6.Value =True
@@ -1453,7 +1459,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                     AfxMsg "加载失败!"
                     Exit Sub
                 End If
-                hDrv = OpenDrv("\\.\\SnowSword")
+                hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
                     AfxMsg "加载成功!"
                     FrmMain.Check6.Value =True
@@ -1471,7 +1477,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                     AfxMsg "加载失败!"
                     Exit Sub
                 End If
-                hDrv = OpenDrv("\\.\\SnowSword")
+                hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
                     AfxMsg "加载成功!"
                     FrmMain.Check6.Value =True
@@ -1964,10 +1970,11 @@ End Sub
 '[FrmMain]事件 : 即将关闭窗口，返回非0可阻止关闭
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 Function FrmMain_WM_Close(hWndForm As hWnd) As LResult
-    If IsDriverLoaded Then
-        CloseDrv hDrv
-        UnloadDriver App.Path & "SnowSword.sys", False
-    End If
+    CloseDrv hDrv
+    SymbolService_StopWorkers
+    SymEngine_Cleanup
+    UnloadDriver "SnowSword", False
+    
     TrayIco1.Del
     UninitNtUserFunction
     SetWindowLongPtr FrmMain.hWnd, GWL_WNDPROC, prevFrmMainProc
@@ -2158,7 +2165,7 @@ Sub FrmMain_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             Check6.Value = True
@@ -2182,15 +2189,21 @@ Sub FrmMain_Check6_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            IsDriverLoaded = True
-        Else
+        hDrv = OpenDrv("\\.\\SnowSword", True)
+        If (hDrv = INVALID_HANDLE_VALUE) Then
             AfxMsg "加载失败!"
+            Exit Sub
         End If
+        If (Not OpenSymbolDevice) OrElse (hSymbolDrv = INVALID_HANDLE_VALUE) Then
+            AfxMsg "加载失败!"
+            Exit Sub
+        End If
+        AfxMsg "加载成功!"
+        SymbolService_StartWorkers
+        IsDriverLoaded = True
     Else
         CloseDrv hDrv
+        SymbolService_StopWorkers
         UnloadDriver App.Path & "SnowSword.sys", False
         IsDriverLoaded = False
         AfxMsg "卸载成功!"
@@ -2211,7 +2224,7 @@ Sub FrmMain_Check5_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             Check6.Value = True
@@ -2235,7 +2248,7 @@ Sub FrmMain_Check7_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             Check6.Value = True
@@ -2266,7 +2279,7 @@ Sub FrmMain_Check8_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             Check6.Value = True
@@ -2301,7 +2314,7 @@ Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmMain_TopMenu1_mnuFireWall ' 防火墙
             FrmFireWall.Show
         Case FrmMain_TopMenu1_mnuViewLog ' 显示日志
-            FrmLog.Visible = True
+            FrmLog.Show
         Case FrmMain_TopMenu1_mnuCheckUpdate ' 检测更新
             CheckUpdate
    End Select
@@ -2478,13 +2491,23 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
         End Select
     Case WM_SignVerify
         Dim pMsg As SIGNVERIFY_MSG Ptr = Cast(SIGNVERIFY_MSG Ptr, lParam)
-        If pMsg <> 0 Then
-            If pMsg->ctrlType = "ListView" Then
-                ' 更新 ListView 的颜色
-                'Print "开始更新 ListView 的颜色..."
-                SetItemColor ListView1, pMsg->rowIndex, pMsg->ForeColor, pMsg->BackColor
-                Deallocate pMsg
-            End If
+        If pMsg = 0 Then Return False
+        
+        ' ====================== 核心UAF防护（保留异步，不取消消息） ======================
+        ' 1. 校验ListView句柄有效性
+        Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(pMsg->hListView, GWLP_USERDATA))
+        ' 2. 三重校验：上下文存在 + 有效标记 + 实例ID匹配
+        If ctx = 0 Or ctx->IsValid = False Or ctx->InstanceId <> pMsg->InstanceId Then
+            Deallocate pMsg  ' 直接释放无效消息，不访问任何指针
+            Return 0
+        End If
+        ' ==================================================================================
+    
+        If pMsg->ctrlType = "ListView" Then
+            ' 更新 ListView 的颜色
+            'Print "开始更新 ListView 的颜色..."
+            SetItemColor ListView1, pMsg->rowIndex, pMsg->ForeColor, pMsg->BackColor
+            Deallocate pMsg
         End If
         
         ' 延迟刷新
@@ -2618,7 +2641,7 @@ Sub FrmMain_Check4_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             Check6.Value = True
@@ -2992,7 +3015,8 @@ Function 保存软件崩溃日志(文件名 As String, excp As EXCEPTION_POINTER
    bug &= "堆栈列表(栈顶): Esp/Rsp ------------------------------"       & vbCrLf & 堆栈列表
    bug &= "局部列表(栈底): Ebp/Rbp ------------------------------------" & vbCrLf & 局部列表
    bug &= "模块列表:   ------------------------------------------"       & vbCrLf & AllMode
-
+   
+   bug &= "日志:" & vbCrLf & strLog
    
    If Len(文件名) Then SaveFileStr 文件名, bug
    
@@ -3003,9 +3027,9 @@ End Function
 '[FrmMain.VEH1]事件 : 向量化异常处理（程序崩溃后处理）
 '整个软件，只需一个VEH即可，在主窗口放置控件，所有窗口、模块、多线程等发生崩溃，都会跑到这里执行。
 Function FrmMain_VEH1_VectExcepHandler(ByRef excp As EXCEPTION_POINTERS) As Integer
-    AfxMsg "程序即将崩溃..."
+    'AfxMsg "程序即将崩溃..."
     保存软件崩溃日志 App.Path & "bug" & NowString(1) & ".txt", excp
-    Return 1
+    Return 0
 End Function
 
 '[FrmMain.mCtrlTreeList1]事件 : 移动鼠标（状态机核心）

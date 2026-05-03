@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "EnumCallbacks.h"
+#include "Symbol.h"
 //#include <ntddk.h>
 //#include <fwpmk.h>
 
@@ -115,6 +116,15 @@ BOOLEAN IsWindows11OrGreater() {
 
 PVOID FindPspCreateProcessNotifyRoutine()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PspCreateProcessNotifyRoutine", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PspCreateProcessNotifyRoutine=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING PsSetCreateProcessNotifyRoutineName = RTL_CONSTANT_STRING(L"PsSetCreateProcessNotifyRoutine");
 	PVOID PsSetCreateProcessNotifyRoutineAddr = MmGetSystemRoutineAddress(&PsSetCreateProcessNotifyRoutineName);
 	if (NULL == PsSetCreateProcessNotifyRoutineAddr)
@@ -187,6 +197,15 @@ PVOID FindPspCreateProcessNotifyRoutine()
 
 PVOID FindPspCreateThreadNotifyRoutine()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PspCreateThreadNotifyRoutine", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PspCreateThreadNotifyRoutine=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING PsSetCreateThreadNotifyRoutineName = RTL_CONSTANT_STRING(L"PsSetCreateThreadNotifyRoutine");
 	PVOID PsSetCreateThreadNotifyRoutineAddr = MmGetSystemRoutineAddress(&PsSetCreateThreadNotifyRoutineName);
 	if (NULL == PsSetCreateThreadNotifyRoutineAddr)
@@ -259,6 +278,15 @@ PVOID FindPspCreateThreadNotifyRoutine()
 
 PVOID FindPspLoadImageNotifyRoutine()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PspLoadImageNotifyRoutine", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PspLoadImageNotifyRoutine=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING PsSetLoadImageNotifyRoutineExName = RTL_CONSTANT_STRING(L"PsSetLoadImageNotifyRoutineEx");
 	PVOID PsSetLoadImageNotifyRoutineExAddr = MmGetSystemRoutineAddress(&PsSetLoadImageNotifyRoutineExName);
 	if (NULL == PsSetLoadImageNotifyRoutineExAddr)
@@ -305,8 +333,17 @@ PVOID FindPspLoadImageNotifyRoutine()
 	return PspLoadImageNotifyRoutineAddr;
 }
 
-PVOID FindCmCallbackListHead()
+PVOID FindCallbackListHead()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"CallbackListHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: CmCallbackListHead=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING CmUnRegisterCallbackName = RTL_CONSTANT_STRING(L"CmUnRegisterCallback");
 	PVOID CmUnRegisterCallbackAddr = MmGetSystemRoutineAddress(&CmUnRegisterCallbackName);
 	if (NULL == CmUnRegisterCallbackAddr)
@@ -464,99 +501,107 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT Array)
 		InstanceQueryTeardownOffset, InstanceTeardownStartOffset, 
 		InstanceTeardownCompleteOffset, PreVolumeMountOffset, PostVolumeMountOffset, GenerateFileNameOffset,
 		NormalizeNameComponentOffset, NormalizeNameComponentExOffset, NormalizeContextCleanupOffset;
-	if (OSVersion.dwMajorVersion >= 10 && OSVersion.dwBuildNumber >= 26100) {
-		/*
-		lkd> dt fltmgr!_FLT_FILTER
-		+0x000 Base             : _FLT_OBJECT
-		+0x038 Frame            : Ptr64 _FLTP_FRAME
-		+0x040 Name             : _UNICODE_STRING
-		+0x050 DefaultAltitude  : _UNICODE_STRING
-		+0x060 Flags            : _FLT_FILTER_FLAGS
-		+0x068 DriverObject     : Ptr64 _DRIVER_OBJECT
-		+0x070 InstanceList     : _FLT_RESOURCE_LIST_HEAD
-		+0x0f0 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
-		+0x0f8 VerifiedFiltersLink : _LIST_ENTRY
-		+0x108 FilterUnload     : Ptr64     long
-		+0x110 InstanceSetup    : Ptr64     long
-		+0x118 InstanceQueryTeardown : Ptr64     long
-		+0x120 InstanceTeardownStart : Ptr64     void
-		+0x128 InstanceTeardownComplete : Ptr64     void
-		+0x130 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
-		+0x138 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
-		+0x170 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
-		+0x178 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
-		+0x180 GenerateFileName : Ptr64     long
-		+0x188 NormalizeNameComponent : Ptr64     long
-		+0x190 NormalizeNameComponentEx : Ptr64     long
-		+0x198 NormalizeContextCleanup : Ptr64     void
-		*/
-		// Windows 11及以上，使用对应偏移
-		lOperationsOffset = 0x1B0;
-		NameOffset = 0x40;
-		AltitudeOffset = 0x50;
-		DriverObjectOffset = 0x68;
-		FilterUnloadOffset = 0x108;
-		InstanceSetupOffset = 0x110;
-		InstanceQueryTeardownOffset = 0x118;
-		InstanceTeardownStartOffset = 0x120;
-		InstanceTeardownCompleteOffset = 0x128;
-		PreVolumeMountOffset = 0x170;
-		PostVolumeMountOffset = 0x178;
-		GenerateFileNameOffset = 0x180;
-		NormalizeNameComponentOffset = 0x188;
-		NormalizeNameComponentExOffset = 0x190;
-		NormalizeContextCleanupOffset = 0x198;
+	
+	ULONG64 addr = 0;
+	status = STATUS_SUCCESS;
+	//status = KernelQueryStructOffset(L"
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 
-		DbgPrint("win11");
-	}
-	else {
-		/*
-		lkd> dt fltmgr!_FLT_FILTER
-		+0x000 Base             : _FLT_OBJECT
-		+0x030 Frame            : Ptr64 _FLTP_FRAME
-		+0x038 Name             : _UNICODE_STRING
-		+0x048 DefaultAltitude  : _UNICODE_STRING
-		+0x058 Flags            : _FLT_FILTER_FLAGS
-		+0x060 DriverObject     : Ptr64 _DRIVER_OBJECT
-		+0x068 InstanceList     : _FLT_RESOURCE_LIST_HEAD
-		+0x0e8 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
-		+0x0f0 VerifiedFiltersLink : _LIST_ENTRY
-		+0x100 FilterUnload     : Ptr64     long 
-		+0x108 InstanceSetup    : Ptr64     long 
-		+0x110 InstanceQueryTeardown : Ptr64     long 
-		+0x118 InstanceTeardownStart : Ptr64     void 
-		+0x120 InstanceTeardownComplete : Ptr64     void 
-		+0x128 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
-		+0x130 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
-		+0x168 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS 
-		+0x170 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS 
-		+0x178 GenerateFileName : Ptr64     long 
-		+0x180 NormalizeNameComponent : Ptr64     long 
-		+0x188 NormalizeNameComponentEx : Ptr64     long 
-		+0x190 NormalizeContextCleanup : Ptr64     void 
-		*/
-		// 旧版本偏移
-		lOperationsOffset = 0x1A8;
-		NameOffset = 0x38;
-		AltitudeOffset = 0x48;
-		DriverObjectOffset = 0x60;
-		FilterUnloadOffset = 0x100;
-		InstanceSetupOffset = 0x108;
-		InstanceQueryTeardownOffset = 0x110;
-		InstanceTeardownStartOffset = 0x118;
-		InstanceTeardownCompleteOffset = 0x120;
-		PreVolumeMountOffset = 0x168;
-		PostVolumeMountOffset = 0x170;
-		GenerateFileNameOffset = 0x178;
-		NormalizeNameComponentOffset = 0x180;
-		NormalizeNameComponentExOffset = 0x188;
-		NormalizeContextCleanupOffset = 0x190;
+	//else{
+		if (OSVersion.dwMajorVersion >= 10 && OSVersion.dwBuildNumber >= 26100) {
+			/*
+			lkd> dt fltmgr!_FLT_FILTER
+			+0x000 Base             : _FLT_OBJECT
+			+0x038 Frame            : Ptr64 _FLTP_FRAME
+			+0x040 Name             : _UNICODE_STRING
+			+0x050 DefaultAltitude  : _UNICODE_STRING
+			+0x060 Flags            : _FLT_FILTER_FLAGS
+			+0x068 DriverObject     : Ptr64 _DRIVER_OBJECT
+			+0x070 InstanceList     : _FLT_RESOURCE_LIST_HEAD
+			+0x0f0 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
+			+0x0f8 VerifiedFiltersLink : _LIST_ENTRY
+			+0x108 FilterUnload     : Ptr64     long
+			+0x110 InstanceSetup    : Ptr64     long
+			+0x118 InstanceQueryTeardown : Ptr64     long
+			+0x120 InstanceTeardownStart : Ptr64     void
+			+0x128 InstanceTeardownComplete : Ptr64     void
+			+0x130 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
+			+0x138 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
+			+0x170 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
+			+0x178 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
+			+0x180 GenerateFileName : Ptr64     long
+			+0x188 NormalizeNameComponent : Ptr64     long
+			+0x190 NormalizeNameComponentEx : Ptr64     long
+			+0x198 NormalizeContextCleanup : Ptr64     void
+			*/
+			// Windows 11及以上，使用对应偏移
+			lOperationsOffset = 0x1B0;
+			NameOffset = 0x40;
+			AltitudeOffset = 0x50;
+			DriverObjectOffset = 0x68;
+			FilterUnloadOffset = 0x108;
+			InstanceSetupOffset = 0x110;
+			InstanceQueryTeardownOffset = 0x118;
+			InstanceTeardownStartOffset = 0x120;
+			InstanceTeardownCompleteOffset = 0x128;
+			PreVolumeMountOffset = 0x170;
+			PostVolumeMountOffset = 0x178;
+			GenerateFileNameOffset = 0x180;
+			NormalizeNameComponentOffset = 0x188;
+			NormalizeNameComponentExOffset = 0x190;
+			NormalizeContextCleanupOffset = 0x198;
 
-		DbgPrint("win10");
-		//DbgPrint("暂不支持的系统版本!");
-		//return 0;
-	}
+			DbgPrint("win11");
+		}
+		else {
+			/*
+			lkd> dt fltmgr!_FLT_FILTER
+			+0x000 Base             : _FLT_OBJECT
+			+0x030 Frame            : Ptr64 _FLTP_FRAME
+			+0x038 Name             : _UNICODE_STRING
+			+0x048 DefaultAltitude  : _UNICODE_STRING
+			+0x058 Flags            : _FLT_FILTER_FLAGS
+			+0x060 DriverObject     : Ptr64 _DRIVER_OBJECT
+			+0x068 InstanceList     : _FLT_RESOURCE_LIST_HEAD
+			+0x0e8 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
+			+0x0f0 VerifiedFiltersLink : _LIST_ENTRY
+			+0x100 FilterUnload     : Ptr64     long
+			+0x108 InstanceSetup    : Ptr64     long
+			+0x110 InstanceQueryTeardown : Ptr64     long
+			+0x118 InstanceTeardownStart : Ptr64     void
+			+0x120 InstanceTeardownComplete : Ptr64     void
+			+0x128 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
+			+0x130 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
+			+0x168 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
+			+0x170 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
+			+0x178 GenerateFileName : Ptr64     long
+			+0x180 NormalizeNameComponent : Ptr64     long
+			+0x188 NormalizeNameComponentEx : Ptr64     long
+			+0x190 NormalizeContextCleanup : Ptr64     void
+			*/
+			// 旧版本偏移
+			lOperationsOffset = 0x1A8;
+			NameOffset = 0x38;
+			AltitudeOffset = 0x48;
+			DriverObjectOffset = 0x60;
+			FilterUnloadOffset = 0x100;
+			InstanceSetupOffset = 0x108;
+			InstanceQueryTeardownOffset = 0x110;
+			InstanceTeardownStartOffset = 0x118;
+			InstanceTeardownCompleteOffset = 0x120;
+			PreVolumeMountOffset = 0x168;
+			PostVolumeMountOffset = 0x170;
+			GenerateFileNameOffset = 0x178;
+			NormalizeNameComponentOffset = 0x180;
+			NormalizeNameComponentExOffset = 0x188;
+			NormalizeContextCleanupOffset = 0x190;
 
+			DbgPrint("win10");
+			//DbgPrint("暂不支持的系统版本!");
+			//return 0;
+		}
+	//}
 	if (!Array) {
 		DbgPrint("无效Array!");
 		return 0;
@@ -1817,7 +1862,7 @@ exit3:
 	// 遍历链表结构
 	PCM_NOTIFY_ENTRY pNotifyEntry = NULL;
 
-	PVOID pCallbackListHead = FindCmCallbackListHead();
+	PVOID pCallbackListHead = FindCallbackListHead();
 	// 获取回调函数链表头地址
 	if (NULL == pCallbackListHead) goto exit4;
 

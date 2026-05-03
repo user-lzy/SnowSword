@@ -825,7 +825,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
                 Dim ItemIndex As Long = AddItemColListEx(lvwThread, 8,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
                 WStr(ThreadStateToString(threadInfo)), WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), _
                 WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath), WStr(GetFileCompany(strModulePath)))
-                VerifyFileSignAsync FrmListView.hWnd, "ListView", ItemIndex, strModulePath
+                VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, strModulePath
                 threadInfo += 1
                 'i += 1
             Next
@@ -1037,7 +1037,7 @@ Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True

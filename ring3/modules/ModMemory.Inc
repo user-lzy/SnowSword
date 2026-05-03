@@ -291,7 +291,7 @@ End Function
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -383,7 +383,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
             AfxMsg "加载失败!"
             Return
         End If
-        hDrv = OpenDrv("\\.\\SnowSword")
+        hDrv = OpenDrv("\\.\\SnowSword", True)
         If (hDrv <> INVALID_HANDLE_VALUE) Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
@@ -484,3 +484,33 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     AfxMsg "扫描完成，发现 " & suspectCount & " 处可疑内存"
     CommitListViewView lvwSuspectKernelMemory
 End Sub
+
+Function ReadKernelMemory(ByVal Addr As UInteger, ByVal dwSize As ULong, ByVal lpBuffer As PVOID) As Boolean ' ByRef bytRead As ULong
+    If Not IsDriverLoaded Then Return False
+    
+    Dim st As MemoryStruct
+    st.Addr = Cast(PVOID, Addr)
+    st.dwProcessId = 0
+    st.dwSize = dwSize
+    st.pData = lpBuffer
+    If IoControl(hDrv, IOCTL_ReadProcessMemory, @st, SizeOf(st)) = 0 Then
+        MyLog.PrintWin32Error "ReadKernelMemory", "IOCTL_ReadProcessMemory", "Addr=0x" & WHex(Addr) & " dwSize=0x" & WHex(dwSize)
+        Return False
+    End If
+    Return True
+End Function
+
+Function WriteKernelMemory(ByVal Addr As UInteger, ByVal dwSize As ULong, ByVal lpBuffer As PVOID) As Boolean ' ByRef bytRead As ULong
+    If Not IsDriverLoaded Then Return False
+    
+    Dim st As MemoryStruct
+    st.Addr = Cast(PVOID, Addr)
+    st.dwProcessId = 0
+    st.dwSize = dwSize
+    st.pData = lpBuffer
+    If IoControl(hDrv, IOCTL_WriteProcessMemory, @st, SizeOf(st)) = 0 Then
+        MyLog.PrintWin32Error "ReadKernelMemory", "IOCTL_ReadProcessMemory", "Addr=0x" & WHex(Addr) & " dwSize=0x" & WHex(dwSize)
+        Return False
+    End If
+    Return True
+End Function

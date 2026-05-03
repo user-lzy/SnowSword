@@ -15,6 +15,7 @@
 #include "Process.h"
 #include "Registry.h"
 #include "SSDT.h"
+#include "Symbol.h"
 #include "Thread.h"
 #include "Window.h"
 
@@ -22,6 +23,10 @@
 #define DEVICE_OBJECT_NAME  L"\\Device\\SnowSword"
 //设备与Ring3之间通信
 #define DEVICE_LINK_NAME    L"\\DosDevices\\SnowSword"
+
+PDEVICE_OBJECT g_SymbolDevice = NULL;
+UNICODE_STRING g_SymbolDeviceName = RTL_CONSTANT_STRING(L"\\Device\\SnowSymbol");
+UNICODE_STRING g_SymbolDosName = RTL_CONSTANT_STRING(L"\\DosDevices\\SnowSymbol");
 
 //DRIVER_INITIALIZE DriverEntry;
 
@@ -40,6 +45,67 @@ PEPROCESS Notepad_EProcess = NULL;
 PDEVICE_OBJECT g_TargetDeviceObject = NULL;
 
 extern PVOID HalPrivateDispatchTable;
+
+NTSTATUS CreateSymbolDevice(PDRIVER_OBJECT DriverObject)
+{
+    status = IoCreateDevice(
+        DriverObject,
+        0,
+        &g_SymbolDeviceName,
+        FILE_DEVICE_UNKNOWN,
+        0,
+        FALSE,
+        &g_SymbolDevice
+    );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    g_SymbolDevice->Flags |= DO_BUFFERED_IO;
+
+    status = IoCreateSymbolicLink(&g_SymbolDosName, &g_SymbolDeviceName);
+    if (!NT_SUCCESS(status))
+    {
+        IoDeleteDevice(g_SymbolDevice);
+        g_SymbolDevice = NULL;
+        return status;
+    }
+
+    //
+    // 只给 Symbol 设备绑定 Symbol 的派遣函数
+    //
+    DriverObject->MajorFunction[IRP_MJ_CREATE] =
+        DriverObject->MajorFunction[IRP_MJ_CLOSE] =
+        DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] =
+        DispatchIoControl_Symbol;
+
+    DbgPrint("SymbolDevice 创建成功\n");
+    return STATUS_SUCCESS;
+}
+
+VOID DeleteSymbolDevice()
+{
+    if (g_SymbolDevice)
+    {
+        IoDeleteSymbolicLink(&g_SymbolDosName);
+        IoDeleteDevice(g_SymbolDevice);
+        g_SymbolDevice = NULL;
+    }
+}
+
+NTSTATUS DispatchDeviceControl(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    if (DeviceObject == g_SymbolDevice)
+    {
+        return DispatchIoControl_Symbol(DeviceObject, Irp);
+    }
+    else
+    {
+        return IoctlDispatchRoutine(DeviceObject, Irp);
+    }
+}
 
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING RegistryPath) {
 
@@ -60,6 +126,10 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
         0, FALSE,
         &pDeviceObject);
     if (!NT_SUCCESS(status)) return status;
+    //pDeviceObject->Flags |= DO_BUFFERED_IO;
+	CreateSymbolDevice(pDriverObject);
+
+    InitSymbolContext(pDeviceObject);
 
     //创建设备连接名称
     RtlInitUnicodeString(&DeviceLinkName, DEVICE_LINK_NAME);
@@ -78,7 +148,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     pDriverObject->MajorFunction[IRP_MJ_CLOSE] = DispatchRoutine;
     pDriverObject->MajorFunction[IRP_MJ_WRITE] = DispatchRoutine;
     pDriverObject->MajorFunction[IRP_MJ_READ] = DispatchRoutine;
-    pDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IoctlDispatchRoutine;
+    pDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchDeviceControl;
 
     //绕过签名检查
     PKLDR_DATA_TABLE_ENTRY pLdrData = (PKLDR_DATA_TABLE_ENTRY)pDriverObject->DriverSection;
@@ -88,49 +158,60 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
 
     // 测试打印代码（修正版）
-    PNDIS_FILTER_INFO pFilterArray = NULL;
-    ULONG filterCount = 0;
+    //PNDIS_FILTER_INFO pFilterArray = NULL;
+    //ULONG filterCount = 0;
 
-    status = EnumNdisFilterDrivers(&pFilterArray, &filterCount);
-    if (NT_SUCCESS(status))
-    {
-        DbgPrint("==================== 枚举结果 ====================\n");
-        for (ULONG i = 0; i < filterCount; i++)
-        {
-            if (pFilterArray[i].bValid)
-            {
-                // ✅ 正确打印UNICODE_STRING
-                // ✅ 正确打印GUID（修复%wG错误）
-                DbgPrint("驱动%d: %wZ GUID:{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
-                    i + 1,
-                    &pFilterArray[i].FilterName,
-                    pFilterArray[i].FilterGuid.Data1,
-                    pFilterArray[i].FilterGuid.Data2,
-                    pFilterArray[i].FilterGuid.Data3,
-                    pFilterArray[i].FilterGuid.Data4[0],
-                    pFilterArray[i].FilterGuid.Data4[1],
-                    pFilterArray[i].FilterGuid.Data4[2],
-                    pFilterArray[i].FilterGuid.Data4[3],
-                    pFilterArray[i].FilterGuid.Data4[4],
-                    pFilterArray[i].FilterGuid.Data4[5],
-                    pFilterArray[i].FilterGuid.Data4[6],
-                    pFilterArray[i].FilterGuid.Data4[7]);
-            }
-        }
-        FreeNdisFilterArray(pFilterArray);
-    }
-    
+    //status = EnumNdisFilterDrivers(&pFilterArray, &filterCount);
+    //if (NT_SUCCESS(status))
+    //{
+    //    DbgPrint("==================== 枚举结果 ====================\n");
+    //    for (ULONG i = 0; i < filterCount; i++)
+    //    {
+    //        if (pFilterArray[i].bValid)
+    //        {
+    //            // ✅ 正确打印UNICODE_STRING
+    //            // ✅ 正确打印GUID（修复%wG错误）
+    //            DbgPrint("驱动%d: %wZ GUID:{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
+    //                i + 1,
+    //                &pFilterArray[i].FilterName,
+    //                pFilterArray[i].FilterGuid.Data1,
+    //                pFilterArray[i].FilterGuid.Data2,
+    //                pFilterArray[i].FilterGuid.Data3,
+    //                pFilterArray[i].FilterGuid.Data4[0],
+    //                pFilterArray[i].FilterGuid.Data4[1],
+    //                pFilterArray[i].FilterGuid.Data4[2],
+    //                pFilterArray[i].FilterGuid.Data4[3],
+    //                pFilterArray[i].FilterGuid.Data4[4],
+    //                pFilterArray[i].FilterGuid.Data4[5],
+    //                pFilterArray[i].FilterGuid.Data4[6],
+    //                pFilterArray[i].FilterGuid.Data4[7]);
+    //        }
+    //    }
+    //    FreeNdisFilterArray(pFilterArray);
+    //}
+
     return STATUS_SUCCESS;
 }
 
-//派遣历程
-NTSTATUS DispatchRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
-	UNREFERENCED_PARAMETER(DeviceObject);
-    Irp->IoStatus.Information = 0;		//设置操作的字节数为0
-    Irp->IoStatus.Status = STATUS_SUCCESS;	//返回成功
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);	//指示完成此IRP
-    
-    return STATUS_SUCCESS; //返回成功
+NTSTATUS DispatchRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
+
+    switch (irpStack->MajorFunction)
+    {
+    case IRP_MJ_CLOSE:
+        DbgPrint("Dispatch: 收到 IRP_MJ_CLOSE\n");
+        return DispatchClose_Symbol(DeviceObject, Irp);  // ⚠️ 直接 return
+
+    default:
+        break;
+    }
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
@@ -162,6 +243,20 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     switch (IoControlCode)
     {
     case IOCTL_KillProcess:
+        //// 内核调用示例：查询任意模块
+        //ULONG64 addr = 0;
+        //LONG offset = 0;
+        //WCHAR symName[256] = { 0 };
+        //// 1. 查询 win32kfull 符号
+        //KernelQuerySymbolAddress(L"C:\\Windows\\System32\\win32kfull.sys", L"PenHotkeyCallback", &addr);
+        //DbgPrint("PenHotkeyCallback address: 0x%llx\n", addr);
+        //// 2. 查询 ntoskrnl 结构体偏移
+        //KernelQueryStructOffset(L"C:\\Windows\\System32\\ntoskrnl.exe", L"_EPROCESS", L"ImageFileName", &offset);
+        //DbgPrint("_EPROCESS.ImageFileName offset: 0x%X\n", offset);
+        //// 3. 查询 ntfs.sys 地址→符号
+        //KernelQueryAddressToSymbol(L"C:\\Windows\\System32\\drivers\\ntfs.sys", 0xFFFFF80427531020, symName, 256);
+        //DbgPrint("Address 0xFFFFF80427531020 in ntfs.sys corresponds to symbol: %ws\n", symName);
+
         if (pInputData != NULL && InputDataLength > 0)
         {
             dwProcessId = *(PHANDLE)pInputData;
@@ -1481,12 +1576,14 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             Information = 0;
             status = STATUS_INSUFFICIENT_RESOURCES;
 		}
+        break;
 
     case IOCTL_RemoveAttachedDevice:
         if (pInputData != NULL && InputDataLength > 0) {
             PDEVICE_OBJECT DeviceObject = *(PDEVICE_OBJECT*)pInputData;
             status = RemoveAttachedDevice(DeviceObject) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 		}
+        break;
 
     default: 
         break;
@@ -1530,6 +1627,10 @@ VOID DriverUnload(PDRIVER_OBJECT pDriverObject)
 
     RtlInitUnicodeString(&DeviceLinkName, DEVICE_LINK_NAME);
     IoDeleteSymbolicLink(&DeviceLinkName);
+
+    // 先卸载 Symbol
+    UninitSymbolContext();
+	DeleteSymbolDevice();
 
     pDeleteDeviceObject = pDriverObject->DeviceObject;
     while (pDeleteDeviceObject != NULL)

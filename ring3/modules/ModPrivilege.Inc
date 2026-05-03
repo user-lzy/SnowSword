@@ -71,19 +71,38 @@ Sub RestartasAdmin(ByVal IsLoadDriver As BOOLEAN = False)
     End If
 End Sub
 
-Public Function AdjustPrivilege(ByVal Privilege As String = "SeDebugPrivilege") As WINBOOL
+Function AdjustPrivilege(ByVal dwProcessId As DWORD, ByVal Privilege As StringW, ByVal bStatus As Boolean) As Boolean
     Dim ret As WINBOOL
     Dim Token As TOKEN_PRIVILEGES
     Dim hProc As HANDLE, hToken As HANDLE
     
-    hProc = GetCurrentProcess
-    OpenProcessToken hProc, TOKEN_ADJUST_PRIVILEGES Or TOKEN_QUERY, @hToken
+    If IsDriverLoaded Then
+        hProc = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, dwProcessId)
+    End If
+    If OpenProcessToken(hProc, TOKEN_ADJUST_PRIVILEGES Or TOKEN_QUERY, @hToken) = 0 Then
+        MyLog.PrintWin32Error "AdjustPrivilege", "OpenProcessToken", "dwProcessId=" & dwProcessId & " Privilege=" & Privilege
+        CloseHandle hProc
+        Return False
+    End If
     Token.PrivilegeCount = 1
-    Token.Privileges(0).Attributes = SE_PRIVILEGE_ENABLED
-    ret = LookupPrivilegeValue("", Privilege, @Token.Privileges(0).LUID)
-    ret = AdjustTokenPrivileges(hToken, False, @Token, ByVal 0&, ByVal 0&, ByVal 0& )
-    If ret = 1 Then CloseHandle hToken
-    Return ret
+    Token.Privileges(0).Attributes = IIf(bStatus, SE_PRIVILEGE_ENABLED, 0)
+    If LookupPrivilegeValue("", Privilege, @Token.Privileges(0).LUID) = 0 Then
+        MyLog.PrintWin32Error "AdjustPrivilege", "LookupPrivilegeValue", "dwProcessId=" & dwProcessId & " Privilege=" & Privilege
+        CloseHandle hProc
+        CloseHandle hToken
+        Return False
+    End If
+    If AdjustTokenPrivileges(hToken, False, @Token, NULL, NULL, NULL) = 0 Then
+        MyLog.PrintWin32Error "AdjustPrivilege", "AdjustTokenPrivileges", "dwProcessId=" & dwProcessId & " Privilege=" & Privilege
+        CloseHandle hProc
+        CloseHandle hToken
+        Return False
+    End If
+    CloseHandle hProc
+    CloseHandle hToken
+    Return True
 End Function
 
 ' 获取进程特权信息
@@ -198,7 +217,7 @@ Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_List
     End If
     
     For i = 0 To UBound(privileges)
-        AddItemColListEx lvwPrivilege, 5,,, WHex(privileges(i).lValue), privileges(i).sName, privileges(i).sStatus, privileges(i).sDisplay, "0x" & WHex(privileges(i).Attributes), 
+        AddItemColListEx lvwPrivilege, 4,,, WHex(privileges(i).lValue), privileges(i).sName, privileges(i).sStatus, privileges(i).sDisplay ', "0x" & WHex(privileges(i).Attributes), 
     Next
     
     ' 释放内存

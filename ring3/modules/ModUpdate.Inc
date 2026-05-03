@@ -376,14 +376,17 @@ Sub CheckUpdate()
 
     ' 后续替换逻辑（完全不变）
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "开始替换主程序..."
-    LoadDriver App.Path & "SnowSword.sys", False
-    Dim As HANDLE hDrv  ' 修复：补全变量声明
-    Dim As Boolean IsDriverLoaded = False
-    hDrv = OpenDrv("\\.\\SnowSword")
-    If (hDrv <> INVALID_HANDLE_VALUE) Then IsDriverLoaded = True
-    ForceDeleteFile(@appPath)
-    CloseDrv hDrv
-    UnloadDriver App.Path & "SnowSword.sys", False
+    If IsDriverLoaded Then
+        ForceDeleteFile(@appPath)
+    Else
+        LoadDriver App.Path & "SnowSword.sys", False
+        hDrv = OpenDrv("\\.\\SnowSword", True)
+        If (hDrv <> INVALID_HANDLE_VALUE) Then IsDriverLoaded = True
+        ForceDeleteFile(@appPath)
+        CloseDrv hDrv
+        UnloadDriver App.Path & "SnowSword.sys", False
+    End If
+
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "已删除主程序!"
     CopyFileW(@tempExe, @appPath, False)
 

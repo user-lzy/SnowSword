@@ -137,6 +137,7 @@
     <ClInclude Include="include\Process.h" />
     <ClInclude Include="include\Registry.h" />
     <ClInclude Include="include\SSDT.h" />
+    <ClInclude Include="include\Symbol.h" />
     <ClInclude Include="include\Thread.h" />
     <ClInclude Include="include\Window.h" />
   </ItemGroup>
@@ -162,6 +163,7 @@
     <ClCompile Include="sources\Process.c" />
     <ClCompile Include="sources\Registry.c" />
     <ClCompile Include="sources\SSDT.c" />
+    <ClCompile Include="sources\Symbol.c" />
     <ClCompile Include="sources\Thread.c" />
     <ClCompile Include="sources\Window.c" />
   </ItemGroup>

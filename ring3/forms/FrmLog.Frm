@@ -46,7 +46,7 @@ ToolTip=
 ToolTipBalloon=False
 AcceptFiles=False
 
-[TextBox]
+[RichEdit]
 Name=txtLog
 Help=
 Index=-1
@@ -56,19 +56,18 @@ Text=
 Enabled=True
 Visible=True
 MaxLength=0
-ForeColor=SYS,8
-BackColor=SYS,5
 Font=微软雅黑,9,0
 TextAlign=0 - 左对齐
-PasswordChar=
 Locked=True
-HideSelection=True
+HideSelection=False
 Multiline=True
-Uppercase=False
-Lowercase=False
-Number=False
+SaveSel=True
+NoScroll=False
 AutoHScroll=True
-AutoVScroll=False
+AutoVScroll=True
+ContextMenu=True
+LeftMargin=0
+RightMargin=0
 Left=0
 Top=0
 Width=600
@@ -79,8 +78,6 @@ Tag=
 Tab=True
 ToolTip=
 ToolTipBalloon=False
-LeftMargin=0
-RightMargin=0
 AcceptFiles=False
 
 
@@ -89,11 +86,13 @@ AcceptFiles=False
 '写好工程，复制全部文件到VFB软件文件夹里【template】里即可，子文件夹名为 VFB新建工程里显示的名称
 '快去打造属于你自己的工程模版吧。
 
+Dim Shared strLog As StringW = ""
+
 '[FrmLog]事件 : 窗口完全显示后。
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
 Sub FrmLog_Shown(hWndForm As hWnd,UserData As Integer)
-    'TestLog
+    txtLog.Text = strLog
 End Sub
 
 

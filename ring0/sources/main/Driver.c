@@ -879,32 +879,43 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
 		break;
     case IOCTL_EnumMiniFilter:
+    {
         static PMINIFILTER_OBJECT pMiniFilters = NULL;
         static ULONG num2 = 0;
 
-        if (pOutputData != NULL && OutputDataLength >= sizeof(MINIFILTER_OBJECT) * num2)
+        ULONG need = 0;
+
+        // =========================
+        // 第一次：只获取大小
+        // =========================
+        num2 = EnumMiniFilter(&pMiniFilters, &need);
+
+        if (!pMiniFilters || need == 0)
         {
-            //memset(Callbacks, 0, sizeof(Callbacks));
-            Information = sizeof(MINIFILTER_OBJECT) * num2;
-            memcpy(pOutputData, pMiniFilters, Information);
-            if (pMiniFilters != NULL) ExFreePoolWithTag(pMiniFilters, 'mfin');
-            //DbgPrint("GetHotkeyInfo status = %X", GetHotkeyInfo());
-            status = STATUS_SUCCESS;
+            status = STATUS_UNSUCCESSFUL;
+            break;
         }
-        else
+
+        // =========================
+        // buffer 不够
+        // =========================
+        if (!pOutputData ||
+            OutputDataLength < sizeof(MINIFILTER_OBJECT) * need)
         {
-            pMiniFilters = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(MINIFILTER_OBJECT) * 64, 'mfin');
-            if (pMiniFilters == NULL)
-            {
-                status = STATUS_INSUFFICIENT_RESOURCES;
-                break;
-            }
-            num2 = EnumMiniFilter(pMiniFilters);
-            DbgPrint("num2:%d", num2);
-            Information = sizeof(MINIFILTER_OBJECT) * num2;
-            status = STATUS_SUCCESS;
+            Information = sizeof(MINIFILTER_OBJECT) * need;
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
         }
+
+        // =========================
+        // 直接返回 cache
+        // =========================
+        Information = sizeof(MINIFILTER_OBJECT) * need;
+        memcpy(pOutputData, pMiniFilters, Information);
+
+        status = STATUS_SUCCESS;
         break;
+    }
     case IOCTL_GetGDT:
         static PGDT_INFO pGdtInfo = NULL;
         static ULONG num3 = 0;

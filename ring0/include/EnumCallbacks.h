@@ -317,7 +317,7 @@ typedef struct _WFP_FILTER_INFO {
 
 NTSTATUS ControlCallback(PVOID pCallbackFunc, PUCHAR OldCode, BOOLEAN Status);
 NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo);
-ULONG EnumMiniFilter(PMINIFILTER_OBJECT pArray);
+ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount);
 
 ULONG EnumCallbacks(PCallbackInfo* pArray);
 

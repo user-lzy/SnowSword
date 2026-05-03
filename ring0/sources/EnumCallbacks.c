@@ -1,8 +1,25 @@
 ﻿#pragma once
 #include "EnumCallbacks.h"
 #include "Symbol.h"
-//#include <ntddk.h>
-//#include <fwpmk.h>
+
+typedef struct _FLT_FILTER_OFFSETS {
+	LONG Operations;
+	LONG Name;
+	LONG Altitude;
+	LONG DriverObject;
+	LONG FilterUnload;
+	LONG InstanceSetup;
+	LONG InstanceQueryTeardown;
+	LONG InstanceTeardownStart;
+	LONG InstanceTeardownComplete;
+	LONG PreVolumeMount;
+	LONG PostVolumeMount;
+	LONG GenerateFileName;
+	LONG NormalizeNameComponent;
+	LONG NormalizeNameComponentEx;
+	LONG NormalizeContextCleanup;
+	BOOLEAN Valid;
+} FLT_FILTER_OFFSETS, * PFLT_FILTER_OFFSETS;
 
 //=============================================================================
 // 版本适配配置
@@ -460,228 +477,282 @@ NTSTATUS ControlCallback(PVOID pCallbackFunc, PUCHAR OldCode, BOOLEAN Status)
 	return status;
 }
 
-ULONG EnumMiniFilter(PMINIFILTER_OBJECT Array)
+static BOOLEAN ResolveFltFilterOffsets(PFLT_FILTER_OFFSETS Offsets)
 {
+	NTSTATUS status;
+	RtlZeroMemory(Offsets, sizeof(*Offsets));
+
+#define QUERY(member, field) \
+    status = KernelQueryStructOffset(L"fltmgr.sys", L"_FLT_FILTER", member, &Offsets->field); \
+    if (!NT_SUCCESS(status)) goto fail;
+
+	QUERY(L"Operations", Operations);
+	QUERY(L"Name", Name);
+	QUERY(L"DefaultAltitude", Altitude);
+	QUERY(L"DriverObject", DriverObject);
+	QUERY(L"FilterUnload", FilterUnload);
+	QUERY(L"InstanceSetup", InstanceSetup);
+	QUERY(L"InstanceQueryTeardown", InstanceQueryTeardown);
+	QUERY(L"InstanceTeardownStart", InstanceTeardownStart);
+	QUERY(L"InstanceTeardownComplete", InstanceTeardownComplete);
+	QUERY(L"PreVolumeMount", PreVolumeMount);
+	QUERY(L"PostVolumeMount", PostVolumeMount);
+	QUERY(L"GenerateFileName", GenerateFileName);
+	QUERY(L"NormalizeNameComponent", NormalizeNameComponent);
+	QUERY(L"NormalizeNameComponentEx", NormalizeNameComponentEx);
+	QUERY(L"NormalizeContextCleanup", NormalizeContextCleanup);
+
+#undef QUERY
+
+	Offsets->Valid = TRUE;
+	return TRUE;
+
+fail:
+	DbgPrint("Symbol offset resolve failed, fallback to hardcode\n");
+	return FALSE;
+}
+
+static VOID FallbackFltOffsets(PFLT_FILTER_OFFSETS Offsets)
+{
+	RTL_OSVERSIONINFOEXW OSVersion = { 0 };
+	OSVersion.dwOSVersionInfoSize = sizeof(OSVersion);
+	RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
+
+	if (OSVersion.dwMajorVersion >= 10 && OSVersion.dwBuildNumber >= 26100) {
+
+		Offsets->Operations = 0x1B0;
+		Offsets->Name = 0x40;
+		Offsets->Altitude = 0x50;
+		Offsets->DriverObject = 0x68;
+		Offsets->FilterUnload = 0x108;
+		Offsets->InstanceSetup = 0x110;
+		Offsets->InstanceQueryTeardown = 0x118;
+		Offsets->InstanceTeardownStart = 0x120;
+		Offsets->InstanceTeardownComplete = 0x128;
+		Offsets->PreVolumeMount = 0x170;
+		Offsets->PostVolumeMount = 0x178;
+		Offsets->GenerateFileName = 0x180;
+		Offsets->NormalizeNameComponent = 0x188;
+		Offsets->NormalizeNameComponentEx = 0x190;
+		Offsets->NormalizeContextCleanup = 0x198;
+
+	}
+	else {
+
+		Offsets->Operations = 0x1A8;
+		Offsets->Name = 0x38;
+		Offsets->Altitude = 0x48;
+		Offsets->DriverObject = 0x60;
+		Offsets->FilterUnload = 0x100;
+		Offsets->InstanceSetup = 0x108;
+		Offsets->InstanceQueryTeardown = 0x110;
+		Offsets->InstanceTeardownStart = 0x118;
+		Offsets->InstanceTeardownComplete = 0x120;
+		Offsets->PreVolumeMount = 0x168;
+		Offsets->PostVolumeMount = 0x170;
+		Offsets->GenerateFileName = 0x178;
+		Offsets->NormalizeNameComponent = 0x180;
+		Offsets->NormalizeNameComponentEx = 0x188;
+		Offsets->NormalizeContextCleanup = 0x190;
+	}
+
+	Offsets->Valid = TRUE;
+}
+
+ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount)
+{
+	static FLT_FILTER_OFFSETS gOffsets;
+	static BOOLEAN gOffsetsInit = FALSE;
+
+	static PMINIFILTER_OBJECT gCache = NULL;
+	static ULONG gCacheCount = 0;
+	static BOOLEAN gValid = FALSE;
+
 	ULONG maxNum = 64;
 	ULONG ulFilterListSize = 0;
 	PFLT_FILTER* ppFilterList = NULL;
 	ULONG i = 0;
-	NTSTATUS status = STATUS_SUCCESS;
-	LONG lOperationsOffset = 0;
-	PFLT_OPERATION_REGISTRATION pFltOperationRegistration = NULL;
+	NTSTATUS status;
 
-	// 获取 Minifilter 过滤器Filter 的数量
-	FltEnumerateFilters(NULL, 0, &ulFilterListSize);
+	PFLT_OPERATION_REGISTRATION op = NULL;
 
-	// 申请内存
-	ppFilterList = (PFLT_FILTER*)ExAllocatePool2(POOL_FLAG_NON_PAGED, ulFilterListSize * sizeof(PFLT_FILTER), 'cbin');
-	if (NULL == ppFilterList)
-	{
-		DbgPrint("ExAllocatePool2 failed");
+	if (!InOutCount)
 		return 0;
+
+	// =========================
+	// ✔ 使用缓存（核心）
+	// =========================
+	if (gValid && gCache)
+	{
+		*Array = gCache;
+		*InOutCount = gCacheCount;
+		return gCacheCount;
 	}
 
-	// 获取 Minifilter 中所有过滤器Filter 的信息
+	// =========================
+	// 获取 filter 数量
+	// =========================
+	FltEnumerateFilters(NULL, 0, &ulFilterListSize);
+
+	ppFilterList = (PFLT_FILTER*)ExAllocatePool2(
+		POOL_FLAG_NON_PAGED,
+		ulFilterListSize * sizeof(PFLT_FILTER),
+		'cbin'
+	);
+
+	if (!ppFilterList)
+		return 0;
+
 	status = FltEnumerateFilters(ppFilterList, ulFilterListSize, &ulFilterListSize);
 	if (!NT_SUCCESS(status))
 	{
-		DbgPrint("FltEnumerateFilters failed, status: 0x%X", status);
 		ExFreePoolWithTag(ppFilterList, 'cbin');
 		return 0;
 	}
 
-	DbgPrint("过滤器数量: %d \n", ulFilterListSize);
+	// =========================
+	// 初始化 offsets（你已有逻辑，这里略）
+	// =========================
+	FLT_FILTER_OFFSETS Offsets;
+	if (!gOffsetsInit)
+	{
+		if (!ResolveFltFilterOffsets(&gOffsets))
+			FallbackFltOffsets(&gOffsets);
 
-	// 获取 PFLT_FILTER 中 Operations 偏移
-	RTL_OSVERSIONINFOEXW OSVersion = { 0 };
-	OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
-	RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
+		gOffsetsInit = TRUE;
+	}
+	Offsets = gOffsets;
 
-	ULONG NameOffset, AltitudeOffset, DriverObjectOffset, FilterUnloadOffset, InstanceSetupOffset, 
-		InstanceQueryTeardownOffset, InstanceTeardownStartOffset, 
-		InstanceTeardownCompleteOffset, PreVolumeMountOffset, PostVolumeMountOffset, GenerateFileNameOffset,
-		NormalizeNameComponentOffset, NormalizeNameComponentExOffset, NormalizeContextCleanupOffset;
-	
-	ULONG64 addr = 0;
-	status = STATUS_SUCCESS;
-	//status = KernelQueryStructOffset(L"
-	DbgPrint("Symbol failed, fallback to pattern scan\n");
-	// -------------------------------------------
+	// =========================
+	// 分配 cache（一次性）
+	// =========================
+	PMINIFILTER_OBJECT cache =
+		ExAllocatePool2(POOL_FLAG_NON_PAGED,
+			sizeof(MINIFILTER_OBJECT) * ulFilterListSize,
+			'mfin');
 
-	//else{
-		if (OSVersion.dwMajorVersion >= 10 && OSVersion.dwBuildNumber >= 26100) {
-			/*
-			lkd> dt fltmgr!_FLT_FILTER
-			+0x000 Base             : _FLT_OBJECT
-			+0x038 Frame            : Ptr64 _FLTP_FRAME
-			+0x040 Name             : _UNICODE_STRING
-			+0x050 DefaultAltitude  : _UNICODE_STRING
-			+0x060 Flags            : _FLT_FILTER_FLAGS
-			+0x068 DriverObject     : Ptr64 _DRIVER_OBJECT
-			+0x070 InstanceList     : _FLT_RESOURCE_LIST_HEAD
-			+0x0f0 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
-			+0x0f8 VerifiedFiltersLink : _LIST_ENTRY
-			+0x108 FilterUnload     : Ptr64     long
-			+0x110 InstanceSetup    : Ptr64     long
-			+0x118 InstanceQueryTeardown : Ptr64     long
-			+0x120 InstanceTeardownStart : Ptr64     void
-			+0x128 InstanceTeardownComplete : Ptr64     void
-			+0x130 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
-			+0x138 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
-			+0x170 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
-			+0x178 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
-			+0x180 GenerateFileName : Ptr64     long
-			+0x188 NormalizeNameComponent : Ptr64     long
-			+0x190 NormalizeNameComponentEx : Ptr64     long
-			+0x198 NormalizeContextCleanup : Ptr64     void
-			*/
-			// Windows 11及以上，使用对应偏移
-			lOperationsOffset = 0x1B0;
-			NameOffset = 0x40;
-			AltitudeOffset = 0x50;
-			DriverObjectOffset = 0x68;
-			FilterUnloadOffset = 0x108;
-			InstanceSetupOffset = 0x110;
-			InstanceQueryTeardownOffset = 0x118;
-			InstanceTeardownStartOffset = 0x120;
-			InstanceTeardownCompleteOffset = 0x128;
-			PreVolumeMountOffset = 0x170;
-			PostVolumeMountOffset = 0x178;
-			GenerateFileNameOffset = 0x180;
-			NormalizeNameComponentOffset = 0x188;
-			NormalizeNameComponentExOffset = 0x190;
-			NormalizeContextCleanupOffset = 0x198;
-
-			DbgPrint("win11");
-		}
-		else {
-			/*
-			lkd> dt fltmgr!_FLT_FILTER
-			+0x000 Base             : _FLT_OBJECT
-			+0x030 Frame            : Ptr64 _FLTP_FRAME
-			+0x038 Name             : _UNICODE_STRING
-			+0x048 DefaultAltitude  : _UNICODE_STRING
-			+0x058 Flags            : _FLT_FILTER_FLAGS
-			+0x060 DriverObject     : Ptr64 _DRIVER_OBJECT
-			+0x068 InstanceList     : _FLT_RESOURCE_LIST_HEAD
-			+0x0e8 VerifierExtension : Ptr64 _FLT_VERIFIER_EXTENSION
-			+0x0f0 VerifiedFiltersLink : _LIST_ENTRY
-			+0x100 FilterUnload     : Ptr64     long
-			+0x108 InstanceSetup    : Ptr64     long
-			+0x110 InstanceQueryTeardown : Ptr64     long
-			+0x118 InstanceTeardownStart : Ptr64     void
-			+0x120 InstanceTeardownComplete : Ptr64     void
-			+0x128 SupportedContextsListHead : Ptr64 _ALLOCATE_CONTEXT_HEADER
-			+0x130 SupportedContexts : [7] Ptr64 _ALLOCATE_CONTEXT_HEADER
-			+0x168 PreVolumeMount   : Ptr64     _FLT_PREOP_CALLBACK_STATUS
-			+0x170 PostVolumeMount  : Ptr64     _FLT_POSTOP_CALLBACK_STATUS
-			+0x178 GenerateFileName : Ptr64     long
-			+0x180 NormalizeNameComponent : Ptr64     long
-			+0x188 NormalizeNameComponentEx : Ptr64     long
-			+0x190 NormalizeContextCleanup : Ptr64     void
-			*/
-			// 旧版本偏移
-			lOperationsOffset = 0x1A8;
-			NameOffset = 0x38;
-			AltitudeOffset = 0x48;
-			DriverObjectOffset = 0x60;
-			FilterUnloadOffset = 0x100;
-			InstanceSetupOffset = 0x108;
-			InstanceQueryTeardownOffset = 0x110;
-			InstanceTeardownStartOffset = 0x118;
-			InstanceTeardownCompleteOffset = 0x120;
-			PreVolumeMountOffset = 0x168;
-			PostVolumeMountOffset = 0x170;
-			GenerateFileNameOffset = 0x178;
-			NormalizeNameComponentOffset = 0x180;
-			NormalizeNameComponentExOffset = 0x188;
-			NormalizeContextCleanupOffset = 0x190;
-
-			DbgPrint("win10");
-			//DbgPrint("暂不支持的系统版本!");
-			//return 0;
-		}
-	//}
-	if (!Array) {
-		DbgPrint("无效Array!");
+	if (!cache)
+	{
+		ExFreePoolWithTag(ppFilterList, 'cbin');
 		return 0;
 	}
 
-	// 开始遍历 Minifilter
+	// =========================
+	// 枚举
+	// =========================
 	for (i = 0; i < ulFilterListSize; i++)
 	{
-		// 获取 PFLT_FILTER 中 Operations 成员地址
-		pFltOperationRegistration = (PFLT_OPERATION_REGISTRATION)(*(PVOID*)((PUCHAR)ppFilterList[i] + lOperationsOffset));
-
 		__try
 		{
-			if (i > maxNum) { // 重新分配
-				DbgPrint("过滤器数量过多，重新分配内存");
-				PMINIFILTER_OBJECT pNewArray = (PMINIFILTER_OBJECT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(MINIFILTER_OBJECT) * (maxNum + 64), 'mfin');
-				if (pNewArray) {
-					memcpy(pNewArray, Array, sizeof(MINIFILTER_OBJECT) * maxNum);
-					ExFreePoolWithTag(Array, 'mfin');
-					Array = pNewArray;
-					maxNum += 64;
-				}
-				else {
-					DbgPrint("重新分配内存失败");
-					break;
+			PUCHAR base = (PUCHAR)ppFilterList[i];
+
+			cache[i].hFilter = ppFilterList[i];
+
+			RtlStringCbCopyUnicodeString(
+				cache[i].Name,
+				sizeof(cache[i].Name),
+				(PUNICODE_STRING)(base + Offsets.Name)
+			);
+
+			RtlStringCbCopyUnicodeString(
+				cache[i].Altitude,
+				sizeof(cache[i].Altitude),
+				(PUNICODE_STRING)(base + Offsets.Altitude)
+			);
+
+			PDRIVER_OBJECT drv =
+				*(PDRIVER_OBJECT*)(base + Offsets.DriverObject);
+
+			if (drv && drv->DriverSection)
+			{
+				PLDR_DATA_TABLE_ENTRY ldr =
+					(PLDR_DATA_TABLE_ENTRY)drv->DriverSection;
+
+				if (ldr->FullDllName.Buffer)
+				{
+					RtlStringCbCopyW(
+						cache[i].Path,
+						sizeof(cache[i].Path),
+						ldr->FullDllName.Buffer
+					);
 				}
 			}
-			Array[i].hFilter = ppFilterList[i];
-			
-			PDRIVER_OBJECT pDriverObject = *(PDRIVER_OBJECT*)((PUCHAR)ppFilterList[i] + DriverObjectOffset);
-			RtlStringCbCopyUnicodeString(Array[i].Name, sizeof(Array[i].Name), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + NameOffset));
-			// 获取驱动路径
-			PLDR_DATA_TABLE_ENTRY pLdr = (PLDR_DATA_TABLE_ENTRY)pDriverObject->DriverSection;
-			RtlStringCbCopyW(Array[i].Path, sizeof(Array[i].Path), pLdr->FullDllName.Buffer);
-			RtlStringCbCopyUnicodeString(Array[i].Altitude, sizeof(Array[i].Altitude), (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + AltitudeOffset));
-			Array[i].hFilter = ppFilterList[i];
-			
-			DbgPrint("DriverName:%wZ, hFilter:0x%p, Altitude:%wS", (PUNICODE_STRING)((PUCHAR)ppFilterList[i] + NameOffset), Array[i].hFilter, Array[i].Altitude);
-			
-			Array[i].FilterFunc[0] = *(PVOID*)((PUCHAR)ppFilterList[i] + FilterUnloadOffset);
-			Array[i].FilterFunc[1] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceSetupOffset);
-			Array[i].FilterFunc[2] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceQueryTeardownOffset);
-			Array[i].FilterFunc[3] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceTeardownStartOffset);
-			Array[i].FilterFunc[4] = *(PVOID*)((PUCHAR)ppFilterList[i] + InstanceTeardownCompleteOffset);
-			Array[i].FilterFunc[5] = *(PVOID*)((PUCHAR)ppFilterList[i] + PreVolumeMountOffset);
-			Array[i].FilterFunc[6] = *(PVOID*)((PUCHAR)ppFilterList[i] + PostVolumeMountOffset);
-			Array[i].FilterFunc[7] = *(PVOID*)((PUCHAR)ppFilterList[i] + GenerateFileNameOffset);
-			Array[i].FilterFunc[8] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeNameComponentOffset);
-			Array[i].FilterFunc[9] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeNameComponentExOffset);
-			Array[i].FilterFunc[10] = *(PVOID*)((PUCHAR)ppFilterList[i] + NormalizeContextCleanupOffset);
 
-			Array[i].bMajorFunction = TRUE;
-			// 同一过滤器下的回调信息
-			while (IRP_MJ_OPERATION_END != pFltOperationRegistration->MajorFunction)
+			// callbacks
+			cache[i].FilterFunc[0] = *(PVOID*)(base + Offsets.FilterUnload);
+			cache[i].FilterFunc[1] = *(PVOID*)(base + Offsets.InstanceSetup);
+			cache[i].FilterFunc[2] = *(PVOID*)(base + Offsets.InstanceQueryTeardown);
+			cache[i].FilterFunc[3] = *(PVOID*)(base + Offsets.InstanceTeardownStart);
+			cache[i].FilterFunc[4] = *(PVOID*)(base + Offsets.InstanceTeardownComplete);
+			cache[i].FilterFunc[5] = *(PVOID*)(base + Offsets.PreVolumeMount);
+			cache[i].FilterFunc[6] = *(PVOID*)(base + Offsets.PostVolumeMount);
+			cache[i].FilterFunc[7] = *(PVOID*)(base + Offsets.GenerateFileName);
+			cache[i].FilterFunc[8] = *(PVOID*)(base + Offsets.NormalizeNameComponent);
+			cache[i].FilterFunc[9] = *(PVOID*)(base + Offsets.NormalizeNameComponentEx);
+			cache[i].FilterFunc[10] = *(PVOID*)(base + Offsets.NormalizeContextCleanup);
+
+			op = *(PFLT_OPERATION_REGISTRATION*)(base + Offsets.Operations);
+
+			cache[i].bMajorFunction = TRUE;
+
+			ULONG safe = 0;
+
+			while (op && safe < 0x80)
 			{
-				DbgPrint("Filter: %p | IRP: %d | PreFunc: 0x%p | PostFunc=0x%p \n", ppFilterList[i], pFltOperationRegistration->MajorFunction,
-						pFltOperationRegistration->PreOperation, pFltOperationRegistration->PostOperation);
-				 Array[i].MajorFunction[pFltOperationRegistration->MajorFunction].PreOperation = (PVOID)pFltOperationRegistration->PreOperation;
-				 Array[i].MajorFunction[pFltOperationRegistration->MajorFunction].PostOperation = (PVOID)pFltOperationRegistration->PostOperation;
+				UCHAR mj = op->MajorFunction;
 
-				// 获取下一个消息回调信息
-				pFltOperationRegistration = (PFLT_OPERATION_REGISTRATION)((PUCHAR)pFltOperationRegistration + sizeof(FLT_OPERATION_REGISTRATION));
+				if (mj == IRP_MJ_OPERATION_END)
+					break;
+
+				if (mj < IRP_MJ_MAXIMUM_FUNCTION)
+				{
+					cache[i].MajorFunction[mj].PreOperation =
+						(PVOID)op->PreOperation;
+
+					cache[i].MajorFunction[mj].PostOperation =
+						(PVOID)op->PostOperation;
+				}
+
+				op = (PFLT_OPERATION_REGISTRATION)
+					((PUCHAR)op + sizeof(FLT_OPERATION_REGISTRATION));
+
+				safe++;
 			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
-			DbgPrint("Exception1: 0x%X", GetExceptionCode());
-			Array[i].bMajorFunction = FALSE;
+			cache[i].bMajorFunction = FALSE;
 		}
-		// 释放hFilter引用
+
 		FltObjectDereference(ppFilterList[i]);
 	}
-	// 释放内存
+
 	ExFreePoolWithTag(ppFilterList, 'cbin');
-	ppFilterList = NULL;
-	return (i + 1);
+
+	// =========================
+	// 写入 cache
+	// =========================
+	gCache = cache;
+	gCacheCount = i;
+	gValid = TRUE;
+
+	*Array = gCache;
+	*InOutCount = gCacheCount;
+
+	return gCacheCount;
 }
 
 PVOID FindKeBugCheckCallbackListHead()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"KeBugCheckCallbackListHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: KeBugCheckCallbackListHead=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING KeRegisterBugCheckCallbackName = RTL_CONSTANT_STRING(L"KeRegisterBugCheckCallback");
 	PVOID KeRegisterBugCheckCallbackAddr = MmGetSystemRoutineAddress(&KeRegisterBugCheckCallbackName);
 	if (NULL == KeRegisterBugCheckCallbackAddr)
@@ -720,6 +791,15 @@ PVOID FindKeBugCheckCallbackListHead()
 
 PVOID FindKeBugCheckReasonCallbackListHead()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"KeBugCheckReasonCallbackListHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: KeBugCheckReasonCallbackListHead=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING KeRegisterBugCheckReasonCallbackName = RTL_CONSTANT_STRING(L"KeRegisterBugCheckReasonCallback");
 	PVOID KeRegisterBugCheckReasonCallbackAddr = MmGetSystemRoutineAddress(&KeRegisterBugCheckReasonCallbackName);
 	if (NULL == KeRegisterBugCheckReasonCallbackAddr)
@@ -762,6 +842,15 @@ PVOID FindKeBugCheckReasonCallbackListHead()
 
 PVOID FindPspLegoNotifyRoutine()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PspLegoNotifyRoutine", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PspLegoNotifyRoutine=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING PsSetLegoNotifyRoutineName = RTL_CONSTANT_STRING(L"PsSetLegoNotifyRoutine");
 	PVOID PsSetLegoNotifyRoutineAddr = MmGetSystemRoutineAddress(&PsSetLegoNotifyRoutineName);
 	if (NULL == PsSetLegoNotifyRoutineAddr)
@@ -800,6 +889,24 @@ PVOID FindPspLegoNotifyRoutine()
 
 VOID FindIopNotifyShutdownQueueHead(PVOID* pIopNotifyShutdownQueueHead, PVOID* pIopNotifyLastChanceShutdownQueueHead)
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"IopNotifyShutdownQueueHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: IopNotifyShutdownQueueHead=%p\n", (PVOID)addr);
+		*pIopNotifyShutdownQueueHead = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"IopNotifyLastChanceShutdownQueueHead", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: IopNotifyLastChanceShutdownQueueHead=%p\n", (PVOID)addr);
+			*pIopNotifyLastChanceShutdownQueueHead = (PVOID)addr;
+			return;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING IoRegisterShutdownNotificationName = RTL_CONSTANT_STRING(L"IoRegisterShutdownNotification");
 	PVOID IoRegisterShutdownNotificationAddr = MmGetSystemRoutineAddress(&IoRegisterShutdownNotificationName);
 	if (NULL == IoRegisterShutdownNotificationAddr)
@@ -863,6 +970,24 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 	OUT PVOID* ExHead
 )
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"SeFileSystemNotifyRoutinesHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: SeFileSystemNotifyRoutinesHead=%p\n", (PVOID)addr);
+		*NormalHead = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"SeFileSystemNotifyRoutinesExHead", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: SeFileSystemNotifyRoutinesExHead=%p\n", (PVOID)addr);
+			*ExHead = (PVOID)addr;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	PUCHAR pFunc = NULL;
 	PUCHAR pSearch = NULL;
 	ULONG offset = 0;
@@ -906,37 +1031,28 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 }
 
 // ============================================================================
-// 1. 查找设备类通知的桶数组和锁
-// ============================================================================
-//NTSTATUS FindDeviceClassNotifyInfo(PDEVICE_CLASS_NOTIFY_INFO pInfo) {
-//	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
-//	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
-//
-//	// 特征码：48 8D 0D ?? ?? ?? ?? E8  (lea rcx, [PnpDeviceClassNotifyLock]; call ExAcquireFastMutex)
-//	UCHAR patternLock[] = { 0x48, 0x8D, 0x0D, 0xCC, 0xCC, 0xCC, 0xCC, 0xE8 };
-//	UCHAR maskLock[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01 };
-//	PVOID pLockIns = SearchSpecialCodeWithMask((PUCHAR)IoRegisterPlugPlayNotificationAddr + 0x180, 0x100, patternLock, maskLock, sizeof(patternLock));
-//	//DbgPrint("pLockIns:0x%p", pLockIns);
-//	if (!pLockIns) return STATUS_NOT_FOUND;
-//
-//	pInfo->Lock = (PFAST_MUTEX)CALCULATE_RIP_TARGET(pLockIns, 7);
-//
-//	// 在锁指令附近向后搜索桶数组基址：48 8D 15 ?? ?? ?? ??
-//	UCHAR patternList[] = { 0x48, 0x8D, 0x15, 0xCC, 0xCC, 0xCC, 0xCC };
-//	UCHAR maskList[] = { 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 };
-//	PVOID pListIns = SearchSpecialCodeWithMask((PUCHAR)pLockIns, 0x100, patternList, maskList, sizeof(patternList));
-//	//DbgPrint("pListIns:0x%p", pListIns);
-//	if (!pListIns) return STATUS_NOT_FOUND;
-//
-//	pInfo->Buckets = (PLIST_ENTRY)CALCULATE_RIP_TARGET(pListIns, 7);
-//	pInfo->NumBuckets = 13;   // 反汇编推导：模13哈希
-//	return STATUS_SUCCESS;
-//}
-
-// ============================================================================
 // 1. 查找设备类通知信息（Win11原逻辑100%保留，新增Win10兼容分支）
 // ============================================================================
 NTSTATUS FindDeviceClassNotifyInfo(PDEVICE_CLASS_NOTIFY_INFO pInfo) {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PnpDeviceClassNotifyList", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PnpDeviceClassNotifyList=%p\n", (PVOID)addr);
+		pInfo->Buckets = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"PnpDeviceClassNotifyLock", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: PnpDeviceClassNotifyLock=%p\n", (PVOID)addr);
+			pInfo->Lock = (PVOID)addr;
+			pInfo->NumBuckets = 13;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	RtlZeroMemory(pInfo, sizeof(DEVICE_CLASS_NOTIFY_INFO));
 	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
 	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
@@ -994,6 +1110,24 @@ NTSTATUS FindDeviceClassNotifyInfo(PDEVICE_CLASS_NOTIFY_INFO pInfo) {
 // 2. 查找硬件配置文件通知信息（Win11原逻辑100%保留，新增Win10兼容分支）
 // ============================================================================
 NTSTATUS FindHwProfileNotifyInfo(PHWPROFILE_NOTIFY_INFO pInfo) {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"PnpProfileNotifyList", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: PnpProfileNotifyList=%p\n", (PVOID)addr);
+		pInfo->ListHead = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"PnpHwProfileNotifyLock", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: PnpHwProfileNotifyLock=%p\n", (PVOID)addr);
+			pInfo->Lock = (PVOID)addr;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	RtlZeroMemory(pInfo, sizeof(HWPROFILE_NOTIFY_INFO));
 	PVOID IoRegisterPlugPlayNotificationAddr = KernelGetProcAddress("ntoskrnl.exe", "IoRegisterPlugPlayNotification");
 	if (!IoRegisterPlugPlayNotificationAddr) return STATUS_DLL_NOT_FOUND;
@@ -1065,6 +1199,15 @@ NTSTATUS FindHwProfileNotifyInfo(PHWPROFILE_NOTIFY_INFO pInfo) {
 
 PVOID FindIopFsNotifyChangeQueueHead()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"IopFsNotifyChangeQueueHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: IopFsNotifyChangeQueueHead=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING IoRegisterFsRegistrationChangeName = RTL_CONSTANT_STRING(L"IoRegisterFsRegistrationChange");
 	PVOID IoRegisterFsRegistrationChangeAddr = MmGetSystemRoutineAddress(&IoRegisterFsRegistrationChangeName);
 	if (NULL == IoRegisterFsRegistrationChangeAddr)
@@ -1127,6 +1270,24 @@ PVOID FindIopFsNotifyChangeQueueHead()
 
 BOOLEAN FindExpCallbackList(PVOID* pListHead, PEX_PUSH_LOCK* pListLock)
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"ExpCallbackListHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: ExpCallbackListHead=%p\n", (PVOID)addr);
+		pListHead = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"ExpCallbackListLock", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: ExpCallbackListLock=%p\n", (PVOID)addr);
+			*pListLock = (PVOID)addr;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UCHAR pSpecialCode[3] = { 0x48,0x89,0x0d };
 	if (!IsWindows11OrGreater()) pSpecialCode[2] = 0x05;
 
@@ -1185,43 +1346,6 @@ BOOLEAN FindExpCallbackList(PVOID* pListHead, PEX_PUSH_LOCK* pListLock)
 	return TRUE;
 }
 
-//PEX_PUSH_LOCK FindExpCallbackListLock()
-//{
-//	/*
-//	fffff807`9b072326 488bce          mov     rcx,rsi
-//	fffff807`9b072329 e88607a7ff      call    nt!ExpUnlockCallbackListExclusive (fffff807`9aae2ab4)
-//	*/
-//	UCHAR pSpecialCode[4] = { 0x48,0x8b,0xce,0xe8 };
-//	PVOID result = SearchSpecialCode((PUCHAR)ExCreateCallback, 0x150, pSpecialCode, 4);
-//	if (NULL == result)
-//	{
-//		DbgPrint("ExpUnlockCallbackListExclusive is NULL");
-//		return NULL;
-//	}
-//	// 计算目标地址
-//	LONG offset = *(PLONG)((PUCHAR)result + 4);
-//	PVOID ExpUnlockCallbackListExclusive = (PVOID)((PUCHAR)result + 8 + offset);
-//	DbgPrint("ExpUnlockCallbackListExclusive:0x%p", ExpUnlockCallbackListExclusive);
-//
-//	/*
-//	fffff807`9aae2abd 0f0d0dfc77a100  prefetchw [nt!ExpCallbackListLock (fffff807`9b4fa2c0)]
-//	*/
-//	pSpecialCode[0] = 0x0f;
-//	pSpecialCode[1] = 0x0d;
-//	pSpecialCode[2] = 0x0d;
-//	result = SearchSpecialCode((PUCHAR)ExpUnlockCallbackListExclusive, 0x50, pSpecialCode, 3);
-//	if (NULL == result)
-//	{
-//		DbgPrint("ExpCallbackListLock is NULL");
-//		return NULL;
-//	}
-//
-//	// 计算目标地址
-//	ULONG offset2 = *(PULONG)((PUCHAR)result + 3);
-//	DbgPrint("ExpCallbackListLock:0x%p", (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2));
-//	return (PEX_PUSH_LOCK)((PUCHAR)result + 7 + offset2);
-//}
-
 // ==============================
 // 【核心实现】查找 NMI 回调链表 + 自旋锁
 // 严格匹配你提供的反汇编指令
@@ -1231,6 +1355,24 @@ NTSTATUS FindKiNmiCallbackList(
 	OUT PKSPIN_LOCK* KiNmiCallbackListLock
 )
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"KiNmiCallbackListHead", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: KiNmiCallbackListHead=%p\n", (PVOID)addr);
+		*KiNmiCallbackListHead = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"KiNmiCallbackListLock", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: KiNmiCallbackListLock=%p\n", (PVOID)addr);
+			*KiNmiCallbackListLock = (PVOID)addr;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING FuncName = RTL_CONSTANT_STRING(L"KeRegisterNmiCallback");
 	PUCHAR pFunc = MmGetSystemRoutineAddress(&FuncName);
 
@@ -1276,6 +1418,24 @@ NTSTATUS FindDbgPrintCallbackInfo(OUT PDBG_PRINT_INFO pInfo)
 {
 	if (!pInfo) return STATUS_INVALID_PARAMETER;
 
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"RtlpDebugPrintCallbackList", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: RtlpDebugPrintCallbackList=%p\n", (PVOID)addr);
+		pInfo->CallbackList = (PVOID)addr;
+
+		status = GetNtSymbolAddress(L"RtlpDebugPrintCallbackLock", &addr);
+		if (status == STATUS_SUCCESS && addr)
+		{
+			DbgPrint("Symbol: RtlpDebugPrintCallbackLock=%p\n", (PVOID)addr);
+			pInfo->CallbackLock = (PVOID)addr;
+			return STATUS_SUCCESS;
+		}
+
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	// 1. 获取导出函数 DbgSetDebugPrintCallback
 	UNICODE_STRING funcName = RTL_CONSTANT_STRING(L"DbgSetDebugPrintCallback");
 	PUCHAR pDbgSet = MmGetSystemRoutineAddress(&funcName);
@@ -1308,8 +1468,17 @@ NTSTATUS FindDbgPrintCallbackInfo(OUT PDBG_PRINT_INFO pInfo)
 }
 
 // 搜索 KiBoundsCallback 全局指针
-PVOID FindKiBoundsCallback(VOID)
+PVOID FindKiBoundsCallback()
 {
+	ULONG64 addr = 0;
+	NTSTATUS status = GetNtSymbolAddress(L"KiBoundsCallback", &addr);
+	if (status == STATUS_SUCCESS && addr)
+	{
+		DbgPrint("Symbol: KiBoundsCallback=%p\n", (PVOID)addr);
+		return (PVOID)addr;
+	}
+	DbgPrint("Symbol failed, fallback to pattern scan\n");
+	// -------------------------------------------
 	UNICODE_STRING FuncName = RTL_CONSTANT_STRING(L"KeRegisterBoundCallback");
 	PUCHAR pFunc = (PUCHAR)MmGetSystemRoutineAddress(&FuncName);
 	if (!pFunc)
@@ -1322,10 +1491,10 @@ PVOID FindKiBoundsCallback(VOID)
 		return NULL;
 
 	LONG offset = *(PLONG)(pPos + 3);
-	PVOID addr = (PVOID)(pPos + 7 + offset);
+	addr = (ULONG64)(pPos + 7 + offset);
 
-	DbgPrint("[+] KiBoundsCallback = %p\n", addr);
-	return addr;
+	DbgPrint("[+] KiBoundsCallback = %llx\n", addr);
+	return (PVOID)addr;
 }
 
 // 4字节Tag转可读字符串（如 0x6C6C6143 → "llaC"）
@@ -1574,14 +1743,19 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 	ULONG64 CallbackListOffset = 0;
 
 	// 判断操作系统版本
-	RTL_OSVERSIONINFOEXW OSVersion = { 0 };
-	OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
-	RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
+	if (GetNtStructOffset(L"_OBJECT_TYPE", L"CallbackList", &CallbackListOffset) == STATUS_SUCCESS) {
+		DbgPrint("Found CallbackList offset from PDB: 0x%llx\n", CallbackListOffset);
+	}
+	else {
+		RTL_OSVERSIONINFOEXW OSVersion = { 0 };
+		OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
+		RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
 
-	if (OSVersion.dwBuildNumber >= 9200)
-		CallbackListOffset = 0xC8;
-	else if (OSVersion.dwBuildNumber >= 7600)
-		CallbackListOffset = 0xC0;
+		if (OSVersion.dwBuildNumber >= 9200)
+			CallbackListOffset = 0xC8;
+		else if (OSVersion.dwBuildNumber >= 7600)
+			CallbackListOffset = 0xC0;
+	}
 
 	//if (!pProcessType) goto 
 

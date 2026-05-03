@@ -482,6 +482,11 @@ NTSTATUS KernelQueryStructOffset(PCWSTR ModuleName, PCWSTR StructName, PCWSTR Me
     return status;
 }
 
+NTSTATUS GetNtStructOffset(PCWSTR StructName, PCWSTR MemberName, PLONG Offset)
+{
+    return KernelQueryStructOffset(L"ntoskrnl.exe", StructName, MemberName, Offset);
+}
+
 // ==============================
 // 初始化
 // ==============================

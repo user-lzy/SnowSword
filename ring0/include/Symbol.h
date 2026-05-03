@@ -91,6 +91,7 @@ NTSTATUS KernelQueryAddressToSymbol(
 );
 
 NTSTATUS GetNtSymbolAddress(PCWSTR SymbolName, PULONG64 Address);
+NTSTATUS GetNtStructOffset(PCWSTR StructName, PCWSTR MemberName, PLONG Offset);
 
 NTSTATUS InitSymbolContext(PDEVICE_OBJECT deviceObj);
 VOID UninitSymbolContext();

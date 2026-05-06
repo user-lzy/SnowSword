@@ -92,16 +92,16 @@ AcceptFiles=False
 '[FrmOtherInfo]事件 : 窗口完全显示后。
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
-Sub FrmOtherInfo_Shown(hWndForm As hWnd,UserData As Integer)
-    CurrentInformation.hListView = Me.hWnd
-    CurrentInformation.intType = UserData
+Sub FrmOtherInfo_Shown(hWndForm As hWnd, UserData As Integer)
     Me.hWndForm = hWndForm
-    CurrentPID = CurrentInformation.ProcessId
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, UserData)
+    CurrentInfo->hListView = Me.hWnd
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
     'CurrentTID = CurrentInformation.ThreadId
-    CurrentProcessName = GetNameByPath(GetProcessPath(CurrentPID))
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentPID))
     'lblNum.Caption = "正在获取..."
     
-    Select Case CurrentInformation.intType
+    Select Case CurrentInfo->intType
         Case ProcessOtherInfo
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 其他信息"
             GetProcessOtherInfo CurrentPID, txtOtherInfo

@@ -742,6 +742,361 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount)
 	return gCacheCount;
 }
 
+ /*
+  * 函数：枚举指定 Minifilter 的所有实例信息
+  * 参数：
+  *   Filter         - 目标 Minifilter 的过滤器句柄 (PFLT_FILTER)
+  *   Instances      - 输出，指向自定义结构体数组的指针；函数内部分配，调用者负责 ExFreePool
+  *   InstanceCount  - 输出，数组中的实例个数
+  * 返回值：
+  *   NTSTATUS 状态码，成功返回 STATUS_SUCCESS
+  */
+//NTSTATUS
+//EnumerateMiniFilterInstances(
+//	_In_  PFLT_FILTER              Filter,
+//	_Out_ PINSTANCE_DETAIL_INFO* Instances,
+//	_Out_ PULONG                  InstanceCount
+//)
+//{
+//	NTSTATUS status;
+//	ULONG count = 0;
+//	ULONG index = 0;
+//	ULONG bytesNeeded;
+//	PINSTANCE_DETAIL_INFO instanceArray = NULL;
+//	//FltGetInstanceInformation;
+//	PAGED_CODE();
+//
+//	*Instances = NULL;
+//	*InstanceCount = 0;
+//
+//	// 第一阶段：统计实例个数
+//	// 对每个 Index 调用，若返回 STATUS_BUFFER_TOO_SMALL 则表示该实例存在
+//	while (TRUE) {
+//		status = FltEnumerateInstanceInformationByFilter(
+//			Filter,
+//			index,
+//			InstanceFullInformation,
+//			NULL,
+//			0,
+//			&bytesNeeded
+//		);
+//
+//		if (status == STATUS_BUFFER_TOO_SMALL) {
+//			count++;
+//			index++;
+//		}
+//		else {
+//			// 返回其他错误（通常是 STATUS_NO_MORE_ENTRIES 或 STATUS_INVALID_PARAMETER）则停止
+//			break;
+//		}
+//	}
+//
+//	// 如果没有实例，直接返回成功
+//	if (count == 0) {
+//		return STATUS_SUCCESS;
+//	}
+//
+//	// 分配自定义结构体数组
+//	instanceArray = (PINSTANCE_DETAIL_INFO)ExAllocatePoolWithTag(
+//		PagedPool,
+//		count * sizeof(INSTANCE_DETAIL_INFO),
+//		'tIsF'
+//	);
+//
+//	if (instanceArray == NULL) {
+//		return STATUS_INSUFFICIENT_RESOURCES;
+//	}
+//	RtlZeroMemory(instanceArray, count * sizeof(INSTANCE_DETAIL_INFO));
+//
+//	// 第二阶段：实际获取每个实例的信息
+//	for (index = 0; index < count; index++) {
+//		// 先获取该实例所需缓冲区大小
+//		status = FltEnumerateInstanceInformationByFilter(
+//			Filter,
+//			index,
+//			InstanceFullInformation,
+//			NULL,
+//			0,
+//			&bytesNeeded
+//		);
+//		
+//		if (status != STATUS_BUFFER_TOO_SMALL) {
+//			// 理论上不应发生，出现则跳过并填充默认值
+//			instanceArray[index].InstanceId = index;
+//			instanceArray[index].InstanceName[0] = L'\0';
+//			instanceArray[index].VolumePath[0] = L'\0';
+//			instanceArray[index].InstanceFlags = 0;
+//			continue;
+//		}
+//
+//		// 分配临时缓冲区
+//		PVOID buffer = ExAllocatePoolWithTag(PagedPool, bytesNeeded, 'tIsF');
+//		if (buffer == NULL) {
+//			// 无法分配，填充默认值
+//			instanceArray[index].InstanceId = index;
+//			instanceArray[index].InstanceName[0] = L'\0';
+//			instanceArray[index].VolumePath[0] = L'\0';
+//			instanceArray[index].InstanceFlags = 0;
+//			continue;
+//		}
+//
+//		// 实际获取数据
+//		ULONG bytesReturned;
+//		status = FltEnumerateInstanceInformationByFilter(
+//			Filter,
+//			index,
+//			InstanceFullInformation,
+//			buffer,
+//			bytesNeeded,
+//			&bytesReturned
+//		);
+//
+//		if (NT_SUCCESS(status)) {
+//			PINSTANCE_FULL_INFORMATION info = (PINSTANCE_FULL_INFORMATION)buffer;
+//
+//			instanceArray[index].InstanceId = index;
+//			
+//			// 实例名称
+//			if (info->InstanceNameLength > 0 && info->InstanceNameBufferOffset > 0) {
+//				PWSTR src = (PWSTR)((UCHAR*)info + info->InstanceNameBufferOffset);
+//				ULONG len = info->InstanceNameLength / sizeof(WCHAR);
+//				if (len >= INSTANCE_NAME_MAX_LEN) len = INSTANCE_NAME_MAX_LEN - 1;
+//				RtlCopyMemory(instanceArray[index].InstanceName, src, len * sizeof(WCHAR));
+//				instanceArray[index].InstanceName[len] = L'\0';
+//			}
+//			else {
+//				instanceArray[index].InstanceName[0] = L'\0';
+//			}
+//
+//			// 挂载卷路径
+//			if (info->VolumeNameLength > 0 && info->VolumeNameBufferOffset > 0) {
+//				PWSTR src = (PWSTR)((UCHAR*)info + info->VolumeNameBufferOffset);
+//				ULONG len = info->VolumeNameLength / sizeof(WCHAR);
+//				if (len >= VOLUME_PATH_MAX_LEN) len = VOLUME_PATH_MAX_LEN - 1;
+//				RtlCopyMemory(instanceArray[index].VolumePath, src, len * sizeof(WCHAR));
+//				instanceArray[index].VolumePath[len] = L'\0';
+//			}
+//			else {
+//				instanceArray[index].VolumePath[0] = L'\0';
+//			}
+//
+//			// 实例状态标志
+//			//instanceArray[index].InstanceFlags = info->Flags;
+//		}
+//		else {
+//			// 获取失败，填充默认值
+//			instanceArray[index].InstanceId = index;
+//			instanceArray[index].InstanceName[0] = L'\0';
+//			instanceArray[index].VolumePath[0] = L'\0';
+//			instanceArray[index].InstanceFlags = 0;
+//		}
+//
+//		ExFreePoolWithTag(buffer, 'tIsF');
+//	}
+//
+//	*Instances = instanceArray;
+//	*InstanceCount = count;
+//	return STATUS_SUCCESS;
+//}
+
+NTSTATUS
+EnumerateMiniFilterInstances(
+	_In_  PFLT_FILTER              Filter,
+	_Out_ PINSTANCE_DETAIL_INFO* Instances,
+	_Out_ PULONG                  InstanceCount
+)
+{
+	NTSTATUS status;
+	ULONG count = 0;
+	ULONG index = 0;
+	ULONG bytesNeeded;
+	PINSTANCE_DETAIL_INFO instanceArray = NULL;
+
+	PAGED_CODE();
+
+	*Instances = NULL;
+	*InstanceCount = 0;
+
+	// 第一阶段：统计实例个数
+	while (TRUE) {
+		status = FltEnumerateInstanceInformationByFilter(
+			Filter,
+			index,
+			InstanceFullInformation,
+			NULL,
+			0,
+			&bytesNeeded
+		);
+
+		if (status == STATUS_BUFFER_TOO_SMALL) {
+			count++;
+			index++;
+		}
+		else {
+			break;
+		}
+	}
+
+	DbgPrint("[EnumerateMiniFilterInstances] Instance count: %u\n", count);
+
+	if (count == 0) {
+		return STATUS_SUCCESS;
+	}
+
+	// 分配自定义结构体数组
+	instanceArray = (PINSTANCE_DETAIL_INFO)ExAllocatePoolWithTag(
+		PagedPool,
+		count * sizeof(INSTANCE_DETAIL_INFO),
+		'tIsF'
+	);
+
+	if (instanceArray == NULL) {
+		return STATUS_INSUFFICIENT_RESOURCES;
+	}
+	RtlZeroMemory(instanceArray, count * sizeof(INSTANCE_DETAIL_INFO));
+
+	// 第二阶段：实际获取每个实例的信息 + 官方Flags
+	for (index = 0; index < count; index++) {
+		status = FltEnumerateInstanceInformationByFilter(
+			Filter,
+			index,
+			InstanceFullInformation,
+			NULL,
+			0,
+			&bytesNeeded
+		);
+
+		if (status != STATUS_BUFFER_TOO_SMALL) {
+			instanceArray[index].InstanceId = index;
+			instanceArray[index].InstanceName[0] = L'\0';
+			instanceArray[index].VolumePath[0] = L'\0';
+			instanceArray[index].InstanceFlags = 0;
+			continue;
+		}
+
+		PVOID buffer = ExAllocatePoolWithTag(PagedPool, bytesNeeded, 'tIsF');
+		if (buffer == NULL) {
+			instanceArray[index].InstanceId = index;
+			instanceArray[index].InstanceName[0] = L'\0';
+			instanceArray[index].VolumePath[0] = L'\0';
+			instanceArray[index].InstanceFlags = 0;
+			continue;
+		}
+
+		ULONG bytesReturned;
+		status = FltEnumerateInstanceInformationByFilter(
+			Filter,
+			index,
+			InstanceFullInformation,
+			buffer,
+			bytesNeeded,
+			&bytesReturned
+		);
+
+		if (NT_SUCCESS(status)) {
+			PINSTANCE_FULL_INFORMATION info = (PINSTANCE_FULL_INFORMATION)buffer;
+
+			instanceArray[index].InstanceId = index;
+
+			// 实例名称
+			if (info->InstanceNameLength > 0 && info->InstanceNameBufferOffset > 0) {
+				PWSTR src = (PWSTR)((UCHAR*)info + info->InstanceNameBufferOffset);
+				ULONG len = info->InstanceNameLength / sizeof(WCHAR);
+				if (len >= INSTANCE_NAME_MAX_LEN) len = INSTANCE_NAME_MAX_LEN - 1;
+				RtlCopyMemory(instanceArray[index].InstanceName, src, len * sizeof(WCHAR));
+				instanceArray[index].InstanceName[len] = L'\0';
+			}
+			else {
+				instanceArray[index].InstanceName[0] = L'\0';
+			}
+
+			// 挂载卷路径
+			if (info->VolumeNameLength > 0 && info->VolumeNameBufferOffset > 0) {
+				PWSTR src = (PWSTR)((UCHAR*)info + info->VolumeNameBufferOffset);
+				ULONG len = info->VolumeNameLength / sizeof(WCHAR);
+				if (len >= VOLUME_PATH_MAX_LEN) len = VOLUME_PATH_MAX_LEN - 1;
+				RtlCopyMemory(instanceArray[index].VolumePath, src, len * sizeof(WCHAR));
+				instanceArray[index].VolumePath[len] = L'\0';
+			}
+			else {
+				instanceArray[index].VolumePath[0] = L'\0';
+			}
+		}
+		else {
+			instanceArray[index].InstanceId = index;
+			instanceArray[index].InstanceName[0] = L'\0';
+			instanceArray[index].VolumePath[0] = L'\0';
+			instanceArray[index].InstanceFlags = 0;
+		}
+
+		ExFreePoolWithTag(buffer, 'tIsF');
+
+		// ====================== 修复后：正确获取官方Flags ======================
+		ULONG aggBytesNeeded = 0;
+		PVOID aggBuffer = NULL;
+		status = FltEnumerateInstanceInformationByFilter(
+			Filter,
+			index,
+			InstanceAggregateStandardInformation,
+			NULL,
+			0,
+			&aggBytesNeeded
+		);
+
+		if (status == STATUS_BUFFER_TOO_SMALL && aggBytesNeeded > 0)
+		{
+			aggBuffer = ExAllocatePoolWithTag(PagedPool, aggBytesNeeded, 'tIsF');
+			if (aggBuffer != NULL)
+			{
+				status = FltEnumerateInstanceInformationByFilter(
+					Filter,
+					index,
+					InstanceAggregateStandardInformation,
+					aggBuffer,
+					aggBytesNeeded,
+					&aggBytesNeeded
+				);
+
+				if (NT_SUCCESS(status))
+				{
+					PINSTANCE_AGGREGATE_STANDARD_INFORMATION aggInfo = (PINSTANCE_AGGREGATE_STANDARD_INFORMATION)aggBuffer;
+					instanceArray[index].InstanceFlags = aggInfo->Type.MiniFilter.Flags;
+					DbgPrint("[Enum] Instance %u, Flags=0x%08x\n", index, aggInfo->Type.MiniFilter.Flags);
+				}
+				else
+				{
+					DbgPrint("[Enum] Instance %u, failed to get Flags, status=0x%08X\n", index, status);
+					instanceArray[index].InstanceFlags = 0;
+				}
+				ExFreePoolWithTag(aggBuffer, 'tIsF');
+			}
+			else
+			{
+				instanceArray[index].InstanceFlags = 0;
+			}
+		}
+		else
+		{
+			DbgPrint("[Enum] Instance %u, failed to query Flags size, status=0x%08X\n", index, status);
+			instanceArray[index].InstanceFlags = 0;
+		}
+	}
+
+	// 最终打印汇总
+	DbgPrint("[Result] Total instances: %u\n", count);
+	for (ULONG i = 0; i < count; i++) {
+		DbgPrint("[Result]   [%u] Name=%ws, Volume=%ws, Flags=0x%08x\n",
+			i,
+			instanceArray[i].InstanceName,
+			instanceArray[i].VolumePath,
+			instanceArray[i].InstanceFlags);
+	}
+
+	*Instances = instanceArray;
+	*InstanceCount = count;
+	return STATUS_SUCCESS;
+}
+
 PVOID FindKeBugCheckCallbackListHead()
 {
 	ULONG64 addr = 0;
@@ -763,7 +1118,7 @@ PVOID FindKeBugCheckCallbackListHead()
 	
 	// 设置起始位置
 	PUCHAR StartSearchAddress = (PUCHAR)KeRegisterBugCheckCallbackAddr;
-
+	
 	// 设置搜索长度
 	ULONG size = 0x70;
 

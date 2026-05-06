@@ -1230,24 +1230,25 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     Const MAX_STACK_FRAMES = 20
     Dim hProcess As HANDLE = NULL
     Dim hThread As HANDLE = NULL
+    Dim ctxBuf As Byte Ptr
+    Dim ctx As CONTEXT Ptr
+    Dim sf As STACKFRAME64
+    Dim prevSuspend As DWORD = 0
+    Dim bNeedResume As Boolean = False
     
     InitListViewData lvwThreadCallStack
     
     ' ---------- 1. 分配 16 字节对齐的 CONTEXT 缓冲区 ----------
-    Dim ctxBuf As Byte Ptr = Allocate(CONTEXT_SIZE_X64 + 16)
+    ctxBuf = Allocate(CONTEXT_SIZE_X64 + 16)
     If ctxBuf = NULL Then
         MyLog.PrintLog LOG_ERROR, "GetCallStack", "Allocate failed"
         Goto cleanup
     End If
     
     ' 向上取整到 16 字节边界
-    Dim ctx As CONTEXT Ptr = CPtr(CONTEXT Ptr, (CInt(ctxBuf) + 15) And Not 15)
+    ctx = CPtr(CONTEXT Ptr, (CInt(ctxBuf) + 15) And Not 15)
     ZeroMemory(ctx, CONTEXT_SIZE_X64)
     ctx->ContextFlags = CONTEXT_FULL   ' &H10001F 也可以
-    
-    Dim sf As STACKFRAME64
-    Dim prevSuspend As DWORD = 0
-    Dim bNeedResume As Boolean = False
     
     ' ---------- 2. 打开进程/线程 ----------
     If IsDriverLoaded Then

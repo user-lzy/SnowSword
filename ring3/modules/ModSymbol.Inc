@@ -494,8 +494,9 @@ End Function
 
 ' 启动所有工作线程
 Function SymbolService_StartWorkers() As Boolean
+    g_StopWorkerThreads = False
     m_hThreads(1) = CreateThread(NULL, 0, @SymbolService_WorkerThread, NULL, 0, NULL)
-    Return TRUE
+    Return True
 End Function
 
 ' 停止所有工作线程

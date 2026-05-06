@@ -260,14 +260,14 @@ Function FrmFireWall_treMain_NM_DBLCLK(hWndForm As hWnd, hWndControl As hWnd) As
             'ListView1.Height = 940
             'ListView1.Left = 400
             CurrentInformation.intType = IPScan
-            InitializeListView ListView1, FrmMain.mCtrlTreeList1, FrmMain.TreeView
+            InitializeListView IPScan, ListView1
         Case "监听"
             SetWindowZ ListView1.hWnd
             'ListView1.Width = 1080
             'ListView1.Height = 940
             'ListView1.Left = 400
             CurrentInformation.intType = Sniffer
-            InitializeListView ListView1, FrmMain.mCtrlTreeList1, FrmMain.TreeView
+            InitializeListView Sniffer, ListView1
     End Select
     'AfxMsg GetMenuText(mnuSniffer, FrmFireWall_mnuSniffer_Sniffer)
     'SetMenuText mnuSniffer, FrmFireWall_mnuSniffer_Sniffer, "1"

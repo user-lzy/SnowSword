@@ -107,6 +107,39 @@ NTSTATUS DispatchDeviceControl(
     }
 }
 
+/*
+ * 示例：调用上述函数并打印所有实例信息
+ * 参数 Filter 由外部传入（例如在 DriverEntry 或 IRP_MJ_CREATE 处理中获取）
+ */
+VOID
+PrintAllInstanceInformation(_In_ PFLT_FILTER Filter)
+{
+    PINSTANCE_DETAIL_INFO instances = NULL;
+    ULONG count = 0;
+
+    status = EnumerateMiniFilterInstances(Filter, &instances, &count);
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("EnumerateMiniFilterInstances failed: 0x%08x\n", status);
+        return;
+    }
+
+    DbgPrint("Total instances: %u\n", count);
+
+    for (ULONG i = 0; i < count; i++) {
+        PINSTANCE_DETAIL_INFO p = &instances[i];
+        DbgPrint("--- Instance %u ---\n", i);
+        DbgPrint("  实例标识 (ID)    : %u\n", p->InstanceId);
+        DbgPrint("  实例名称         : %ws\n", p->InstanceName);
+        DbgPrint("  挂载卷路径       : %ws\n", p->VolumePath);
+        DbgPrint("  实例状态 (Flags) : 0x%08x\n", p->InstanceFlags);
+    }
+
+    if (instances != NULL) {
+        ExFreePoolWithTag(instances, 'tIsF');
+    }
+}
+
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING RegistryPath) {
 
     UNREFERENCED_PARAMETER(RegistryPath);
@@ -189,7 +222,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     //    }
     //    FreeNdisFilterArray(pFilterArray);
     //}
-
+    //PrintAllInstanceInformation((PFLT_FILTER)0xFFFFDD0D6A8ED9F0);
     return STATUS_SUCCESS;
 }
 
@@ -697,6 +730,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 			//DbgPrint("GetDriverInfo Success!");
             memcpy(pOutputData, pDriverInfo, sizeof(DRIVER_INFO));
             Information = sizeof(DRIVER_INFO);
+            status = STATUS_SUCCESS;
         }
         break;
     case IOCTL_DisableCallback:
@@ -786,21 +820,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         DbgPrint("[IOCTL_TIMER] 进入IOCTL，Input=%lu, Output=%lu, 缓存数量=%lu\n",
             InputDataLength, OutputDataLength, ulTimerCount);
 
-        //HANDLE TargetProcessId = NULL;
-        // 读取PID
-        /*if (pInputData != NULL && InputDataLength >= sizeof(HANDLE))
-        {
-            TargetProcessId = *(PHANDLE)pInputData;
-            DbgPrint("[IOCTL_TIMER] 目标PID: %llu\n", (ULONG64)TargetProcessId);
-        }
-        else
-        {
-            DbgPrint("[IOCTL_TIMER] 输入参数错误\n");
-            status = STATUS_INVALID_PARAMETER;
-            Information = 0;
-            break;
-        }*/
-
         // ====================== 【修复】强制判断：只有输出缓冲区有效 才是第二次调用 ======================
         if (pOutputData != NULL && OutputDataLength > 0 && ulTimerCount > 0)
         {
@@ -818,12 +837,10 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
             ulTimerCount = 0;
             status = STATUS_SUCCESS;
-            DbgPrint("[IOCTL_TIMER] 拷贝完成，返回长度=%lu\n", Information);
+            DbgPrint("[IOCTL_TIMER] 拷贝完成，返回长度=%Iu\n", Information);
         }
         else
         {
-            //EnumProcessTimers1();
-            //DbgPrint("分割线...");
             // ====================== 【修复】第一次调用：强制走枚举获取长度 ======================
             DbgPrint("[IOCTL_TIMER] 第一次调用：开始枚举定时器\n");
 
@@ -882,38 +899,119 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     {
         static PMINIFILTER_OBJECT pMiniFilters = NULL;
         static ULONG num2 = 0;
-
         ULONG need = 0;
 
         // =========================
-        // 第一次：只获取大小
+        // 修复：直接获取有效数量（传入有效指针，禁止传NULL）
         // =========================
-        num2 = EnumMiniFilter(&pMiniFilters, &need);
-
-        if (!pMiniFilters || need == 0)
+        EnumMiniFilter(&pMiniFilters, &need);
+        if (need == 0 || !pMiniFilters)
         {
             status = STATUS_UNSUCCESSFUL;
+            Information = 0;
             break;
         }
 
-        // =========================
-        // buffer 不够
-        // =========================
-        if (!pOutputData ||
-            OutputDataLength < sizeof(MINIFILTER_OBJECT) * need)
+        // 模式1：无输出缓冲区 → 仅返回所需字节大小
+        if (!pOutputData || OutputDataLength == 0)
+        {
+            Information = sizeof(MINIFILTER_OBJECT) * need;
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        // 模式2：缓冲区不足 → 返回所需大小
+        if (OutputDataLength < sizeof(MINIFILTER_OBJECT) * need)
         {
             Information = sizeof(MINIFILTER_OBJECT) * need;
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
 
-        // =========================
-        // 直接返回 cache
-        // =========================
+        // 模式3：缓冲区足够 → 拷贝数据
         Information = sizeof(MINIFILTER_OBJECT) * need;
         memcpy(pOutputData, pMiniFilters, Information);
-
         status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_EnumMiniFilterInstances:
+    {
+        // 静态变量：跨IOCTL调用存储数据（和原定时器逻辑完全一致）
+        static PINSTANCE_DETAIL_INFO g_InstanceArray = NULL;
+        static ULONG g_InstanceCount = 0;
+        PFLT_FILTER Filter = (PFLT_FILTER)pInputData;
+        // 【新增】内核必备：校验传入的 PFLT_FILTER 不能为空
+        if (Filter == NULL)
+        {
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 错误：Filter 为空指针\n");
+            status = STATUS_INVALID_PARAMETER;
+            Information = 0;
+            break;
+        }
+
+        // 调试输出（对齐原代码格式）
+        DbgPrint("[IOCTL_EnumMiniFilterInstances] 进入IOCTL，Input=%lu, Output=%lu, 缓存实例数=%lu\n",
+            InputDataLength, OutputDataLength, g_InstanceCount);
+
+        // ====================== 第二次调用：输出缓冲区有效 → 拷贝数据 ======================
+        if (pOutputData != NULL && OutputDataLength > 0 && g_InstanceCount > 0)
+        {
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 第二次调用：拷贝实例数据，数量=%lu\n", g_InstanceCount);
+
+            // 计算实际拷贝长度
+            Information = sizeof(INSTANCE_DETAIL_INFO) * g_InstanceCount;
+            // 拷贝枚举好的实例数据到用户层缓冲区
+            memcpy(pOutputData, g_InstanceArray, Information);
+
+            // 释放内核内存 + 重置静态变量（防止内存泄漏）
+            if (g_InstanceArray != NULL)
+            {
+                ExFreePoolWithTag(g_InstanceArray, 'tIsF'); // 沿用你原代码的标签
+                g_InstanceArray = NULL;
+            }
+            g_InstanceCount = 0;
+
+            status = STATUS_SUCCESS;
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 拷贝完成，返回长度=%Iu\n", Information);
+        }
+        // ====================== 第一次调用：无有效缓冲区 → 枚举实例、返回所需长度 ======================
+        else
+        {
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 第一次调用：开始枚举迷你过滤实例\n");
+
+            // 清理残留的旧内存/变量（防止多次调用冲突）
+            if (g_InstanceArray != NULL)
+            {
+                ExFreePoolWithTag(g_InstanceArray, 'tIsF');
+                g_InstanceArray = NULL;
+            }
+            g_InstanceCount = 0;
+
+            // 调用你已实现的核心枚举函数（传入Filter，自动分配内存、填充数据）
+            NTSTATUS enumStatus = EnumerateMiniFilterInstances(
+                Filter,
+                &g_InstanceArray,
+                &g_InstanceCount
+            );
+
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 枚举完成，实例数=%lu, 状态=0x%X\n", g_InstanceCount, enumStatus);
+
+            // 枚举失败/无实例 → 释放内存、重置变量
+            if (!NT_SUCCESS(enumStatus) || g_InstanceCount == 0)
+            {
+                if (g_InstanceArray != NULL)
+                {
+                    ExFreePoolWithTag(g_InstanceArray, 'tIsF');
+                    g_InstanceArray = NULL;
+                }
+                g_InstanceCount = 0;
+            }
+
+            // 核心：返回用户层需要的缓冲区总长度（第一次调用必须返回）
+            Information = sizeof(INSTANCE_DETAIL_INFO) * g_InstanceCount;
+            status = STATUS_SUCCESS;
+            DbgPrint("[IOCTL_EnumMiniFilterInstances] 第一次调用完成，返回总长度=%Iu\n", Information);
+        }
         break;
     }
     case IOCTL_GetGDT:

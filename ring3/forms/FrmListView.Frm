@@ -226,6 +226,15 @@ Left=600
 Top=360
 Tag=
 
+[PopupMenu]
+Name=mnuMinifilterInstance
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuMinifilterInstance_mnuRefresh0-10-FrmListView_mnuMinifilterInstance_mnuStep10-10分离实例FrmListView_mnuMinifilterInstance_mnuDetachInstance0-10分离所有实例FrmListView_mnuMinifilterInstance_mnuDetachAllInstances0-10
+Left=690
+Top=280
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -294,9 +303,9 @@ Type DO_SOMETHING
     TheContext As PVOID
 End Type
 
-Dim Shared CurrentPID As DWORD
-Dim Shared CurrentTID As DWORD
-Dim Shared CurrentProcessName As StringW
+'Dim Shared CurrentPID As DWORD
+'Dim Shared CurrentTID As DWORD
+'Dim Shared CurrentProcessName As StringW
 Dim Shared prevFrmListViewProc As LONG_PTR = NULL
 
 Dim Shared LastClickedItem As Long = -1 ' 最后点击的行
@@ -422,536 +431,72 @@ Function FrmListView_WndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wPara
     Return CallWindowProc(Cast(WndProc, prevFrmListViewProc), hWnd, uMsg, wParam, lParam)
 End Function
 
-'[FrmListView]事件 : 窗口完全显示后。
-'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
-Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
-    CurrentInformation.hListView = Me.hWnd
-    CurrentInformation.intType = UserData
-    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
-    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP)
-    Me.hWndForm = hWndForm 'ListView.hWndForm = hWndForm
-    ListView.hWndForm = hWndForm
-    UninitListViewData ListView
-    CurrentPID = CurrentInformation.ProcessId
-    CurrentProcessName = GetNameByPath(GetProcessPath(CurrentPID))
-    lblNum.Caption = "正在获取..."
-    InitializeListView ListView, FrmMain.mCtrlTreeList1,  FrmMain.TreeView'注意,别莫名其妙炸了
-    Select Case CurrentInformation.intType
-        Case Module
-            GetModuleList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 模块列表"
-        Case Thread
-            GetThreadList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 线程列表"
-        Case KernelThread
-            GetKernelThreadList ListView
-        Case Windows
-            GetWindowList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 窗口列表"
-        Case ProcessTimer
-            GetProcessTimerList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 定时器列表"
-        Case Handles
-            GetHandleList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 句柄列表"
-            'Print "1"'下面的Print和SetListViewData在执行此次Case后均不会被执行
-            'Print "2"
-        Case Memory
-            GetMemoryBlockList CurrentPID,ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 内存块列表"
-        Case WebConnect
-            GetWebConnectList CurrentPID, ListView, True
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 网络连接列表"
-        Case Privilege
-            GetProcessPrivilegeList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 特权列表"
-        Case Hook
-            If CurrentInformation.CurrentModule.ModuleHandle = NULL Then
-                GetProcessHookList CurrentPID, ListView
-            Else
-                GetModuleHookList CurrentPID, CurrentInformation.CurrentModule.ModuleName, CurrentInformation.CurrentModule.ModuleHandle, ListView
-            End If
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " Hook列表(inline hook, iat hook, eat hook)"
-            
-        Case ThreadCallStack
-            GetCallStack CurrentPID, CurrentTID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & " TID:" & CurrentTID & "]" & " 调用栈"
-        Case MsgHook
-            GetMsgHookList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
-        Case EventHook
-            GetEventHookList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
-        Case Hotkey
-            GetHotkeyList CurrentPID, ListView
-            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
-        Case UnlockTheFile
-            Unlock_File ListView', FilePathByUnlock
-            Me.Caption = "文件占用查看小工具"
-        Case IOFunction
-            If CurrentInformation.CurrentDriver.DriverObject <> 0 Then
-                GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverPath, CurrentInformation.CurrentDriver.DriverObject
-            End If
-            Me.Caption = "[" & CurrentInformation.CurrentDriver.DriverName & "]" & " IO派遣函数列表"
-    End Select
-    lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-End Sub
-
-'[FrmListView.ListView]事件 : 鼠标右键单击
-'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
-'xPos yPos   当前鼠标位置，相对于屏幕。就是屏幕坐标。
-Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos As Long, yPos As Long)
-    CurrentPos.x = xPos
-    CurrentPos.y = yPos
-    ScreenToClient hWndControl, @CurrentPos
-    'Print "[FrmListView_ListView_WM_ContextMenu]CurrentPos.x:" & CurrentPos.x & " CurrentPos.y:" & CurrentPos.y
-    Select Case CurrentInformation.intType
-        Case Module
-            mnuModule.hWndForm = hWndForm
-            PopupMenu hWndForm,mnuModule.HMENU
-        Case Thread, KernelThread
-            mnuThread.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuThread.HMENU
-        Case Memory
-            mnuMemory.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuMemory.HMENU
-        Case WebConnect
-            mnuWebConnect.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuWebConnect.HMENU
-        Case Windows
-            mnuWindow.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuWindow.HMENU
-        Case Handles
-            mnuHandle.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuHandle.HMENU
-        Case ProcessTimer
-            mnuProcessTimer.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuProcessTimer.HMENU
-        Case MsgHook
-            mnuWindow.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuMsgHook.HMENU
-        Case EventHook
-            mnuHandle.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuEventHook.HMENU
-        Case Hotkey
-            mnuHandle.hWndForm = hWndForm
-            PopupMenu hWndForm, mnuHotkey.HMENU
-        Case UnlockTheFile
-            mnuUnlock_File.hWndForm = hWndForm
-            PopupMenu hWndForm,mnuUnlock_FIle.HMENU
-    End Select
-End Sub
-
-'[FrmListView.mnuThread]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd,wID As ULong)
-    Select Case wID
-        Case FrmListView_mnuThread_mnuRefreshThread ' 刷新线程
-            lblNum.Caption = "正在刷新..."
-            'DeleteAllItemsEx ListView
-            GetThreadList CurrentPID, ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuThread_mnuTerminateThread ' 结束线程
-            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
-                If IsListViewItemSelected(ListView, i) Then
-                    If KillThread(ValULng(ListView.GetItemText(i, 0))) Then DeleteItemEx ListView, i, False
-                End If
-            Next
-            CommitListViewView ListView
-        Case FrmListView_mnuThread_mnuForceKillThread ' 强制结束线程
-            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
-                If IsListViewItemSelected(ListView, i) Then
-                    Print "TID:" & Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
-                    If ForceKillThread(Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))) Then DeleteItemEx ListView, i, False
-                End If
-            Next
-            CommitListViewView ListView
-        Case FrmListView_mnuThread_mnuForceDestroyThread ' 暴力摧毁线程(可能蓝屏)
-            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
-                If IsListViewItemSelected(ListView, i) Then
-                    Dim TID As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
-                    Print "TID:" & TID
-                    If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then DeleteItemEx ListView, i, False
-                End If
-            Next
-            CommitListViewView ListView
-        Case FrmListView_mnuThread_mnuSuspendThread ' 挂起线程
-            For i As Integer = 0 To ListView.ItemCount - 1
-                If IsListViewItemSelected(ListView, i) Then MySuspendThread ValULng(ListView.GetItemText(i, 0))
-            Next
-            GetThreadList CurrentPID, ListView
-        Case FrmListView_mnuThread_mnuResumeThread ' 恢复线程
-            For i As Integer = 0 To ListView.ItemCount - 1
-                If IsListViewItemSelected(ListView, i) Then MyResumeThread ValULng(ListView.GetItemText(i, 0))
-            Next
-            GetThreadList CurrentPID, ListView
-        Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
-            CurrentTID = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
-            FrmListView.Show,, ThreadCallStack
-        Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
-            If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
-        Case FrmListView_mnuThread_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-        Case FrmListView_mnuThread_mnuLocateFilePath ' 定位文件位置(资源管理器)
-            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 6)
-            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
-    End Select
-End Sub
-
-'[FrmListView.mnuModule]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
-   Dim ModuleHandle As HMODULE = Cast(Any Ptr, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 2), "0x", "&H")))
-    Select Case wID
-        Case FrmListView_mnuModule_mnuRefreshModule ' 刷新
-            lblNum.Caption = "正在刷新..."
-            'DeleteAllItemsEx ListView
-            GetModuleList CurrentPID, ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuModule_mnuUnloadModule ' 卸载模块
-            If UnloadModule(CurrentPID, ModuleHandle) Then
-                AfxMsg "卸载成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "卸载失败!是否强制卸载?"
-            End If
-        Case FrmListView_mnuModule_mnuForceUnloadModule ' 强制卸载模块
-            If ForceUnloadModule(CurrentPID, ModuleHandle) Then
-                AfxMsg "卸载成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "卸载失败!"
-            End If
-        Case FrmListView_mnuModule_mnuViewHook ' 查看Hook
-            CurrentInformation.CurrentModule.ModuleName = ListView.GetItemText(ListView.SelectedItem, 1)
-            CurrentInformation.CurrentModule.ModuleHandle = ModuleHandle
-            FrmListView.Show,, Hook
-        Case FrmListView_mnuModule_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            If LastClickedSubItem <> 2 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
-            FrmMemoryEditor.Show,, Addr
-        Case FrmListView_mnuModule_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-        Case FrmListView_mnuModule_mnuLocateFilePath ' 定位文件位置(资源管理器)
-            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 4)
-            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
-   End Select
-End Sub
-
-'[FrmListView]事件 : 即将关闭窗口，返回非0可阻止关闭
-'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-Function FrmListView_WM_Close(hWndForm As hWnd) As LResult
-    ListView.hWndForm = hWndForm
-    UninitListViewData ListView
-    Function = FALSE ' 返回 TRUE 阻止关闭窗口。
-End Function
-
 '[FrmListView]事件 : 活动状态（被激活或失去焦点）
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'fActive     =0 失去焦点 <>0 得到焦点
-Sub FrmListView_WM_NcActivate(hWndForm As hWnd, fActive As Long)
-    Dim CurrentIndex As Integer = GetIndexByListViewHwnd(hWndForm)
-    Me.hWndForm = hWndForm
-    ListView.hWndForm = hWndForm
-    If fActive = 0 Then
-        'Print "[FrmListView]失去焦点," & FrmListView.hWnd & "->" & CurrentInformation.intType & " CurrentIndex:" & CurrentIndex
-        'CurrentInformationArray(CurrentIndex).hListView = hWndForm
-        CurrentInformationArray(CurrentIndex).intType = CurrentInformation.intType
-        CurrentInformationArray(CurrentIndex).ProcessId = CurrentPID
-        
-        CurrentInformationArray(CurrentIndex).CurrentModule.ModuleName = CurrentInformation.CurrentModule.ModuleName
-        CurrentInformationArray(CurrentIndex).CurrentModule.ModuleHandle = CurrentInformation.CurrentModule.ModuleHandle
-        
-        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverBase = CurrentInformation.CurrentDriver.DriverBase
-        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverSize = CurrentInformation.CurrentDriver.DriverSize
-        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverObject = CurrentInformation.CurrentDriver.DriverObject
-        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverName = CurrentInformation.CurrentDriver.DriverName
-        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverPath = CurrentInformation.CurrentDriver.DriverPath
-    Else
-        'Print "[FrmListView]得到焦点," & FrmListView.hWnd & "->" & CurrentInformation.intType & " CurrentIndex:" & CurrentIndex
-        If CurrentIndex = -1 Then
-            For i As Integer = 0 To UBound(CurrentInformationArray)
-                If CurrentInformationArray(i).hListView = NULL Then
-                    CurrentIndex = i
-                    'Print "[FrmListView]得到焦点后," & FrmListView.hWnd & "->" & CurrentInformation.intType'与FrmMain的初始化同理
-                    Exit For
-                End If
-            Next
-            If CurrentIndex = -1 Then
-                CurrentIndex = UBound(CurrentInformationArray) + 1
-                ReDim Preserve CurrentInformationArray(UBound(CurrentInformationArray) + 5) As CURRENT_INFORMATION ' 开第二个不同FrmListView时崩溃
-            End If
-            'Print "UBound(CurrentInformationArray):" & UBound(CurrentInformationArray) & " CurrentIndex:" & CurrentIndex
-            CurrentInformationArray(CurrentIndex).hListView = hWndForm
-        Else
-            'memcpy @CurrentInformation, @CurrentInformationArray(CurrentIndex), SizeOf(CurrentInformation)
-            CurrentInformation.intType = CurrentInformationArray(CurrentIndex).intType
-            CurrentPID = CurrentInformationArray(CurrentIndex).ProcessId
-            
-            CurrentInformation.CurrentModule.ModuleName = CurrentInformationArray(CurrentIndex).CurrentModule.ModuleName
-            CurrentInformation.CurrentModule.ModuleHandle = CurrentInformationArray(CurrentIndex).CurrentModule.ModuleHandle
-            
-            CurrentInformation.CurrentDriver.DriverBase = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverBase
-            CurrentInformation.CurrentDriver.DriverSize = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverSize
-            CurrentInformation.CurrentDriver.DriverObject = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverObject
-            CurrentInformation.CurrentDriver.DriverName = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverName
-            CurrentInformation.CurrentDriver.DriverPath = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverPath
-            'Print "[FrmListView]得到焦点后," & FrmListView.hWnd & "->" & CurrentInformation.intType'与FrmMain的初始化同理
-        End If
-   End If
-End Sub
-
-'[FrmListView.mnuUnlock_FIle]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd,wID As ULong)
-    Select Case wID
-        Case FrmListView_mnuUnlock_File_mnuRefresh '刷新列表
-            lblNum.Caption = "正在刷新..."
-            Unlock_File ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuUnlock_FIle_mnuCloseHandle ' 关闭句柄
-            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
-                If IsListViewItemSelected(ListView, i) Then
-                    If CloseProcessHandle(ValUInt(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 4), "0x", "&H")))) Then
-                        DeleteItemEx ListView, i, False
-                        AfxMsg "关闭句柄成功!", "提示"
-                    Else
-                        'AfxMsg "关闭句柄失败!", "提示"
-                    End If
-                End If
-            Next
-            lblNum.Caption = "数量:" & ListView.ItemCount
-            CommitListViewView ListView
-        Case FrmListView_mnuUnlock_FIle_mnuForceCloseHandle ' 强制关闭句柄
-            '&H863
-            Dim DoSomething As DO_SOMETHING
-            DoSomething.ProcessId = ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
-            DoSomething.TheContext = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
-            IoControl hDrv, IOCTL_CloseHandle, @DoSomething, SizeOf(DO_SOMETHING)
-            If (GetLastError = 0) Then
-                AfxMsg "强制关闭句柄成功!", "提示"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "强制关闭句柄失败!", "提示"
-                Print "[FrmListView_mnuUnlock_FIle_mnuForceCloseHandle]" & WinErrorMsg(GetLastError) & GetLastError
-            End If
-        Case FrmListView_mnuUnlock_FIle_mnuTerminateProcess ' 结束进程
-            KillProcess ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
-        Case FrmListView_mnuUnlock_File_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-   End Select
-End Sub
+'Sub FrmListView_WM_NcActivate(hWndForm As hWnd, fActive As Long)
+'    Dim CurrentIndex As Integer = GetIndexByListViewHwnd(hWndForm)
+'    Me.hWndForm = hWndForm
+'    ListView.hWndForm = hWndForm
+'    If fActive = 0 Then
+'        'Print "[FrmListView]失去焦点," & FrmListView.hWnd & "->" & CurrentInformation.intType & " CurrentIndex:" & CurrentIndex
+'        'CurrentInformationArray(CurrentIndex).hListView = hWndForm
+'        CurrentInformationArray(CurrentIndex).intType = CurrentInformation.intType
+'        CurrentInformationArray(CurrentIndex).ProcessId = CurrentPID
+'        
+'        CurrentInformationArray(CurrentIndex).CurrentModule.ModuleName = CurrentInformation.CurrentModule.ModuleName
+'        CurrentInformationArray(CurrentIndex).CurrentModule.ModuleHandle = CurrentInformation.CurrentModule.ModuleHandle
+'        
+'        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverBase = CurrentInformation.CurrentDriver.DriverBase
+'        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverSize = CurrentInformation.CurrentDriver.DriverSize
+'        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverObject = CurrentInformation.CurrentDriver.DriverObject
+'        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverName = CurrentInformation.CurrentDriver.DriverName
+'        CurrentInformationArray(CurrentIndex).CurrentDriver.DriverPath = CurrentInformation.CurrentDriver.DriverPath
+'    Else
+'        'Print "[FrmListView]得到焦点," & FrmListView.hWnd & "->" & CurrentInformation.intType & " CurrentIndex:" & CurrentIndex
+'        If CurrentIndex = -1 Then
+'            For i As Integer = 0 To UBound(CurrentInformationArray)
+'                If CurrentInformationArray(i).hListView = NULL Then
+'                    CurrentIndex = i
+'                    'Print "[FrmListView]得到焦点后," & FrmListView.hWnd & "->" & CurrentInformation.intType'与FrmMain的初始化同理
+'                    Exit For
+'                End If
+'            Next
+'            If CurrentIndex = -1 Then
+'                CurrentIndex = UBound(CurrentInformationArray) + 1
+'                ReDim Preserve CurrentInformationArray(UBound(CurrentInformationArray) + 5) As CURRENT_INFORMATION ' 开第二个不同FrmListView时崩溃
+'            End If
+'            'Print "UBound(CurrentInformationArray):" & UBound(CurrentInformationArray) & " CurrentIndex:" & CurrentIndex
+'            CurrentInformationArray(CurrentIndex).hListView = hWndForm
+'        Else
+'            'memcpy @CurrentInformation, @CurrentInformationArray(CurrentIndex), SizeOf(CurrentInformation)
+'            CurrentInformation.intType = CurrentInformationArray(CurrentIndex).intType
+'            CurrentPID = CurrentInformationArray(CurrentIndex).ProcessId
+'            
+'            CurrentInformation.CurrentModule.ModuleName = CurrentInformationArray(CurrentIndex).CurrentModule.ModuleName
+'            CurrentInformation.CurrentModule.ModuleHandle = CurrentInformationArray(CurrentIndex).CurrentModule.ModuleHandle
+'            
+'            CurrentInformation.CurrentDriver.DriverBase = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverBase
+'            CurrentInformation.CurrentDriver.DriverSize = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverSize
+'            CurrentInformation.CurrentDriver.DriverObject = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverObject
+'            CurrentInformation.CurrentDriver.DriverName = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverName
+'            CurrentInformation.CurrentDriver.DriverPath = CurrentInformationArray(CurrentIndex).CurrentDriver.DriverPath
+'            'Print "[FrmListView]得到焦点后," & FrmListView.hWnd & "->" & CurrentInformation.intType'与FrmMain的初始化同理
+'        End If
+'   End If
+'End Sub
 
 '[FrmListView.TxtFilter1]事件 : 文本已经被修改（修改前用 EN_UPDATE
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmListView_TxtFilter1_EN_Change(hWndForm As hWnd, hWndControl As hWnd)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    
     lblNum.Caption = "正在筛选..."
     SetListViewFilter ListView, TxtFilter1.Text
     CommitListViewView ListView
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-End Sub
-
-'[FrmListView.mnuMemory]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuMemory_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetMemoryBlockList CurrentPID, ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuMemory_mnuLocateMemory ' 定位内存
-            Dim LocatedAddr As UInteger = ValULng(FF_Replace(AfxInputBox(,,, "定位内存", "请输出需要定位的内存地址:(例:0x7FFC18B9C000)"), "0x", "&H"))
-            Dim Addr As UInteger, Size As ULong
-            For i As Integer = 0 To ListView.ItemCount - 1
-                Addr = ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H"))
-                Size = ValUInt(FF_Replace(ListView.GetItemText(i, 1), "0x", "&H"))
-                Print "Addr:0x" & WHex(Addr) & " Size:0x" & WHex(Size) & " LocatedAddr:0x" & WHex(LocatedAddr) & " Addr+Size:0x" & WHex(Addr + Size)
-                If Addr <= LocatedAddr AndAlso Addr + Size >= LocatedAddr Then ' 定位成功
-                    Print "找到"
-                    ListView.UnselectAllItems
-                    ListView.SelectedItem = i
-                    ListView.ScrollSelectedItem
-                    Exit For
-                End If
-            Next
-        Case FrmListView_mnuMemory_mnuChangeMemory ' 修改内存属性
-            Dim mc As MEMORY_CHANGE Ptr = Allocate(SizeOf(MEMORY_CHANGE))
-            mc->Addr = ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
-            mc->dwSize = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
-            Dim strProtect As StringW = ListView.GetItemText(ListView.SelectedItem, 2)
-            mc->OldProtect = ParseProtectString(strProtect)
-            FrmMemoryChange.Show,, Cast(Integer, mc)
-        ' 搜索内存
-        Case FrmListView_mnuMemory_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
-            FrmMemoryEditor.Show,, Addr
-        Case FrmListView_mnuMemory_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-        Case FrmListView_mnuMemory_mnuLocateFilePath ' 定位文件位置(资源管理器)
-            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 6)
-            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
-   End Select
-End Sub
-
-'[FrmListView.mnuHandle]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuHandle_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuHandle_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetHandleList CurrentPID, ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuHandle_mnuCloseHandle ' 关闭
-            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
-                If IsListViewItemSelected(ListView, i) Then
-                    CloseProcessHandle ValULng(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(ListView.GetItemText(i, 4)))
-                    DeleteItemEx ListView, i
-                End If
-            Next
-            CommitListViewView ListView
-        Case FrmListView_mnuHandle_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-   End Select
-End Sub
-
-'[FrmListView.mnuWebConnect]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuWebConnect_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetWebConnectList CurrentPID, ListView, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuWebConnect_mnuViewAll ' 显示全部
-            lblNum.Caption = "正在刷新..."
-            GetWebConnectList CurrentPID, ListView, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-            SetMenuCheckState mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
-        Case FrmListView_mnuWebConnect_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-    End Select
-End Sub
-'[FrmListView.mnuWindow]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuWindow_WM_Command(hWndForm As hWnd, wID As ULong)
-   Dim hWnd As HWND = Cast(HWND, ValLng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-   Select Case wID
-        Case FrmListView_mnuWindow_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetWindowList CurrentPID, ListView
-            CommitListViewView ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuWindow_mnuShowWindow ' 显示窗口
-            NtUserShowWindow(hWnd, SW_SHOW)
-        Case FrmListView_mnuWindow_mnuHideWindow ' 隐藏窗口
-            NtUserShowWindow(hWnd, SW_HIDE)
-        Case FrmListView_mnuWindow_mnuMinWindow ' 最小化窗口
-            NtUserShowWindow(hWnd, SW_SHOWMINIMIZED)
-        Case FrmListView_mnuWindow_mnuMaxWindow ' 最大化窗口
-            NtUserShowWindow(hWnd, SW_SHOWMAXIMIZED)
-        Case FrmListView_mnuWindow_mnnuDestroyWindow ' 摧毁窗口
-            NtUserDestroyWindow(hWnd)
-            DeleteItemEx ListView, ListView.SelectedItem
-        Case FrmListView_mnuWindow_mnuFreezeWindow ' 冻结窗口
-            EnableWindow hWnd, False
-        Case FrmListView_mnuWindow_mnuActiveWindow ' 激活窗口
-            EnableWindow hWnd, True
-            SwitchToThisWindow hWnd, True
-        Case FrmListView_mnuWindow_mnuWindowTop ' 窗口置顶
-            SetWindowPos hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
-        Case FrmListView_mnuWindow_mnuWindowNoTop ' 取消置顶
-            SetWindowPos hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
-        Case FrmListView_mnuWindow_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
-                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-   End Select
 End Sub
 
 '[FrmListView]事件 : 自定义消息（全部消息），在其它事件处理后才轮到本事件。
@@ -960,7 +505,8 @@ End Sub
 'wParam      主消息参数，什么作用，由发送消息者定义
 'lParam      副消息参数，什么作用，由发送消息者定义
 Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lParam As lParam) As LResult
-    ListView.hWndForm = hWndForm
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
     Select Case wMsg
     Case WM_NOTIFY
         Dim Nmhdr As NMHDR Ptr = Cast(NMHDR Ptr, lParam)
@@ -992,7 +538,7 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
                 Return 0
             End If
             
-            Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+            Dim r As LVRow Ptr = ctx->Snap->Rows[real]
             'Print "行数据指针：" & r & " (空=无数据)"
             If r = NULL Then Return 0
             
@@ -1027,7 +573,7 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
                         Return CDRF_NOTIFYSUBITEMDRAW
                     Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
                         Dim real As Long = ctx->VisibleIndex(cd->nmcd.dwItemSpec)
-                        Dim r As LVRow Ptr = ctx->Snap->Rows(real)
+                        Dim r As LVRow Ptr = ctx->Snap->Rows[real]
                         cd->clrText   = r->Fore
                         cd->clrTextBk = r->Back
                         Return CDRF_DODEFAULT
@@ -1058,35 +604,6 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
     Return False
 End Function
 
-'[FrmListView.mnuPrivilege]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuPrivilege_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuPrivilege_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetProcessPrivilegeList CurrentPID, ListView
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuPrivilege_mnuEnablePrivilege ' 启用特权
-            Dim strPrivilege As StringW = ListView.GetItemText(ListView.SelectedItem, 1)
-            If AdjustPrivilege(CurrentPID, strPrivilege, True) Then
-                AfxMsg "启用特权成功!"
-                ListView.SetItemText ListView.SelectedItem, 2, "Enabled"
-            Else
-                AfxMsg "启用特权失败!"
-            End If
-        Case FrmListView_mnuPrivilege_mnuDisablePrivilege ' 禁用特权
-            Dim strPrivilege As StringW = ListView.GetItemText(ListView.SelectedItem, 1)
-            If AdjustPrivilege(CurrentPID, strPrivilege, False) Then
-                AfxMsg "禁用特权成功!"
-                ListView.SetItemText ListView.SelectedItem, 2, "Disabled"
-            Else
-                AfxMsg "禁用特权失败!"
-            End If
-   End Select
-End Sub
-
 '[FrmListView]事件 : 窗口已经改变了大小
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'fwSizeType = SIZE_MAXHIDE     SIZE_MAXIMIZED   SIZE_MAXSHOW    SIZE_MINIMIZED    SIZE_RESTORED  
@@ -1106,183 +623,6 @@ Sub FrmListView_WM_Size(hWndForm As hWnd, fwSizeType As Long, nWidth As Long, nH
         lblNum.Top = TxtFilter1.Top
     End If
     Inited = True
-End Sub
-
-'[FrmListView.mnuMsgHook]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuMsgHook_mnuRefresh ' 刷新
-           lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
-                GetMsgHookList -1, ListView
-            Else
-                GetMsgHookList CurrentPID, ListView
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuMsgHook_mnuRemove ' 移除
-            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWindowsHookEx(hHook) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                Print "[FrmListView_mnuMsgHook_mnuRemove]UnhookWindowsHookEx 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
-            End If
-        Case FrmListView_mnuMsgHook_mnuViewAll ' 显示全部
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
-                GetMsgHookList CurrentPID, ListView
-                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, False
-            Else
-                GetMsgHookList -1, ListView
-                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, True
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            If LastClickedSubItem <> 3 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
-            FrmMemoryEditor.Show,, Addr
-        Case FrmListView_mnuMsgHook_mnuCopyRowData ' 复制整行数据
-            
-    End Select
-    lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-End Sub
-
-'[FrmListView.mnuEventHook]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
-   Me.hWndForm = hWndForm
-   Select Case wID
-        Case FrmListView_mnuEventHook_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
-                GetEventHookList -1, ListView
-            Else
-                GetEventHookList CurrentPID, ListView
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuEventHook_mnuRemove ' 移除
-            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWinEvent(hHook) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                Print "[FrmListView_mnuEventHook_mnuRemove]UnhookWinEvent 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
-            End If
-        Case FrmListView_mnuEventHook_mnuViewAll ' 显示全部
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
-                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
-                GetEventHookList CurrentPID, ListView
-                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, False
-            Else
-                Me.Caption = "事件钩子列表"
-                GetEventHookList -1, ListView
-                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, True
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            If LastClickedSubItem <> 3 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
-            FrmMemoryEditor.Show,, Addr
-    End Select
-    lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-End Sub
-
-'[FrmListView.mnuHotKey]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
-   Select Case wID
-        Case FrmListView_mnuHotkey_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
-                GetHotkeyList -1, ListView
-            Else
-                GetHotkeyList CurrentPID, ListView
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuHotkey_mnuRemove ' 移除
-            Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
-            Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
-            If UnregisterHotKey(hWnd, id) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                Print "[FrmListView_mnuHotkey_mnuRemove]UnregisterHotKey 0x" & WHex(hWnd) & " 0x" & WHex(id) & ":" & WinErrorMsg(GetLastError) & GetLastError
-            End If
-        Case FrmListView_mnuHotkey_mnuViewAll ' 显示全部
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
-                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
-                GetHotkeyList CurrentPID, ListView
-                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, False
-            Else
-                Me.Caption = "热键列表"
-                GetHotkeyList -1, ListView
-                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, True
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
-            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-            'Print ListView.GetItemText(LastClickedItem, LastClickedSubItem)
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            'Print "Addr:0x" & WHex(Addr)
-            FrmMemoryEditor.Show,, Addr
-    End Select
-    lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-End Sub
-
-'[FrmListView.mnuProcessTimer]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
-    Select Case wID
-        Case FrmListView_mnuProcessTimer_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
-                GetProcessTimerList -1, ListView
-            Else
-                GetProcessTimerList CurrentPID, ListView
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
-            Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
-            Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
-            If KillTimer(hWnd, uIDEvent) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "移除失败!"
-            End If
-        Case FrmListView_mnuProcessTimer_mnuViewAll ' 显示全部
-            lblNum.Caption = "正在刷新..."
-            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
-                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 进程定时器列表"
-                GetProcessTimerList CurrentPID, ListView
-                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, False
-            Else
-                Me.Caption = "进程定时器列表"
-                GetProcessTimerList -1, ListView
-                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, True
-            End If
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-    End Select
 End Sub
 
 '[FrmListView.ListView]事件 : 键盘按下
@@ -1347,19 +687,6 @@ Sub FrmListView_ListView_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd, M
     End If
 End Sub
 
-'[FrmListView.mnuIOFunction]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmListView_mnuIOFunction_WM_Command(hWndForm As hWnd, wID As ULong)
-    Select Case wID
-        Case FrmListView_mnuIOFunction_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetDriverIOFunctionList ListView, CurrentInformation.CurrentDriver.DriverPath, CurrentInformation.CurrentDriver.DriverObject
-            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-   End Select
-End Sub
-
 '[FrmListView.ListView]事件 : 一个列被点击了
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
@@ -1391,4 +718,769 @@ Sub FrmListView_ListView_LVN_ColumnClick(hWndForm As hWnd, hWndControl As hWnd, 
     ' 5. 刷新虚拟ListView（必须手动刷新，否则界面不更新）
     ListView_RedrawItems(hWndControl, 0, ctx->VisibleCount - 1)
 End Sub
+
+'[FrmListView]事件 : 窗口完全显示后。
+'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
+Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, UserData)
+    Me.UserData(0) = UserData
+    CurrentInfo->hListView = Me.hWnd
+    
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP)
+    UninitListViewData ListView
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim CurrentTID As DWORD = CurrentInfo->ThreadId
+    
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentInfo->ProcessId))
+    lblNum.Caption = "正在获取..."
+    InitializeListView CurrentInfo->intType, ListView ' 弹出的一般都是ListView
+    
+    Select Case CurrentInfo->intType
+        Case Module
+            GetModuleList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 模块列表"
+        Case Thread
+            GetThreadList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 线程列表"
+        Case KernelThread
+            GetKernelThreadList ListView
+            Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "]" & " 线程列表"
+        Case Windows
+            GetWindowList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 窗口列表"
+        Case ProcessTimer
+            GetProcessTimerList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 定时器列表"
+        Case Handles
+            GetHandleList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 句柄列表"
+            'Print "1"'下面的Print和SetListViewData在执行此次Case后均不会被执行
+            'Print "2"
+        Case Memory
+            GetMemoryBlockList CurrentPID,ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 内存块列表"
+        Case WebConnect
+            GetWebConnectList CurrentPID, ListView, True
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 网络连接列表"
+        Case Privilege
+            GetProcessPrivilegeList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 特权列表"
+        Case Hook
+            If CurrentInformation.CurrentModule.ModuleHandle = NULL Then
+                GetProcessHookList CurrentPID, ListView
+            Else
+                GetModuleHookList CurrentPID, CurrentInformation.CurrentModule.ModuleName, CurrentInformation.CurrentModule.ModuleHandle, ListView
+            End If
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " Hook列表(inline hook, iat hook, eat hook)"
+            
+        Case ThreadCallStack
+            GetCallStack CurrentPID, CurrentTID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & " TID:" & CurrentTID & "]" & " 调用栈"
+        Case MsgHook
+            GetMsgHookList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
+        Case EventHook
+            GetEventHookList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
+        Case Hotkey
+            GetHotkeyList CurrentPID, ListView
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
+        Case UnlockTheFile
+            Unlock_File ListView', FilePathByUnlock
+            Me.Caption = "文件占用查看小工具"
+        Case IOFunction
+            If CurrentInfo->CurrentDriver.DriverObject <> 0 Then
+                GetDriverIOFunctionList ListView, CurrentInfo->CurrentDriver.DriverPath, CurrentInfo->CurrentDriver.DriverObject
+            End If
+            Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "]" & " IO派遣函数列表"
+        Case MinifilterInstances
+            EnumMinifilterInstances ListView, @CurrentInfo->CurrentDriver.DriverName
+            Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "]" & " 实例列表"
+    End Select
+    lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+End Sub
+
+'[FrmListView]事件 : 即将关闭窗口，返回非0可阻止关闭
+'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+Function FrmListView_WM_Close(hWndForm As hWnd) As LResult
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Deallocate CurrentInfo
+    UninitListViewData ListView
+    Function = FALSE ' 返回 TRUE 阻止关闭窗口。
+End Function
+
+'[FrmListView.ListView]事件 : 鼠标右键单击
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+'xPos yPos   当前鼠标位置，相对于屏幕。就是屏幕坐标。
+Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos As Long, yPos As Long)
+    Me.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    CurrentPos.x = xPos
+    CurrentPos.y = yPos
+    ScreenToClient hWndControl, @CurrentPos
+    Select Case CurrentInfo->intType
+        Case Module
+            mnuModule.hWndForm = hWndForm
+            PopupMenu hWndForm,mnuModule.HMENU
+        Case Thread, KernelThread
+            mnuThread.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuThread.HMENU
+        Case Memory
+            mnuMemory.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuMemory.HMENU
+        Case WebConnect
+            mnuWebConnect.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuWebConnect.HMENU
+        Case Windows
+            mnuWindow.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuWindow.HMENU
+        Case Handles
+            mnuHandle.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuHandle.HMENU
+        Case ProcessTimer
+            mnuProcessTimer.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuProcessTimer.HMENU
+        Case MsgHook
+            mnuWindow.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuMsgHook.HMENU
+        Case EventHook
+            mnuHandle.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuEventHook.HMENU
+        Case Hotkey
+            mnuHandle.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuHotkey.HMENU
+        Case UnlockTheFile
+            mnuUnlock_File.hWndForm = hWndForm
+            PopupMenu hWndForm,mnuUnlock_FIle.HMENU
+    End Select
+End Sub
+
+'[FrmListView.mnuThread]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuThread_mnuRefreshThread ' 刷新线程
+            lblNum.Caption = "正在刷新..."
+            'DeleteAllItemsEx ListView
+            GetThreadList CurrentPID, ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuThread_mnuTerminateThread ' 结束线程
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If KillThread(ValULng(ListView.GetItemText(i, 0))) Then DeleteItemEx ListView, i, False
+                End If
+            Next
+            CommitListViewView ListView
+        Case FrmListView_mnuThread_mnuForceKillThread ' 强制结束线程
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Print "TID:" & Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
+                    If ForceKillThread(Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))) Then DeleteItemEx ListView, i, False
+                End If
+            Next
+            CommitListViewView ListView
+        Case FrmListView_mnuThread_mnuForceDestroyThread ' 暴力摧毁线程(可能蓝屏)
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim TID As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
+                    Print "TID:" & TID
+                    If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then DeleteItemEx ListView, i, False
+                End If
+            Next
+            CommitListViewView ListView
+        Case FrmListView_mnuThread_mnuSuspendThread ' 挂起线程
+            For i As Integer = 0 To ListView.ItemCount - 1
+                If IsListViewItemSelected(ListView, i) Then MySuspendThread ValULng(ListView.GetItemText(i, 0))
+            Next
+            GetThreadList CurrentPID, ListView
+        Case FrmListView_mnuThread_mnuResumeThread ' 恢复线程
+            For i As Integer = 0 To ListView.ItemCount - 1
+                If IsListViewItemSelected(ListView, i) Then MyResumeThread ValULng(ListView.GetItemText(i, 0))
+            Next
+            GetThreadList CurrentPID, ListView
+        Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo_New->ThreadId = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
+            CurrentInfo_New->intType = ThreadCallStack
+            FrmListView.Show,, Cast(Integer, CurrentInfo_New)
+        Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
+            If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+        Case FrmListView_mnuThread_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+        Case FrmListView_mnuThread_mnuLocateFilePath ' 定位文件位置(资源管理器)
+            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 6)
+            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
+    End Select
+End Sub
+
+'[FrmListView.mnuModule]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim ModuleHandle As HMODULE = Cast(Any Ptr, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 2), "0x", "&H")))
+    Select Case wID
+        Case FrmListView_mnuModule_mnuRefreshModule ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetModuleList CurrentPID, ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuModule_mnuUnloadModule ' 卸载模块
+            If UnloadModule(CurrentPID, ModuleHandle) Then
+                AfxMsg "卸载成功!"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "卸载失败!是否强制卸载?"
+            End If
+        Case FrmListView_mnuModule_mnuForceUnloadModule ' 强制卸载模块
+            If ForceUnloadModule(CurrentPID, ModuleHandle) Then
+                AfxMsg "卸载成功!"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "卸载失败!"
+            End If
+        Case FrmListView_mnuModule_mnuViewHook ' 查看Hook
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo_New->intType = Hook
+            CurrentInfo_New->ProcessId = CurrentPID
+            CurrentInfo_New->CurrentModule.ModuleName = ListView.GetItemText(ListView.SelectedItem, 1)
+            CurrentInfo_New->CurrentModule.ModuleHandle = ModuleHandle
+            FrmListView.Show,, Cast(Integer, CurrentInfo_New)
+        Case FrmListView_mnuModule_mnuEditMemory ' 查看/编辑内存
+            If LastClickedSubItem <> 2 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+        Case FrmListView_mnuModule_mnuLittleCopy ' 复制单格数据
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+        Case FrmListView_mnuModule_mnuLocateFilePath ' 定位文件位置(资源管理器)
+            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 4)
+            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
+   End Select
+End Sub
+
+'[FrmListView.mnuUnlock_FIle]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Select Case wID
+        Case FrmListView_mnuUnlock_File_mnuRefresh '刷新列表
+            lblNum.Caption = "正在刷新..."
+            Unlock_File ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuUnlock_FIle_mnuCloseHandle ' 关闭句柄
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If CloseProcessHandle(ValUInt(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 4), "0x", "&H")))) Then
+                        DeleteItemEx ListView, i, False
+                        AfxMsg "关闭句柄成功!", "提示"
+                    Else
+                        'AfxMsg "关闭句柄失败!", "提示"
+                    End If
+                End If
+            Next
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            CommitListViewView ListView
+        Case FrmListView_mnuUnlock_FIle_mnuForceCloseHandle ' 强制关闭句柄
+            '&H863
+            Dim DoSomething As DO_SOMETHING
+            DoSomething.ProcessId = ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
+            DoSomething.TheContext = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
+            IoControl hDrv, IOCTL_CloseHandle, @DoSomething, SizeOf(DO_SOMETHING)
+            If (GetLastError = 0) Then
+                AfxMsg "强制关闭句柄成功!", "提示"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "强制关闭句柄失败!", "提示"
+                Print "[FrmListView_mnuUnlock_FIle_mnuForceCloseHandle]" & WinErrorMsg(GetLastError) & GetLastError
+            End If
+        Case FrmListView_mnuUnlock_FIle_mnuTerminateProcess ' 结束进程
+            KillProcess ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
+        Case FrmListView_mnuUnlock_File_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+   End Select
+End Sub
+
+'[FrmListView.mnuMemory]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuMemory_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetMemoryBlockList CurrentPID, ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuMemory_mnuLocateMemory ' 定位内存
+            Dim LocatedAddr As UInteger = ValULng(FF_Replace(AfxInputBox(,,, "定位内存", "请输出需要定位的内存地址:(例:0x7FFC18B9C000)"), "0x", "&H"))
+            Dim Addr As UInteger, Size As ULong
+            For i As Integer = 0 To ListView.ItemCount - 1
+                Addr = ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H"))
+                Size = ValUInt(FF_Replace(ListView.GetItemText(i, 1), "0x", "&H"))
+                Print "Addr:0x" & WHex(Addr) & " Size:0x" & WHex(Size) & " LocatedAddr:0x" & WHex(LocatedAddr) & " Addr+Size:0x" & WHex(Addr + Size)
+                If Addr <= LocatedAddr AndAlso Addr + Size >= LocatedAddr Then ' 定位成功
+                    Print "找到"
+                    ListView.UnselectAllItems
+                    ListView.SelectedItem = i
+                    ListView.ScrollSelectedItem
+                    Exit For
+                End If
+            Next
+        Case FrmListView_mnuMemory_mnuChangeMemory ' 修改内存属性
+            Dim mc As MEMORY_CHANGE Ptr = Allocate(SizeOf(MEMORY_CHANGE))
+            mc->ProcessId = CurrentPID
+            mc->Addr = ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
+            mc->dwSize = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
+            Dim strProtect As StringW = ListView.GetItemText(ListView.SelectedItem, 2)
+            mc->OldProtect = ParseProtectString(strProtect)
+            FrmMemoryChange.Show,, Cast(Integer, mc)
+        ' 搜索内存
+        Case FrmListView_mnuMemory_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+        Case FrmListView_mnuMemory_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+        Case FrmListView_mnuMemory_mnuLocateFilePath ' 定位文件位置(资源管理器)
+            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 6)
+            If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
+   End Select
+End Sub
+
+'[FrmListView.mnuHandle]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuHandle_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuHandle_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetHandleList CurrentPID, ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuHandle_mnuCloseHandle ' 关闭
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    CloseProcessHandle ValULng(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(ListView.GetItemText(i, 4)))
+                    DeleteItemEx ListView, i
+                End If
+            Next
+            CommitListViewView ListView
+        Case FrmListView_mnuHandle_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+   End Select
+End Sub
+
+'[FrmListView.mnuWebConnect]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuWebConnect_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetWebConnectList CurrentPID, ListView, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuWebConnect_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            GetWebConnectList CurrentPID, ListView, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+            SetMenuCheckState mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
+        Case FrmListView_mnuWebConnect_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+    End Select
+End Sub
+
+'[FrmListView.mnuWindow]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuWindow_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim hWnd As HWND = Cast(HWND, ValLng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+    Select Case wID
+        Case FrmListView_mnuWindow_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetWindowList CurrentPID, ListView
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuWindow_mnuShowWindow ' 显示窗口
+            NtUserShowWindow(hWnd, SW_SHOW)
+        Case FrmListView_mnuWindow_mnuHideWindow ' 隐藏窗口
+            NtUserShowWindow(hWnd, SW_HIDE)
+        Case FrmListView_mnuWindow_mnuMinWindow ' 最小化窗口
+            NtUserShowWindow(hWnd, SW_SHOWMINIMIZED)
+        Case FrmListView_mnuWindow_mnuMaxWindow ' 最大化窗口
+            NtUserShowWindow(hWnd, SW_SHOWMAXIMIZED)
+        Case FrmListView_mnuWindow_mnnuDestroyWindow ' 摧毁窗口
+            NtUserDestroyWindow(hWnd)
+            DeleteItemEx ListView, ListView.SelectedItem
+        Case FrmListView_mnuWindow_mnuFreezeWindow ' 冻结窗口
+            EnableWindow hWnd, False
+        Case FrmListView_mnuWindow_mnuActiveWindow ' 激活窗口
+            EnableWindow hWnd, True
+            SwitchToThisWindow hWnd, True
+        Case FrmListView_mnuWindow_mnuWindowTop ' 窗口置顶
+            SetWindowPos hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
+        Case FrmListView_mnuWindow_mnuWindowNoTop ' 取消置顶
+            SetWindowPos hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
+        Case FrmListView_mnuWindow_mnuLittleCopy ' 复制单格数据
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
+                CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+   End Select
+End Sub
+
+'[FrmListView.mnuPrivilege]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuPrivilege_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuPrivilege_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetProcessPrivilegeList CurrentPID, ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuPrivilege_mnuEnablePrivilege ' 启用特权
+            Dim strPrivilege As StringW = ListView.GetItemText(ListView.SelectedItem, 1)
+            If AdjustPrivilege(CurrentPID, strPrivilege, True) Then
+                AfxMsg "启用特权成功!"
+                ListView.SetItemText ListView.SelectedItem, 2, "Enabled"
+            Else
+                AfxMsg "启用特权失败!"
+            End If
+        Case FrmListView_mnuPrivilege_mnuDisablePrivilege ' 禁用特权
+            Dim strPrivilege As StringW = ListView.GetItemText(ListView.SelectedItem, 1)
+            If AdjustPrivilege(CurrentPID, strPrivilege, False) Then
+                AfxMsg "禁用特权成功!"
+                ListView.SetItemText ListView.SelectedItem, 2, "Disabled"
+            Else
+                AfxMsg "禁用特权失败!"
+            End If
+   End Select
+End Sub
+
+'[FrmListView.mnuMsgHook]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuMsgHook_mnuRefresh ' 刷新
+           lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
+                GetMsgHookList -1, ListView
+            Else
+                GetMsgHookList CurrentPID, ListView
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuMsgHook_mnuRemove ' 移除
+            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+            If UnhookWindowsHookEx(hHook) <> 0 Then
+                AfxMsg "移除成功!"
+                DeleteItemEx ListView, ListView.SelectedItem, True
+            Else
+                AfxMsg "移除失败!"
+                Print "[FrmListView_mnuMsgHook_mnuRemove]UnhookWindowsHookEx 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
+            End If
+        Case FrmListView_mnuMsgHook_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
+                GetMsgHookList CurrentPID, ListView
+                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, False
+            Else
+                GetMsgHookList -1, ListView
+                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, True
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
+            If LastClickedSubItem <> 3 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+        Case FrmListView_mnuMsgHook_mnuCopyRowData ' 复制整行数据
+            
+    End Select
+End Sub
+
+'[FrmListView.mnuEventHook]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentInfo->ProcessId))
+    Select Case wID
+        Case FrmListView_mnuEventHook_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
+                GetEventHookList -1, ListView
+            Else
+                GetEventHookList CurrentPID, ListView
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuEventHook_mnuRemove ' 移除
+            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+            If UnhookWinEvent(hHook) <> 0 Then
+                AfxMsg "移除成功!"
+                DeleteItemEx ListView, ListView.SelectedItem, True
+            Else
+                AfxMsg "移除失败!"
+                Print "[FrmListView_mnuEventHook_mnuRemove]UnhookWinEvent 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
+            End If
+        Case FrmListView_mnuEventHook_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
+                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
+                GetEventHookList CurrentPID, ListView
+                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, False
+            Else
+                Me.Caption = "事件钩子列表"
+                GetEventHookList -1, ListView
+                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, True
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
+            If LastClickedSubItem <> 3 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+    End Select
+End Sub
+
+'[FrmListView.mnuHotKey]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentInfo->ProcessId))
+    Select Case wID
+        Case FrmListView_mnuHotkey_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
+                GetHotkeyList -1, ListView
+            Else
+                GetHotkeyList CurrentPID, ListView
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuHotkey_mnuRemove ' 移除
+            Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
+            Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
+            If UnregisterHotKey(hWnd, id) <> 0 Then
+                AfxMsg "移除成功!"
+                DeleteItemEx ListView, ListView.SelectedItem, True
+            Else
+                AfxMsg "移除失败!"
+                Print "[FrmListView_mnuHotkey_mnuRemove]UnregisterHotKey 0x" & WHex(hWnd) & " 0x" & WHex(id) & ":" & WinErrorMsg(GetLastError) & GetLastError
+            End If
+        Case FrmListView_mnuHotkey_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
+                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
+                GetHotkeyList CurrentPID, ListView
+                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, False
+            Else
+                Me.Caption = "热键列表"
+                GetHotkeyList -1, ListView
+                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, True
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            FrmMemoryEditor.Show,, Addr
+    End Select
+End Sub
+
+'[FrmListView.mnuProcessTimer]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentInfo->ProcessId))
+    Select Case wID
+        Case FrmListView_mnuProcessTimer_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
+                GetProcessTimerList -1, ListView
+            Else
+                GetProcessTimerList CurrentPID, ListView
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
+            Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
+            Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
+            If KillTimer(hWnd, uIDEvent) <> 0 Then
+                AfxMsg "移除成功!"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "移除失败!"
+            End If
+        Case FrmListView_mnuProcessTimer_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
+                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 进程定时器列表"
+                GetProcessTimerList CurrentPID, ListView
+                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, False
+            Else
+                Me.Caption = "进程定时器列表"
+                GetProcessTimerList -1, ListView
+                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, True
+            End If
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+    End Select
+End Sub
+
+'[FrmListView.mnuIOFunction]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuIOFunction_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Select Case wID
+        Case FrmListView_mnuIOFunction_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetDriverIOFunctionList ListView, CurrentInfo->CurrentDriver.DriverPath, CurrentInfo->CurrentDriver.DriverObject
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+   End Select
+End Sub
+
+'[FrmListView.mnuMinifilterInstance]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuMinifilterInstance_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Select Case wID
+        Case FrmListView_mnuMinifilterInstance_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            EnumMinifilterInstances ListView, @CurrentInfo->CurrentDriver.DriverName
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuMinifilterInstance_mnuDetachInstance ' 分离实例
+            Dim FilterName As StringW = ListView.GetItemText(ListView.SelectedItem, 0)
+            Dim VolumeName As StringW = ListView.GetItemText(ListView.SelectedItem, 1)
+            Dim InstanceName As StringW = ListView.GetItemText(ListView.SelectedItem, 3)
+            If DetachFilterInstance(FilterName.WstrPtr, VolumeName.WstrPtr, InstanceName.WstrPtr) Then
+                AfxMsg "分离实例成功!"
+                DeleteItemEx ListView, ListView.SelectedItem
+            Else
+                AfxMsg "分离实例失败!"
+            End If
+        Case FrmListView_mnuMinifilterInstance_mnuDetachAllInstances ' 分离所有实例
+            Dim FilterName As StringW = ListView.GetItemText(ListView.SelectedItem, 0)
+            If DetachAllFilterInstances(FilterName.WstrPtr) Then
+                AfxMsg "分离所有实例成功!"
+                DeleteAllItemsEx ListView
+            Else
+                AfxMsg "分离所有实例失败!"
+                lblNum.Caption = "正在刷新..."
+                EnumMinifilterInstances ListView, @CurrentInfo->CurrentDriver.DriverName
+                lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+            End If
+   End Select
+End Sub
+
 

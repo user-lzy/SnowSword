@@ -253,6 +253,7 @@ ToolTipBalloon=False
 '快去打造属于你自己的工程模版吧。
 
 Type MEMORY_CHANGE
+    ProcessId As DWORD
     Addr As UInteger
     dwSize As ULong
     OldProtect As DWORD
@@ -286,6 +287,7 @@ End Function
 Sub FrmMemoryChange_CmdOK_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Me.hWndForm = hWndForm
     Dim mc As MEMORY_CHANGE Ptr = Cast(MEMORY_CHANGE Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = mc->ProcessId
     'Print "Addr:0x" & WHex(mc->Addr) & " dwSize:0x" & WHex(mc->dwSize) & " OldProtect:0x" & mc->OldProtect
     Dim hProcess As HANDLE = NULL
     If IsDriverLoaded Then

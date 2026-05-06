@@ -372,10 +372,10 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
             Dim taskCount As Long = countVar.lVal
             totalTaskCount += taskCount
             If taskCount > 0 Then
-                Print "=================================================="
+                /'Print "=================================================="
                 Print "【文件夹】"; currentPath
                 Print "【任务数】"; taskCount
-                Print "--------------------------------------------------"
+                Print "--------------------------------------------------"'/
                 
                 For i As Long = 1 To taskCount
                     Dim taskVar As VARIANT : VariantInit(@taskVar)
@@ -617,3 +617,199 @@ Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
     pTaskService->lpVtbl->Release(pTaskService)
     CoUninitialize()
 End Sub
+
+' ==============================================
+' 计划任务管理常用函数（对齐你的代码风格）
+' 依赖：已有的COM封装、BSTRToString、Dispatch系列函数
+' ==============================================
+
+' --------------------------
+' 1. 立即运行指定任务
+' --------------------------
+Function RunTask(taskPath As String) As Long
+    Dim hr As Long, pService As IDispatch Ptr
+    Dim result As VARIANT : VariantInit(@result)
+    Dim ret As Long = -1
+    Dim vConn As VARIANT
+    Dim folderVar As VARIANT, fArg(0) As VARIANT
+    Dim taskVar As VARIANT, tArg(0) As VARIANT
+
+    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
+    If hr < 0 Then Return -1
+
+    hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
+    If hr <> 0 Or pService = NULL Then Goto Cleanup
+
+    ' 连接服务
+    DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
+
+    ' 获取任务文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
+    SysFreeString(fArg(0).bstrVal)
+
+    If folderVar.vt <> VT_DISPATCH Then GoTo Cleanup
+
+    ' 获取任务对象
+    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskPath))
+    hr = DispatchInvokeGetWithArgs(folderVar.pdispVal, "GetTask", @tArg(0), 1, taskVar)
+    SysFreeString(tArg(0).bstrVal)
+
+    If hr = 0 And taskVar.vt = VT_DISPATCH Then
+        ' 运行：Run(0)
+        Dim runArg(0) As VARIANT
+        runArg(0).vt = VT_I4 : runArg(0).lVal = 0
+        hr = DispatchInvokeMethod(taskVar.pdispVal, "Run", @runArg(0), 1, result)
+        ret = IIf(hr = 0, 0, -2)
+    End If
+
+Cleanup:
+    VariantClear(@taskVar)
+    VariantClear(@folderVar)
+    If pService Then pService->lpVtbl->Release(pService)
+    CoUninitialize()
+    Return ret
+End Function
+
+' --------------------------
+' 2. 启用/禁用任务
+' --------------------------
+Function SetTaskEnabled(taskPath As String, ByVal enable As Boolean) As Long
+    Dim hr As Long, pService As IDispatch Ptr
+    Dim ret As Long = -1
+    Dim vConn As VARIANT
+    Dim folderVar As VARIANT, fArg(0) As VARIANT
+    Dim taskVar As VARIANT, tArg(0) As VARIANT
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
+    hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
+    If hr <> 0 Then GoTo Cleanup
+
+    DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
+
+    ' 获取文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
+    SysFreeString(fArg(0).bstrVal)
+
+    ' 获取任务
+    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskPath))
+    hr = DispatchInvokeGetWithArgs(folderVar.pdispVal, "GetTask", @tArg(0), 1, taskVar)
+    SysFreeString(tArg(0).bstrVal)
+
+    If hr = 0 And taskVar.vt = VT_DISPATCH Then
+        ' 设置 Enabled 属性
+        Dim vEnable As VARIANT
+        vEnable.vt = VT_BOOL
+        vEnable.boolVal = IIf(enable, -1, 0)
+        hr = DispatchInvokeGeneric(taskVar.pdispVal, "Enabled", @vEnable, 1, DISPATCH_PROPERTYPUT, vEnable)
+        ret = IIf(hr = 0, 0, -2)
+    End If
+
+Cleanup:
+    If pService Then pService->lpVtbl->Release(pService)
+    CoUninitialize()
+    Return ret
+End Function
+
+' --------------------------
+' 3. 删除任务
+' --------------------------
+Function DeleteTask(taskPath As String) As Long
+    Dim hr As Long, pService As IDispatch Ptr
+    Dim ret As Long = -1
+    Dim vConn As VARIANT
+    Dim folderVar As VARIANT, fArg(0) As VARIANT
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
+    hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
+    If hr <> 0 Then GoTo Cleanup
+
+    DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
+    
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
+    SysFreeString(fArg(0).bstrVal)
+
+    If folderVar.vt = VT_DISPATCH Then
+        Dim delArg(0) As VARIANT
+        delArg(0).vt = VT_BSTR : delArg(0).bstrVal = SysAllocString(WStr(taskPath))
+        hr = DispatchInvokeMethod(folderVar.pdispVal, "DeleteTask", @delArg(0), 1, folderVar)
+        SysFreeString(delArg(0).bstrVal)
+        ret = IIf(hr = 0, 0, -2)
+    End If
+
+Cleanup:
+    If pService Then pService->lpVtbl->Release(pService)
+    CoUninitialize()
+    Return ret
+End Function
+
+' --------------------------
+' 4. 创建简单执行程序任务
+' --------------------------
+Function CreateBasicTask(ByVal taskName As String, _
+                         ByVal CommandLine As String, _
+                         desc As String = "FB创建") As Long
+    Dim hr As Long, pService As IDispatch Ptr
+    Dim ret As Long = -1
+    Dim vConn As VARIANT
+    Dim folderVar As VARIANT, fArg(0) As VARIANT
+    Dim defVar As VARIANT
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
+    hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
+    If hr <> 0 Then GoTo Cleanup
+    
+    DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
+
+    ' 根文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
+    SysFreeString(fArg(0).bstrVal)
+
+    ' 创建任务定义
+    DispatchInvokeMethod(pService, "NewTask", NULL, 0, defVar)
+
+    If defVar.vt = VT_DISPATCH Then
+        ' 注册信息
+        Dim regVar As VARIANT
+        DispatchInvokeGet(defVar.pdispVal, "RegistrationInfo", regVar)
+
+        Dim vDesc As VARIANT
+        vDesc.vt = VT_BSTR : vDesc.bstrVal = SysAllocString(WStr(desc))
+        DispatchInvokeGeneric(regVar.pdispVal, "Description", @vDesc, 1, DISPATCH_PROPERTYPUT, vDesc)
+        SysFreeString(vDesc.bstrVal)
+
+        ' 执行动作
+        Dim actionsVar As VARIANT
+        DispatchInvokeGet(defVar.pdispVal, "Actions", actionsVar)
+
+        Dim actionVar As VARIANT
+        Dim createArg(0) As VARIANT : createArg(0).vt = VT_I4 : createArg(0).lVal = 0
+        DispatchInvokeMethod(actionsVar.pdispVal, "Create", @createArg(0), 1, actionVar)
+
+        ' 设置路径
+        Dim pathVar As VARIANT
+        pathVar.vt = VT_BSTR : pathVar.bstrVal = SysAllocString(WStr(CommandLine))
+        DispatchInvokeGeneric(actionVar.pdispVal, "Path", @pathVar, 1, DISPATCH_PROPERTYPUT, pathVar)
+        SysFreeString(pathVar.bstrVal)
+
+        ' 注册任务
+        Dim regArg(4) As VARIANT
+        regArg(0).vt = VT_BSTR : regArg(0).bstrVal = SysAllocString(WStr(taskName))
+        regArg(1).vt = VT_DISPATCH : regArg(1).pdispVal = defVar.pdispVal
+        regArg(2).vt = VT_I4 : regArg(2).lVal = 6
+        regArg(3).vt = VT_BSTR : regArg(3).bstrVal = NULL
+        regArg(4).vt = VT_BSTR : regArg(4).bstrVal = NULL
+        hr = DispatchInvokeMethod(folderVar.pdispVal, "RegisterTaskDefinition", @regArg(0), 5, folderVar)
+
+        SysFreeString(regArg(0).bstrVal)
+        ret = IIf(hr = 0, 0, -2)
+    End If
+
+Cleanup:
+    If pService Then pService->lpVtbl->Release(pService)
+    CoUninitialize()
+    Return ret
+End Function

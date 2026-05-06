@@ -1,5 +1,14 @@
 ﻿#include Once "win/winuser.bi"
 
+' 进程汇总信息结构体（替代Dictionary）
+Type Process_Info
+    pid As DWORD           ' 进程ID
+    name As WString * 260 ' 进程名称
+    memory As SIZE_T      ' 内存占用（字节）
+    is_hung As Boolean    ' 是否未响应
+    window_count As Integer ' 窗口数量
+End Type
+
 Dim Shared hWindows() As HWND
 Dim Shared hChildWindows() As HWND
 Dim Shared hwin32uDll As Any Ptr
@@ -30,7 +39,7 @@ Private Function GetPIDFromHWND(ByVal hWnd As HWND) As DWORD
     Return dwProcessId
 End Function
 
-Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
+/'Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
     Dim hWindow As hWnd = GetWindow(GetDesktopWindow, GW_CHILD)
     Dim i As Integer, wText As WString * 260, dwProcessId As DWORD, ProcessName As StringW, ProcessPath As StringW
     Dim szClass As WString * 260
@@ -86,6 +95,126 @@ Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
         hWindow = GetWindow(hWindow, GW_HWNDNEXT)
     Loop
     CommitListViewView lvwForegroundWindow
+End Sub"'/
+
+' ==============================================
+' 函数1：在数组中查找进程ID（替代 Dictionary.ContainsKey）
+' ==============================================
+Function FindProcessIndex(arr() As Process_Info, pid As DWORD) As Integer
+    Dim i As Integer
+    For i = 0 To UBound(arr)
+        If arr(i).pid = pid Then Return i
+    Next
+    Return -1 ' 未找到
+End Function
+
+' ==============================================
+' 函数2：获取进程物理内存占用（工作集）
+' ==============================================
+Function GetProcessMemory(pid As DWORD) As SIZE_T
+    Dim hProcess As HANDLE
+    Dim pmc As PROCESS_MEMORY_COUNTERS
+    
+    hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, FALSE, pid)
+    If hProcess = NULL Then Return 0
+    
+    pmc.cb = SizeOf(PROCESS_MEMORY_COUNTERS)
+    GetProcessMemoryInfo(hProcess, @pmc, SizeOf(pmc))
+    CloseHandle(hProcess)
+    
+    Return pmc.WorkingSetSize
+End Function
+
+' ==============================================
+' 函数3：格式化内存（转为 MB/GB，和360一致）
+' ==============================================
+Function FormatMem(bytes As SIZE_T) As StringW
+    If bytes = 0 Then Return "0.0 MB"
+    
+    Dim As Double size = bytes / 1024 / 1024 ' 转为MB
+    If size >= 1024 Then
+        size /= 1024
+        Return TrimW(WStr(size)) & " GB"
+    Else
+        Return TrimW(WStr(Int(size * 10) / 10)) & " MB"
+    End If
+End Function
+
+' ==============================================
+' 核心：获取可见进程列表（进程级，无重复）
+' ==============================================
+Public Sub GetVisibleProcessList(lvwForegroundProcess As Class_ListView)
+    Dim hWnd As hWnd = GetWindow(GetDesktopWindow(), GW_CHILD)
+    Dim szClass As WString * 260
+    Dim pid As DWORD, style As Long
+    Dim path As WString * 260, strName As WString * 260
+    Dim As Integer idx, count = -1
+    Dim procList() As Process_Info ' 动态数组：存储汇总后的进程
+    
+    ' 清空列表
+    Erase procList
+    InitListViewData lvwForegroundProcess ' 初始化3列：进程名 | 内存 | 状态
+
+    ' 第一步：枚举所有窗口 → 按进程汇总
+    Do While hWnd <> NULL
+        ' 过滤：顶层窗口 + 可见
+        If GetWindow(hWnd, GW_OWNER) = NULL And IsWindowVisible(hWnd) Then
+            GetClassName(hWnd, szClass, 255)
+            style = GetWindowLong(hWnd, GWL_STYLE)
+            
+            ' 过滤系统无用窗口
+            If Not( _
+                szClass = "Shell_TrayWnd" Or szClass = "Progman" Or _
+                szClass = "Button" Or szClass = "MSCTFIME UI" Or _
+                szClass = "SysShadow" Or (style And WS_CHILD) = WS_CHILD _
+            ) Then
+                ' 获取进程ID
+                GetWindowThreadProcessId(hWnd, @pid)
+                idx = FindProcessIndex(procList(), PID)
+                
+                If idx = -1 Then
+                    ' 新进程：加入数组
+                    count += 1
+                    ReDim Preserve procList(count) As ProcessInfo
+                    procList(count).pid = pid
+                    procList(count).memory = GetProcessMemory(PID)
+                    procList(count).is_hung = FALSE
+                    procList(count).window_count = 0
+                    
+                    ' 获取进程名称
+                    path = GetProcessPath(pid)
+                    strName = RightW(path, LenW(path) - InStrRevW(path, "\"))
+                    If InStrW(strName, ".") Then strName = LeftW(strName, InStrW(strName, ".") - 1)
+                    procList(count).Name = strName
+                End If
+                
+                ' 更新进程状态
+                procList(idx).window_count += 1
+                If IsHungAppWindow(hWnd) Then procList(idx).is_hung = TRUE
+            End If
+        End If
+        hWnd = GetWindow(hWnd, GW_HWNDNEXT)
+    Loop
+
+    ' 第二步：把汇总数据添加到ListView（和360完全一致）
+    If count >= 0 Then
+        For i As Integer = 0 To count
+            Dim status As WString * 10
+            If procList(i).is_hung Then
+                status = "未响应"
+            Else
+                status = "正在运行"
+            End If
+            
+            ' 添加3列：进程名 | 内存占用 | 运行状态
+            AddItemColListEx lvwForegroundProcess, 3,,, _
+                procList(i).Name, _
+                WStr(FormatMem(procList(i).memory)), _
+                status
+        Next
+    End If
+    
+    CommitListViewView lvwForegroundProcess
 End Sub
 
 ' 回调函数

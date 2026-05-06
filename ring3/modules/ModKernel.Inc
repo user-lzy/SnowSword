@@ -288,14 +288,15 @@ Private Function GetDriverObjectAddr(ByVal DriverBaseAddr As PVOID) As Integer
     IoControl hDrv, IOCTL_GetDriverObjectByBaseAddress, @DriverBase, SizeOf(DriverBase), @pDriverObject, SizeOf(pDriverObject)
     Return pDriverObject
 End Function
-
+' Dim bCheck As Boolean = (LCaseW(CurrentDriver_Info.DriverName) = "ntfs.sys") OrElse (LCaseW(CurrentDriver_Info.DriverName) = "exfat.sys") OrElse (LCaseW(CurrentDriver_Info.DriverName) = "fastfat.sys")
 Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath As StringW, DriverObject As Integer)
     Dim pDriverObject As Integer = DriverObject
     Dim DriverInfo As DRIVER_INFO
     Dim OriginalDriverInfo As DRIVER_INFO
     InitListViewData lvwIOFunction
     
-    IoControl hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)
+    SetLastError 0
+    If IoControl(hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)) = 0 Then Print "IOCTL_GetDriverInfo失败," & WinErrorMsg(GetLastError)
     GetOriginalDispatchFunctionAddr(DriverPath, OriginalDriverInfo)
     AddItemColListEx lvwIOFunction, 5,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr)), _
     WStr("-"), WStr("无")
@@ -305,6 +306,7 @@ Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath A
     WStr("-"), WStr("无")
     For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
         'If i = &H20 Then Continue For ' 这里有什么用?
+        Print "0x" & WHex(DriverInfo.MajorFunctionAddr(i))
         Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))), _
         IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.MajorFunctionAddr(i))), _
         IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.MajorFunctionAddr(i)))))
@@ -755,13 +757,20 @@ Function GetSSDT(lvwSSDT As Class_ListView) As ULong
     
     InitListViewData lvwSSDT
     
+    Dim ntBase As UInteger, ntSize As ULong
+    ntBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("ntoskrnl.exe"), ntSize))
+    Dim ntEnd As UInteger = ntBase + ntSize
     For Index As DWORD = 0 To 1000
         Dim SSDTFuncAddr As ULONG64
         If IoControl(hDrv, IOCTL_GetSSDTFuncByIndex, @Index, SizeOf(DWORD), @SSDTFuncAddr, SizeOf(ULONG64)) = 0 Then
             'Print "[GetSSDT]获取索引为" & Index & "的SSDT函数时失败:" & WinErrorMsg(GetLastError) & GetLastError
             If GetLastError = ERROR_NO_MORE_ITEMS Then Exit For
         Else
-            AddItemColListEx lvwSSDT, 5,,, WStr(Count), WHex(Index), WStr(FindFunctionNameBySyscallIndex("ntdll.dll", Index)), WStr("0x" & WHex(SSDTFuncAddr)), WStr(GetDriverPathByAddr(SSDTFuncAddr))
+            Dim ItemIndex As Long = AddItemColListEx(lvwSSDT, 5,,, WStr(Count), WHex(Index), WStr(FindFunctionNameBySyscallIndex("ntdll.dll", Index)), _
+            WStr("0x" & WHex(SSDTFuncAddr)), WStr(GetDriverPathByAddr(SSDTFuncAddr)))
+            If SSDTFuncAddr < ntBase OrElse SSDTFuncAddr > ntEnd Then ' 被hook
+                SetItemColor lvwSSDT, ItemIndex, FB_Red, FB_White
+            End If
             Count += 1
         End If
     Next
@@ -789,13 +798,20 @@ Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
     
     InitListViewData lvwSSSDT
     
+    Dim ntBase As UInteger, ntSize As ULong
+    ntBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("ntoskrnl.exe"), ntSize))
+    Dim ntEnd As UInteger = ntBase + ntSize
     Do While True
         Dim SSSDTFuncAddr As ULONG64
         If IoControl(hDrv, IOCTL_GetSSSDTFuncByIndex, @Index, SizeOf(DWORD), @SSSDTFuncAddr, SizeOf(ULONG64)) = 0 Then
             Exit Do
         Else
             'Print FindFunctionNameBySyscallIndex("win32u.dll", Index)
-            AddItemColListEx lvwSSSDT, 5,,, WStr(Count), WHex(Index + &H1000), WStr(FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000)), "0x" & WHex(SSSDTFuncAddr), WStr(GetDriverPathByAddr(SSSDTFuncAddr))
+            Dim ItemIndex As Long = AddItemColListEx(lvwSSSDT, 5,,, WStr(Count), WHex(Index + &H1000), WStr(FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000)), _
+            "0x" & WHex(SSSDTFuncAddr), WStr(GetDriverPathByAddr(SSSDTFuncAddr)))
+            If SSSDTFuncAddr < ntBase OrElse SSSDTFuncAddr > ntEnd Then ' 被hook
+                SetItemColor lvwSSSDT, ItemIndex, FB_Red, FB_White
+            End If
             Count += 1
         End If
         Index += 1
@@ -840,11 +856,17 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
     "HalDereferenceBusHandler" _
     }
     
+    Dim ntBase As UInteger, ntSize As ULong
+    ntBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("ntoskrnl.exe"), ntSize))
+    Dim ntEnd As UInteger = ntBase + ntSize
     For Index As ULong = 1 To 12
         Dim HalDispatchAddr As PVOID = NULL
         If IoControl(hDrv, IOCTL_GetHalDispatchByIndex, @Index, SizeOf(DWORD), @HalDispatchAddr, SizeOf(PVOID)) <> 0 Then
-            Print HalDispatchName(Index) & ":" & "0x" & WHex(HalDispatchAddr)
-            AddItemColListEx lvwHalDistapch, 4,,, WStr(Index), HalDispatchName(Index), "0x" & WHex(HalDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalDispatchAddr)))
+            'Print HalDispatchName(Index) & ":" & "0x" & WHex(HalDispatchAddr)
+            Dim ItemIndex As Long = AddItemColListEx(lvwHalDistapch, 4,,, WStr(Index), HalDispatchName(Index), "0x" & WHex(HalDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalDispatchAddr))))
+            If HalDispatchAddr <> NULL AndAlso (HalDispatchAddr < ntBase OrElse HalDispatchAddr > ntEnd) Then ' 被hook
+                SetItemColor lvwHalDistapch, ItemIndex, FB_Red, FB_White
+            End If
             Count += 1
         Else
             Print "[GetHalDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError
@@ -1027,11 +1049,17 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
     "HalIommuDmaRemappingCapable" _
     }
     
+    Dim ntBase As UInteger, ntSize As ULong
+    ntBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("ntoskrnl.exe"), ntSize))
+    Dim ntEnd As UInteger = ntBase + ntSize
     For Index As ULong = 1 To 149
         Dim HalPrivateDispatchAddr As PVOID = NULL
         If IoControl(hDrv, IOCTL_GetHalPrivateDispatchByIndex, @Index, SizeOf(DWORD), @HalPrivateDispatchAddr, SizeOf(ULONG64)) <> 0 Then
-            Print HalPrivateDispatchName(Index) & ":" & "0x" & WHex(HalPrivateDispatchAddr)
-            AddItemColListEx lvwHalPrivateDistapch, 4,,, WStr(Index), HalPrivateDispatchName(Index), "0x" & WHex(HalPrivateDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalPrivateDispatchAddr)))
+            'Print HalPrivateDispatchName(Index) & ":" & "0x" & WHex(HalPrivateDispatchAddr)
+            Dim ItemIndex As Long = AddItemColListEx(lvwHalPrivateDistapch, 4,,, WStr(Index), HalPrivateDispatchName(Index), "0x" & WHex(HalPrivateDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalPrivateDispatchAddr))))
+            If HalPrivateDispatchAddr <> NULL AndAlso (HalPrivateDispatchAddr < ntBase OrElse HalPrivateDispatchAddr > ntEnd) Then ' 被hook
+                SetItemColor lvwHalPrivateDistapch, ItemIndex, FB_Red, FB_White
+            End If
             Count += 1
         Else
             Print "[GetHalPrivateDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError

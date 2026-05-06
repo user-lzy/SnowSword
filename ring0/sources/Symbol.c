@@ -49,8 +49,15 @@ static VOID SymbolCancelRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     UNREFERENCED_PARAMETER(DeviceObject);
     IoReleaseCancelSpinLock(Irp->CancelIrql);
 
-    // 【修复】取消例程只完成IRP，不释放ctx！杜绝竞态双重释放
-    // ctx由InternalQuerySymbol统一释放，保证唯一释放
+    // ✅ 修复：安全地清理 WaitIrp（如果它仍然指向当前 IRP）
+    if (g_SymbolCtx)
+    {
+        ExAcquireFastMutex(&g_SymbolCtx->Lock);
+        if (g_SymbolCtx->WaitIrp == Irp)
+            g_SymbolCtx->WaitIrp = NULL;
+        ExReleaseFastMutex(&g_SymbolCtx->Lock);
+    }
+
     Irp->IoStatus.Status = STATUS_CANCELLED;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 }
@@ -61,17 +68,16 @@ NTSTATUS DispatchClose_Symbol(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     if (g_SymbolCtx)
     {
-        g_SymbolCtx->Unloading = TRUE;
-
         ExAcquireFastMutex(&g_SymbolCtx->Lock);
 
         //
-        // 1. 如果 R3 正在挂起等待请求，必须把它取消掉
+        // ✅ 修复：只取消属于当前这个挂起请求的 IRP
+        // 不要设置全局 Unloading！
         //
         if (g_SymbolCtx->WaitIrp)
         {
             PIRP waitIrp = g_SymbolCtx->WaitIrp;
-            g_SymbolCtx->WaitIrp = NULL;
+            g_SymbolCtx->WaitIrp = NULL;  // ✅ 立即清空，防止野指针
 
             ExReleaseFastMutex(&g_SymbolCtx->Lock);
 
@@ -88,6 +94,7 @@ NTSTATUS DispatchClose_Symbol(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             }
             else
             {
+                // 取消例程已在运行或已完成，不要碰 IRP
                 IoReleaseCancelSpinLock(oldIrql);
             }
         }
@@ -500,7 +507,7 @@ NTSTATUS InitSymbolContext(PDEVICE_OBJECT deviceObj)
 
     if (!g_SymbolCtx)
         return STATUS_INSUFFICIENT_RESOURCES;
-
+    
     RtlZeroMemory(g_SymbolCtx, sizeof(DEVICE_CONTEXT));
     g_SymbolCtx->DeviceObject = deviceObj;
 

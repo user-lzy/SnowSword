@@ -62,10 +62,55 @@ Type MINIFILTER_OBJECT Field = 1
 End Type
 Type PMINIFILTER_OBJECT As MINIFILTER_OBJECT Ptr ' 指针类型别名
 
+Type INSTANCE_AGGREGATE_STANDARD_INFORMATION_MINIFILTER
+    '' MiniFilter 部分（fltmc 只用到这个）
+    dwFlags                   As ULong
+    FrameID                 As ULong
+    VolumeFileSystemType    As ULONG
+    InstanceNameLength      As USHORT
+    InstanceNameBufferOffset As USHORT
+    AltitudeLength          As USHORT
+    AltitudeBufferOffset    As USHORT
+    VolumeNameLength        As USHORT
+    VolumeNameBufferOffset  As USHORT
+    FilterNameLength        As USHORT
+    FilterNameBufferOffset  As USHORT
+    SupportedFeatures       As ULONG
+End Type
+
+Type INSTANCE_AGGREGATE_STANDARD_INFORMATION_LEGACYFILTER
+    '' LegacyFilter 部分（一般不用）
+    dwFlags                   As ULong
+    AltitudeLength          As USHORT
+    AltitudeBufferOffset    As UShort
+    VolumeNameLength        As UShort
+    VolumeNameBufferOffset  As USHORT
+    FilterNameLength        As USHORT
+    FilterNameBufferOffset  As USHORT
+    SupportedFeatures       As ULONG
+End Type
+
+'' 对应：INSTANCE_AGGREGATE_STANDARD_INFORMATION
+Type INSTANCE_AGGREGATE_STANDARD_INFORMATION
+    NextEntryOffset As ULONG
+    Flags           As ULONG
+    Union
+        MinifilterType As INSTANCE_AGGREGATE_STANDARD_INFORMATION_MINIFILTER
+        LegacyType As INSTANCE_AGGREGATE_STANDARD_INFORMATION_LEGACYFILTER
+    End Union
+End Type
+
+Enum INSTANCE_INFORMATION_CLASS
+    InstanceBasicInformation = 0         ' 如果你不需要 Basic，可以不写
+    InstanceFullInformation = 1          ' ← 原先为 0，改正确
+    InstanceNameInformation ' 如果你后面还用，可保留或相应调整数值
+    InstanceAggregateStandardInformation
+End Enum
+
 ' 与 R0 保持一致的设备节点结构
 Type ATTACHED_DEVICE_NODE Field = 8
     IsOriginalDevice As Boolean
-    DeviceObject As ULong64
+    DeviceObject As ULONG64
     DriverObject As ULong64
     DriverName As Wstring * 260
     DriverPath As WString * 260
@@ -372,16 +417,23 @@ End Sub
 
 Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
     Dim FilterFuncName(10) As StringW = {"FilterUnload", "InstanceSetup", "InstanceQueryTeardown", "InstanceTeardownStart", _
-    "InstanceTeardownComplete", "PreVolumeMount", "PostVolumeMount", "GenerateFileName", "NormalizeNameComponent", _
-    "NormalizeNameComponentEx", "NormalizeContextCleanup"}
+                      "InstanceTeardownComplete", "PreVolumeMount", "PostVolumeMount", "GenerateFileName", _
+                      "NormalizeNameComponent", "NormalizeNameComponentEx", "NormalizeContextCleanup"}
+
     Dim MinifilterArray() As MINIFILTER_OBJECT
+    Dim lpRet As DWORD
+    Dim i As Long, j As Long
+
+    ' ----------------------------------
+    ' 确保驱动已加载
+    ' ----------------------------------
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
         If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
             AfxMsg "加载失败!"
             Return 0
         End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
+        hDrv = OpenDrv("\\.\SnowSword", True)
+        If hDrv <> INVALID_HANDLE_VALUE Then
             AfxMsg "加载成功!"
             FrmMain.Check6.Value = True
             IsDriverLoaded = True
@@ -390,51 +442,319 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
             Return 0
         End If
     End If
-    Dim ret As Long, lpRet As DWORD, NewIndex As Long
-    /'If GetSystemVersion <> "Windows 11 23H2" Then
-        AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
-        Exit Sub
-    End If '/
+
+    ' ----------------------------------
+    ' 修复：第一次 IOCTL → 标准查询大小（传NULL+0长度）
+    ' ----------------------------------
     SetLastError 0
     IoControl hDrv, IOCTL_EnumMiniFilter, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
-        Print "[EnumMinifilter]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+        Print "[EnumMinifilter] 第一次 IOCTL 失败:" & WinErrorMsg(GetLastError) & GetLastError
         Return 0
     End If
+
+    ' 根据返回大小计算实际数量
+    Dim filterCount As Long
+    filterCount = lpRet / SizeOf(MINIFILTER_OBJECT)
+    If filterCount <= 0 Then Return 0
+
+    ' ----------------------------------
+    ' 分配最终数组
+    ' ----------------------------------
+    ReDim MinifilterArray(filterCount - 1) As MINIFILTER_OBJECT
+
+    ' 第二次 IOCTL 获取完整数据
+    SetLastError 0
+    IoControl hDrv, IOCTL_EnumMiniFilter, NULL, 0, @MinifilterArray(0), filterCount * SizeOf(MINIFILTER_OBJECT), @lpRet
+    If GetLastError <> 0 Then
+        Print "[EnumMinifilter] 第二次 IOCTL 失败:" & WinErrorMsg(GetLastError) & GetLastError
+        Return 0
+    End If
+
+    ' ----------------------------------
+    ' 清空 TreeList
+    ' ----------------------------------
     lvwMinifilter.DeleteItem MC_TLI_ROOT
-    ReDim MinifilterArray(lpRet / SizeOf(MINIFILTER_OBJECT) - 1) As MINIFILTER_OBJECT
-    IoControl hDrv, IOCTL_EnumMiniFilter, NULL, 0, @MinifilterArray(0), (UBound(MinifilterArray) + 1) * SizeOf(MINIFILTER_OBJECT), @lpRet
-    
+
+    ' ----------------------------------
+    ' 遍历填充 TreeList
+    ' ----------------------------------
     Dim hGroup As MC_HTREELISTITEM, hItem As MC_HTREELISTITEM
-    For i As Integer = 0 To UBound(MinifilterArray)
-        Print MinifilterArray(i).wName
+    For i = 0 To UBound(MinifilterArray)
+        ' 添加根节点
         hGroup = lvwMinifilter.AddItem(MC_TLI_ROOT, MinifilterArray(i).wName)
         lvwMinifilter.SetItemText hGroup, 2, GetCorrectPath(MinifilterArray(i).wPath)
         lvwMinifilter.SetItemText hGroup, 3, "0x" & WHex(MinifilterArray(i).hFilter)
         lvwMinifilter.SetItemText hGroup, 4, MinifilterArray(i).Altitude
-        For j As Integer = 0 To 10
+
+        ' FilterFunc 回调
+        For j = 0 To 10
             If MinifilterArray(i).FilterFunc(j) = NULL Then Continue For
             hItem = lvwMinifilter.AddItem(hGroup, FilterFuncName(j))
             lvwMinifilter.SetItemText hItem, 1, "0x" & WHex(MinifilterArray(i).FilterFunc(j))
             lvwMinifilter.SetItemText hItem, 2, GetDriverPathByAddr(MinifilterArray(i).FilterFunc(j))
         Next
-        If Not MinifilterArray(i).bMajorFunction Then Continue For
-        For j As Integer = 0 To UBound(MinifilterArray(i).MajorFunction)
-            If (MinifilterArray(i).MajorFunction(j).PreOperation = NULL) AndAlso (MinifilterArray(i).MajorFunction(j).PostOperation = NULL) Then Continue For
-            hItem = lvwMinifilter.AddItem(hGroup, "")
-            If MinifilterArray(i).MajorFunction(j).PreOperation <> NULL Then
-                lvwMinifilter.SetItemText hItem, 0, IRP_MJ_ToString(j) & "(Pre)"
-                lvwMinifilter.SetItemText hItem, 1, "0x" & WHex(MinifilterArray(i).MajorFunction(j).PreOperation)
-                lvwMinifilter.SetItemText hItem, 2, GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PreOperation)
-            End If
-            If MinifilterArray(i).MajorFunction(j).PostOperation <> NULL Then
-                lvwMinifilter.SetItemText hItem, 0, IRP_MJ_ToString(j) & "(Post)"
-                lvwMinifilter.SetItemText hItem, 1, "0x" & WHex(MinifilterArray(i).MajorFunction(j).PostOperation)
-                lvwMinifilter.SetItemText hItem, 2, GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PostOperation)
-            End If
-        Next
+
+        ' MajorFunction 回调
+        If MinifilterArray(i).bMajorFunction Then
+            For j = 0 To UBound(MinifilterArray(i).MajorFunction)
+                If MinifilterArray(i).MajorFunction(j).PreOperation = NULL AndAlso _
+                   MinifilterArray(i).MajorFunction(j).PostOperation = NULL Then Continue For
+
+                hItem = lvwMinifilter.AddItem(hGroup, "")
+
+                If MinifilterArray(i).MajorFunction(j).PreOperation <> NULL Then
+                    lvwMinifilter.SetItemText hItem, 0, IRP_MJ_ToString(j) & "(Pre)"
+                    lvwMinifilter.SetItemText hItem, 1, "0x" & WHex(MinifilterArray(i).MajorFunction(j).PreOperation)
+                    lvwMinifilter.SetItemText hItem, 2, GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PreOperation)
+                End If
+
+                If MinifilterArray(i).MajorFunction(j).PostOperation <> NULL Then
+                    lvwMinifilter.SetItemText hItem, 0, IRP_MJ_ToString(j) & "(Post)"
+                    lvwMinifilter.SetItemText hItem, 1, "0x" & WHex(MinifilterArray(i).MajorFunction(j).PostOperation)
+                    lvwMinifilter.SetItemText hItem, 2, GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PostOperation)
+                End If
+            Next
+        End If
     Next
-    Return 0
+
+    Return filterCount
+End Function
+
+'' 辅助函数：从缓冲区读取Unicode字符串（通用）
+Sub ReadUnicodeString(ByVal pBase As Byte Ptr, ByVal offset As ULong, ByVal length As ULong, ByVal outStr As WString Ptr)
+    *outStr = ""
+    If length = 0 Then Exit Sub
+    
+    Dim charCnt As ULong = length \ 2
+    Dim pSrc As WString Ptr = CPtr(WString Ptr, pBase + offset)
+    
+    *outStr = Wstring(charCnt, WStr(" "))
+    memcpy outStr, pSrc, length
+End Sub
+
+Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName As WString Ptr) As Integer
+    Dim hFltdll   As HMODULE = NULL
+    Dim hFind     As HANDLE = NULL
+    Dim retLen    As DWORD = 0
+    Dim count     As Integer = 0
+    Dim hr        As HRESULT
+    Dim buffer(0 To 4095) As Byte  '' 1024*4 足够存储所有实例信息
+    Const bufSize As DWORD = 4096
+
+    InitListViewData lvwInstance
+
+    '' 【修复】允许 FilterName=NULL（枚举所有实例，fltmc默认行为）
+    '' 仅禁止空字符串，不禁止NULL
+
+    '' 加载fltlib.dll（系统筛选器库）
+    hFltdll = DyLibLoad("FltLib.dll")
+    If hFltdll = 0 Then
+        Print "加载 FltLib.dll 失败"
+        Return -1
+    End If
+
+    '' 绑定API函数
+    Dim FilterInstanceFindFirst As Function( _
+        ByVal lpFilterName As LPCWSTR, _
+        ByVal dwInformationClass As INSTANCE_INFORMATION_CLASS, _
+        ByVal lpBuffer As LPVOID, _
+        ByVal dwBufferSize As DWORD, _
+        ByRef lpBytesReturned As DWORD, _
+        ByRef lpFindHandle As HANDLE) As HRESULT
+
+    Dim FilterInstanceFindNext As Function( _
+        ByVal hFindHandle As HANDLE, _
+        ByVal dwInformationClass As INSTANCE_INFORMATION_CLASS, _
+        ByVal lpBuffer As LPVOID, _
+        ByVal dwBufferSize As DWORD, _
+        ByRef lpBytesReturned As DWORD) As HRESULT
+
+    Dim FilterInstanceFindClose As Sub(ByVal hFindHandle As HANDLE)
+
+    FilterInstanceFindFirst = DyLibSymbol(hFltdll, "FilterInstanceFindFirst")
+    FilterInstanceFindNext  = DyLibSymbol(hFltdll, "FilterInstanceFindNext")
+    FilterInstanceFindClose = DyLibSymbol(hFltdll, "FilterInstanceFindClose")
+
+    If FilterInstanceFindFirst = NULL Or FilterInstanceFindNext=NULL Or FilterInstanceFindClose=NULL Then
+        Print "获取API地址失败"
+        DyLibFree hFltdll
+        Return -1
+    End If
+
+    '' ===================== 核心修复 =====================
+    '' 1. 使用 fltmc 原生信息类：InstanceAggregateStandardInformation
+    '' 2. 支持NULL枚举所有实例
+    '' ====================================================
+    ZeroMemory(@buffer(0), bufSize)
+    hr = FilterInstanceFindFirst( _
+        FilterName, _
+        InstanceAggregateStandardInformation, _
+        @buffer(0), _
+        bufSize, _
+        retLen, _
+        hFind)
+
+    '' 无实例/枚举结束（0x80070103 = ERROR_NO_MORE_ITEMS）
+    If hr = &H80070103 Then
+        Print "无筛选器实例"
+        Goto CLEANUP
+    End If
+    '' 其他错误
+    If hr <> 0 Then
+        Print "FilterInstanceFindFirst 失败，错误码：0x"; Hex(hr)
+        Goto CLEANUP
+    End If
+
+    '' 循环遍历所有实例
+    Do
+        '' 映射到正确的结构体
+        Dim pInfo As INSTANCE_AGGREGATE_STANDARD_INFORMATION Ptr = _
+            CPtr(INSTANCE_AGGREGATE_STANDARD_INFORMATION Ptr, @buffer(0))
+
+        count += 1
+
+        '' ===================== 读取真实数据（无硬编码） =====================
+        Dim strFilter As StringW = ""
+        ReadUnicodeString @buffer(0), pInfo->MiniFilterType.FilterNameBufferOffset, pInfo->MiniFilterType.FilterNameLength, strFilter.WstrPtr
+
+        Dim strVolume As StringW = ""
+        ReadUnicodeString @buffer(0), pInfo->MiniFilterType.VolumeNameBufferOffset, pInfo->MiniFilterType.VolumeNameLength, strVolume.WstrPtr
+
+        Dim strInstance As StringW = ""
+        ReadUnicodeString @buffer(0), pInfo->MiniFilterType.InstanceNameBufferOffset, pInfo->MiniFilterType.InstanceNameLength, strInstance.WstrPtr
+
+        Dim strAltitude As StringW = ""
+        ReadUnicodeString @buffer(0), pInfo->MiniFilterType.AltitudeBufferOffset, pInfo->MiniFilterType.AltitudeLength, strAltitude.WstrPtr
+        Dim strFrame    As StringW = WStr(pInfo->MinifilterType.FrameID)           '' 框架
+        Dim strFeatures As StringW = "0x" & WHex(pInfo->MinifilterType.SupportedFeatures) '' SprtFtrs
+        Dim strStatus   As StringW = "0x" & WHex(pInfo->MiniFilterType.dwFlags)
+        '' ====================================================================
+
+        '' 控制台输出（和fltmc完全一致）
+        Print "筛选器："; strFilter; _
+              "  卷："; strVolume; _
+              "  高度："; strAltitude; _
+              "  实例："; strInstance
+
+        '' 添加到列表视图（匹配fltmc所有列）
+        AddItemColListEx lvwInstance, 7,,, _
+            WStr(strFilter), _
+            WStr(strVolume), _
+            WStr(strAltitude), _
+            WStr(strInstance), _
+            WStr(strFrame), _
+            WStr(strFeatures), _
+            WStr(strStatus)
+
+        '' 读取下一个实例
+        ZeroMemory(@buffer(0), bufSize)
+        hr = FilterInstanceFindNext(hFind, InstanceAggregateStandardInformation, @buffer(0), bufSize, retLen)
+
+    Loop While hr = 0 '' 0=成功，继续循环
+
+CLEANUP:
+    '' 安全释放资源
+    If hFind <> NULL Then FilterInstanceFindClose(hFind)
+    If hFltdll <> NULL Then DyLibFree(hFltdll)
+    CommitListViewView lvwInstance
+
+    '' 错误：返回-1；成功：返回实例数量
+    If hr <> 0 And hr <> &H80070103 Then Return -1 Else Return count
+End Function
+
+' 功能：删除指定实例
+' 参数：筛选器名、实例名、卷名
+' 返回：0=成功，非0=失败
+Function DetachFilterInstance(ByVal pFilterName As WString Ptr, ByVal pVolumeName As WString Ptr, ByVal pInstanceName As WString Ptr) As Boolean
+    Dim hFltLib As HMODULE = DyLibLoad("FltLib.dll")
+    Dim hr As HRESULT = &H8000FFFF
+    If hFltLib = NULL Then Return hr
+
+    ' API：FilterDetach = 分离/删除实例
+    Dim FilterDetach As Function(ByVal lpFilterName As WString Ptr, ByVal lpVolumeName As WString Ptr, ByVal lpInstanceName As WString Ptr) As HRESULT
+    FilterDetach = DyLibSymbol(hFltLib, "FilterDetach")
+
+    If FilterDetach Then
+        hr = FilterDetach(pFilterName, pVolumeName, pInstanceName)
+        Print "删除指定实例：" & IIf(hr=0,"成功","失败") & " 错误码: 0x" & Hex(hr)
+    End If
+
+    DyLibFree hFltLib
+    Return (hr = S_OK)
+End Function
+
+' 功能：删除指定筛选器的全部实例
+' 参数：筛选器名
+' 返回：删除成功的数量
+Function DetachAllFilterInstances(ByVal pFilterName As WString Ptr) As Integer
+    Dim hFltLib As HMODULE = DyLibLoad("FltLib.dll")
+    Dim hFind As HANDLE = NULL
+    Dim retLen As DWORD, hr As HRESULT
+    Dim buffer(0 To 4095) As Byte
+    Dim count As Integer = 0
+    If hFltLib = NULL Then Return 0
+
+    Dim FilterInstanceFindFirst As Function(ByVal lpFilterName As WString Ptr, ByVal ic As INSTANCE_INFORMATION_CLASS, ByVal pBuf As LPVOID, ByVal bufSz As DWORD, ByRef ret As DWORD, ByRef hFind As HANDLE) As HRESULT
+    Dim FilterInstanceFindNext As Function(ByVal hFind As HANDLE, ByVal ic As INSTANCE_INFORMATION_CLASS, ByVal pBuf As LPVOID, ByVal bufSz As DWORD, ByRef ret As DWORD) As HRESULT
+    Dim FilterInstanceFindClose As Sub(ByVal hFind As HANDLE)
+    Dim FilterDetach As Function(ByVal lpFilterName As WString Ptr, ByVal lpVolumeName As WString Ptr, ByVal lpInstanceName As WString Ptr) As HRESULT
+
+    FilterInstanceFindFirst = DyLibSymbol(hFltLib, "FilterInstanceFindFirst")
+    FilterInstanceFindNext = DyLibSymbol(hFltLib, "FilterInstanceFindNext")
+    FilterInstanceFindClose = DyLibSymbol(hFltLib, "FilterInstanceFindClose")
+    FilterDetach = DyLibSymbol(hFltLib, "FilterDetach")
+
+    If FilterInstanceFindFirst = NULL OrElse FilterDetach = NULL Then Goto CLEANUP
+
+    hr = FilterInstanceFindFirst(pFilterName, InstanceAggregateStandardInformation, @buffer(0), 4096, retLen, hFind)
+    If hr = &H80070103 Then Goto CLEANUP
+
+    ' 遍历所有实例并删除
+    Do
+        Dim pInfo As INSTANCE_AGGREGATE_STANDARD_INFORMATION Ptr = CPtr(INSTANCE_AGGREGATE_STANDARD_INFORMATION Ptr, @buffer(0))
+        Dim strInst As StringW = "", strVol As StringW = ""
+        ReadUnicodeString @buffer(0), pInfo->MinifilterType.InstanceNameBufferOffset, pInfo->MinifilterType.InstanceNameLength, strInst.WstrPtr
+        ReadUnicodeString @buffer(0), pInfo->MinifilterType.VolumeNameBufferOffset, pInfo->MinifilterType.VolumeNameLength, strVol.WstrPtr
+
+        ' 执行删除
+        Dim result As HRESULT = FilterDetach(pFilterName, strVol.WstrPtr, strInst.WstrPtr)
+        If result = S_OK Then
+            count += 1
+        Else
+            Print "分离实例失败,strInst=" & strInst & " strVol=" & strVol & " ,Error=" & WinErrorMsg(result) & " result=0x" & WHex(result)
+        End If
+
+        ZeroMemory(@buffer(0), 4096)
+        hr = FilterInstanceFindNext(hFind, InstanceAggregateStandardInformation, @buffer(0), 4096, retLen)
+    Loop While hr = 0
+
+CLEANUP:
+    If hFind Then FilterInstanceFindClose(hFind)
+    DyLibFree hFltLib
+    Print "总计删除实例数量：" & count
+    Return count
+End Function
+
+' 功能：卸载筛选器驱动
+' 参数：筛选器名
+' 返回：0=成功，非0=失败
+Function UnloadFilter(ByVal pFilterName As WString Ptr) As Boolean
+    Dim hFltLib As HMODULE = DyLibLoad("FltLib.dll")
+    Dim hr As HRESULT = &H8000FFFF
+    If hFltLib = NULL Then Return hr
+
+    ' API：FilterUnload = 卸载筛选器
+    Dim pUnload As Function(ByVal lpFilterName As WString Ptr) As HRESULT
+    pUnload = DyLibSymbol(hFltLib, "FilterUnload")
+
+    If pUnload Then
+        hr = pUnload(pFilterName)
+        Print "卸载筛选器：" & IIf(hr=0,"成功","失败") & " 错误码: 0x" & Hex(hr)
+    End If
+
+    DyLibFree hFltLib
+    Return (hr = S_OK)
 End Function
 
 ' 功能：过滤乱码字符，仅保留可打印Unicode字符，确保驱动名称显示正常

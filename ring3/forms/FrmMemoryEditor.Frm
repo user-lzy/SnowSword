@@ -551,7 +551,9 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If FrmMemoryEditor_PID = 4 Then FrmMemoryEditor_PID = 0
+    Me.hWndForm = hWndForm
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(0))
+    If MemoryInfo->dwProcessId = 4 Then MemoryInfo->dwProcessId = 0
     
     ' 读取参数初始化（共用逻辑）
     Dim bytData() As UByte
@@ -568,7 +570,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     If IsDriverLoaded = True Then
         Dim stMemory As MemoryStruct
-        stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, FrmMemoryEditor_PID))
+        stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, MemoryInfo->dwProcessId))
         stMemory.Addr = Cast(PVOID, readAddr)
         stMemory.dwSize = dwSize
         stMemory.pData = @bytData(0)
@@ -630,7 +632,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     
     ' 驱动读取执行
     Dim stMemory As MemoryStruct
-    stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, FrmMemoryEditor_PID))
+    stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, MemoryInfo->dwProcessId))
     stMemory.Addr = Cast(PVOID, readAddr)
     stMemory.dwSize = dwSize
     stMemory.pData = @bytData(0)
@@ -649,20 +651,33 @@ End Sub
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
 Sub FrmMemoryEditor_Shown(hWndForm As hWnd, UserData As Integer)
-    FrmMemoryEditor_PID = CurrentPID
-    txtPID.Text = WStr(FrmMemoryEditor_PID)
-    txtAddr.Text = "0x" & WHex(Cast(ULONG64, UserData))
+    Me.hWndForm = hWndForm
+    Me.UserData(0) = UserData
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, UserData)
+    txtPID.Text = WStr(MemoryInfo->dwProcessId)
+    txtAddr.Text = "0x" & WHex(Cast(ULONG64, MemoryInfo->Addr))
     txtSize.Text = "0x200"
     FrmMemoryEditor.Caption = "内存编辑器"
-    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(FrmMemoryEditor_PID))
+    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId))))
 End Sub
 
 '[FrmMemoryEditor.txtPID]事件 : 文本已经被修改（修改前用 EN_UPDATE
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMemoryEditor_txtPID_EN_Change(hWndForm As hWnd, hWndControl As hWnd)
-    FrmMemoryEditor_PID = ValULng(txtPID.Text)
-    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(FrmMemoryEditor_PID))
+    Me.hWndForm = hWndForm
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(0))
+    MemoryInfo->dwProcessId = Cast(HANDLE, ValULng(txtPID.Text))
+    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId))))
 End Sub
+
+'[FrmMemoryEditor]事件 : 即将关闭窗口，返回非0可阻止关闭
+'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+Function FrmMemoryEditor_WM_Close(hWndForm As hWnd) As LResult
+
+
+   Function = FALSE ' 返回 TRUE 阻止关闭窗口。
+End Function
+
 
 

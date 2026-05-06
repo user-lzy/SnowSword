@@ -295,6 +295,17 @@ typedef struct _CALLBACK_LOOKUP_TABLE {
 	KSPIN_LOCK      Lock;       // 自旋锁（保护写入）
 } CALLBACK_LOOKUP_TABLE, * PCALLBACK_LOOKUP_TABLE;
 
+// 自定义结构体：存放单个实例的关键信息
+#define INSTANCE_NAME_MAX_LEN  260
+#define VOLUME_PATH_MAX_LEN    260
+
+typedef struct _INSTANCE_DETAIL_INFO {
+	WCHAR InstanceName[INSTANCE_NAME_MAX_LEN];   // 实例名称
+	WCHAR VolumePath[VOLUME_PATH_MAX_LEN];       // 挂载卷路径
+	ULONG InstanceFlags;                         // 实例状态标志
+	ULONG InstanceId;                            // 实例标识(枚举顺序号)
+} INSTANCE_DETAIL_INFO, * PINSTANCE_DETAIL_INFO;
+
 // Callout 信息结构
 typedef struct _WFP_CALLOUT_INFO {
 	GUID    CalloutGuid;        // Callout 的 GUID
@@ -318,6 +329,12 @@ typedef struct _WFP_FILTER_INFO {
 NTSTATUS ControlCallback(PVOID pCallbackFunc, PUCHAR OldCode, BOOLEAN Status);
 NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo);
 ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount);
+NTSTATUS
+EnumerateMiniFilterInstances(
+	_In_  PFLT_FILTER              Filter,
+	_Out_ PINSTANCE_DETAIL_INFO* Instances,
+	_Out_ PULONG                  InstanceCount
+);
 
 ULONG EnumCallbacks(PCallbackInfo* pArray);
 

@@ -99,7 +99,7 @@ Function FindFunctionNameBySyscallIndex(ByVal DllName As String, ByVal targetInd
         AndAlso (code[3] = &HB8) AndAlso (*CPtr(DWORD Ptr, @code[4]) = targetIndex) Then Return functionName
     Next
     
-    Return ""
+    Return "NtQuerySystemTime"
 End Function
 
 '获取系统版本号

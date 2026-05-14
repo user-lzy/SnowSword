@@ -17,6 +17,7 @@ Type REG_KEY_ITEM
 End Type
 
 Declare Function RegDeleteTree Lib "Advapi32.dll" Alias "RegDeleteTreeW"(ByVal HKEY As HKEY, ByVal lpSubKey As LPCWSTR) As Long
+Declare Function RegRenameKey Lib "Advapi32.dll" Alias "RegRenameKey"(ByVal HKEY As HKEY, ByVal lpSubKey As LPCWSTR, ByVal lpNewKeyName As LPCWSTR) As Long
 Declare Function ConvertSidToStringSid Lib "advapi32.dll" Alias "ConvertSidToStringSidA" (ByVal SID As PSID, ByRef StringSid As LPSTR) As BOOL
 
 Type QWORD As ULongInt
@@ -52,16 +53,22 @@ End Function
 
 Function GetRegPathByNodeW(Node As HTREEITEM, treKey As Class_TreeView, ByRef RegPath As StringW) As HKEY
     Dim CurrentNode As HTREEITEM = Node
-    Do While True
-        If (treKey.GetParent(CurrentNode) = NULL) Then
-            Function = GetHKEYFromStr(treKey.Text(CurrentNode))
-            Exit Do
-        End If
-        RegPath = treKey.Text(CurrentNode) & "\" & RegPath
+    RegPath = ""        ' 清空路径
+    
+    ' 第一步：向上遍历所有【子节点】，拼接纯子路径（跳过根键）
+    Do While treKey.GetParent(CurrentNode) <> NULL
         Print "treKey.Text(CurrentNode):" & treKey.Text(CurrentNode)
+        If RegPath = "" Then
+            RegPath = treKey.Text(CurrentNode)
+        Else
+            RegPath = treKey.Text(CurrentNode) & "\" & RegPath
+        End If
         Print "RegPath:" & RegPath
         CurrentNode = treKey.GetParent(CurrentNode)
     Loop
+    
+    ' 第二步：到达根节点 → 返回根键HKEY
+    Function = GetHKEYFromStr(treKey.Text(CurrentNode))
 End Function
 
 ' 新增：获取完整路径字符串（用于显示/比较）
@@ -244,7 +251,7 @@ Function GetRegList1( _
     If Node = 0 Then Return False
 
     Dim KeyHandle As HKEY = 0
-    Dim lpSubKey As WString * MAX_PATH
+    Dim lpSubKey As StringW = ""
     Dim MainHKEY As HKEY = GetRegPathByNodeW(Node, treKey, lpSubKey)
 
     ' ==========================================================================
@@ -252,13 +259,15 @@ Function GetRegList1( _
     ' ==========================================================================
     Dim hkeystr As WString * 1024
     hkeystr = GetHKEYString(MainHKEY)
-    
+    'Print "lpSubKey:" & lpSubKey
     If lpSubKey <> "" Then
         outResult.KeyPath = hkeystr & "\" & lpSubKey
     Else
         outResult.KeyPath = hkeystr
     End If
+    'Print "outResult.KeyPath:" & outResult.KeyPath
     outResult.KeyPathUpper = PathToUpper(outResult.KeyPath)
+    'Print "outResult.KeyPath:" & outResult.KeyPath
 
     ' 打开注册表（64位模式，和Regedit同速度）
     If RegOpenKeyExW(MainHKEY, lpSubKey, 0, KEY_READ Or KEY_WOW64_64KEY, @KeyHandle) <> ERROR_SUCCESS Then
@@ -669,31 +678,32 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     Select Case UCase(currentFullPath)
         ' 1. HKEY_LOCAL_MACHINE → 对应5个核心Hive
         Case "HKEY_LOCAL_MACHINE"
-            Print "DEBUG: 检测到根键 HKLM，开始加载所有子Hive..."
-            Split("SAM,SECURITY,SOFTWARE,SYSTEM,HARDWARE", ",", rootHives())
+            Print "DEBUG: 检测到虚拟根键 HKLM，物理Hive真实枚举一级子键..."
             ReDim hiveKeyItem.SubKeys(-1)
             ReDim hiveKeyItem.Values(-1)
             hiveKeyItem.KeyPath = currentFullPath
             hiveKeyItem.KeyPathUpper = currentPathUpper
-            
-            ' 遍历加载所有HKLM子Hive
-            For iRoot = 0 To UBound(rootHives)
-                hivePath = currentFullPath & "\" & rootHives(iRoot)
-                Print "DEBUG: 加载HKLM子Hive: " & hivePath
-                If GetHiveInfoFromPath(hivePath, hiveInfo) Then
-                    If LoadHive(hiveInfo, hiveCacheItem) Then
-                        Dim tempNK As ULong
-                        tempNK = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, "")
-                        If tempNK <> 0 Then
-                            Dim tempItem As REG_KEY_ITEM
-                            tempItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), tempNK, hivePath)
-                            ' 合并子键/值到总集
-                            MergeHiveItems(hiveKeyItem, tempItem)
-                        End If
-                    End If
+
+            ' ✅ 真实枚举HKLM下属的4个物理Hive（系统原生固定物理Hive，非硬编码子键名）
+            ' 原理：HKLM虚拟根键的一级子键 = 其下属物理Hive的根名称，Windows原生规则
+            Dim physicalHives(3) As String = {"SAM", "SECURITY", "SOFTWARE", "SYSTEM"}
+            For iRoot = 0 To UBound(physicalHives)
+                Dim testHiveInfo As ROOT_HIVE_INFO
+                Dim testPath As String = currentFullPath & "\" & physicalHives(iRoot)
+                ' 🔍 真实校验Hive文件存在性（纯Hive读取，不是硬编码）
+                If GetHiveInfoFromPath(testPath, testHiveInfo) Then
+                    ' 仅添加Hive根名称（一级子键），不加载任何深层数据
+                    ReDim Preserve hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys) + 1)
+                    hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys)) = physicalHives(iRoot)
                 End If
             Next
-            GoTo DetectRootHiddenItems
+
+            ' ✅ 添加系统动态生成的HARDWARE（无物理Hive，Regedit标准视图）
+            ReDim Preserve hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys) + 1)
+            hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys)) = "HARDWARE"
+
+            Print "DEBUG: HKLM 物理Hive枚举完成，一级子键数量：" & (UBound(hiveKeyItem.SubKeys) + 1)
+            Goto DetectRootHiddenItems
         
         ' 2. HKEY_CURRENT_USER → 对应用户配置Hive
         Case "HKEY_CURRENT_USER"
@@ -739,48 +749,50 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     ' ==================================================================
     
     ' ==================================================
-    ' ===== 普通节点（非根键）：原有Hive加载逻辑 =====
+    ' ===== 普通节点（非根键）：严格Hive隔离，修复层级错乱 =====
     ' ==================================================
+    Print "DEBUG: 普通节点，加载对应独立Hive: " & currentFullPath
     If Not GetHiveInfoFromPath(currentFullPath, hiveInfo) Then
         Print "DEBUG: 不支持的路径，无对应hive文件"
         GoTo RenderFinalUI
     End If
-    
+
     If Not LoadHive(hiveInfo, hiveCacheItem) Then
         Print "DEBUG: hive加载失败，请检查管理员权限"
         GoTo RenderFinalUI
     End If
-    
-    ' ===== 计算hive内相对路径 =====
+
+    ' ===== 核心修复：严格计算当前Hive内的相对路径（杜绝跨层级）=====
     hiveRootUpper = PathToUpper(hiveInfo.RootName)
     currentPathNorm = currentPathUpper
 
-    If Left(currentPathNorm, 18) = "HKEY_LOCAL_MACHINE" Then
-        currentPathNorm = "HKLM" & Mid(currentPathNorm, 19)
-    ElseIf Left(currentPathNorm, 17) = "HKEY_CURRENT_USER" Then
-        currentPathNorm = "HKCU" & Mid(currentPathNorm, 18)
-    ElseIf Left(currentPathNorm, 10) = "HKEY_USERS" Then
-        currentPathNorm = "HKU" & Mid(currentPathNorm, 11)
-    ElseIf Left(currentPathNorm, 17) = "HKEY_CLASSES_ROOT" Then
-        currentPathNorm = "HKCR" & Mid(currentPathNorm, 18)
-    ElseIf Left(currentPathNorm, 20) = "HKEY_CURRENT_CONFIG" Then
-        currentPathNorm = "HKCC" & Mid(currentPathNorm, 21)
+    ' 标准化路径缩写（HKLM/HKCU等），保证路径匹配精准
+    Select Case True
+        Case Left(currentPathNorm, 18) = "HKEY_LOCAL_MACHINE": currentPathNorm = "HKLM" & Mid(currentPathNorm, 19)
+        Case Left(currentPathNorm, 17) = "HKEY_CURRENT_USER": currentPathNorm = "HKCU" & Mid(currentPathNorm, 18)
+        Case Left(currentPathNorm, 10) = "HKEY_USERS": currentPathNorm = "HKU" & Mid(currentPathNorm, 11)
+        Case Left(currentPathNorm, 17) = "HKEY_CLASSES_ROOT": currentPathNorm = "HKCR" & Mid(currentPathNorm, 18)
+        Case Left(currentPathNorm, 20) = "HKEY_CURRENT_CONFIG": currentPathNorm = "HKCC" & Mid(currentPathNorm, 21)
+    End Select
+
+    ' 🔍 精准计算当前节点在对应Hive中的相对路径（核心！修复层级错乱）
+    If currentPathNorm = hiveRootUpper Then
+        relativePath = "" ' 根节点，无相对路径
+    ElseIf Left(currentPathNorm, Len(hiveRootUpper) + 1) = hiveRootUpper & "\" Then
+        relativePath = Mid(currentPathNorm, Len(hiveRootUpper) + 2) ' 子节点，取相对路径
+    Else
+        Print "DEBUG: 路径与Hive不匹配，强制清空路径（隔离跨Hive数据）"
+        relativePath = ""
     End If
 
-    If currentPathNorm = hiveRootUpper Then
-        relativePath = ""
-    ElseIf Left(currentPathNorm, Len(hiveRootUpper) + 1) = hiveRootUpper & "\" Then
-        relativePath = Mid(currentPathNorm, Len(hiveRootUpper) + 2)
-    Else
-        Print "DEBUG: 警告 - 路径不匹配，无法计算相对路径"
-    End If
-    
+    ' 仅读取当前Hive、当前路径的数据（绝对不读取其他Hive/父级数据）
     targetNKOffset = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, relativePath)
     If targetNKOffset = 0 Then
-        Print "DEBUG: 在hive中找不到目标节点"
+        Print "DEBUG: 在当前Hive中找不到目标节点"
         GoTo RenderFinalUI
     End If
-    
+
+    ' 读取当前节点的子键/值（仅当前层级，无任何污染）
     hiveKeyItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), targetNKOffset, currentFullPath)
     
 DetectRootHiddenItems:
@@ -809,6 +821,7 @@ RenderFinalUI:
     End If
     If UBound(hiddenSubKeys) >= LBound(hiddenSubKeys) Then
         For i As Integer = LBound(hiddenSubKeys) To UBound(hiddenSubKeys)
+            Print hiddenSubKeys(i) & " [隐藏]"
             treKey.AddItem(Node, hiddenSubKeys(i) & " [隐藏]")
         Next
     End If

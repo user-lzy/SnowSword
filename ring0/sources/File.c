@@ -1,4 +1,10 @@
 ﻿#include "File.h"
+#include "ntddvol.h"
+#include "ntstrsafe.h"
+//#define NT_INCLUDED
+//#include "winioctl.h"
+
+extern POBJECT_TYPE* IoDeviceObjectType;
 
 // ============================================================================
 // 池标签定义
@@ -16,6 +22,45 @@ typedef struct _COPY_WORK_ITEM {
     UNICODE_STRING DestPath;    // 深拷贝的目标路径
     BOOLEAN IsDirectory;
 } COPY_WORK_ITEM, * PCOPY_WORK_ITEM;
+
+typedef enum _MEDIA_TYPE {
+    Unknown,                // Format is unknown
+    F5_1Pt2_512,            // 5.25", 1.2MB,  512 bytes/sector
+    F3_1Pt44_512,           // 3.5",  1.44MB, 512 bytes/sector
+    F3_2Pt88_512,           // 3.5",  2.88MB, 512 bytes/sector
+    F3_20Pt8_512,           // 3.5",  20.8MB, 512 bytes/sector
+    F3_720_512,             // 3.5",  720KB,  512 bytes/sector
+    F5_360_512,             // 5.25", 360KB,  512 bytes/sector
+    F5_320_512,             // 5.25", 320KB,  512 bytes/sector
+    F5_320_1024,            // 5.25", 320KB,  1024 bytes/sector
+    F5_180_512,             // 5.25", 180KB,  512 bytes/sector
+    F5_160_512,             // 5.25", 160KB,  512 bytes/sector
+    RemovableMedia,         // Removable media other than floppy
+    FixedMedia,             // Fixed hard disk media
+    F3_120M_512,            // 3.5", 120M Floppy
+    F3_640_512,             // 3.5" ,  640KB,  512 bytes/sector
+    F5_640_512,             // 5.25",  640KB,  512 bytes/sector
+    F5_720_512,             // 5.25",  720KB,  512 bytes/sector
+    F3_1Pt2_512,            // 3.5" ,  1.2Mb,  512 bytes/sector
+    F3_1Pt23_1024,          // 3.5" ,  1.23Mb, 1024 bytes/sector
+    F5_1Pt23_1024,          // 5.25",  1.23MB, 1024 bytes/sector
+    F3_128Mb_512,           // 3.5" MO 128Mb   512 bytes/sector
+    F3_230Mb_512,           // 3.5" MO 230Mb   512 bytes/sector
+    F8_256_128,             // 8",     256KB,  128 bytes/sector
+    F3_200Mb_512,           // 3.5",   200M Floppy (HiFD)
+    F3_240M_512,            // 3.5",   240Mb Floppy (HiFD)
+    F3_32M_512              // 3.5",   32Mb Floppy
+} MEDIA_TYPE, * PMEDIA_TYPE;
+
+typedef struct _DISK_GEOMETRY {
+    LARGE_INTEGER Cylinders;
+    MEDIA_TYPE MediaType;
+    DWORD TracksPerCylinder;
+    DWORD SectorsPerTrack;
+    DWORD BytesPerSector;
+} DISK_GEOMETRY, * PDISK_GEOMETRY;
+
+#define IOCTL_DISK_GET_DRIVE_GEOMETRY CTL_CODE(FILE_DEVICE_DISK, 0x0000, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // ============================================================================
 // 辅助函数：IRQL检查
@@ -255,6 +300,134 @@ Cleanup:
     return ntStatus;
 }
 
+NTSTATUS IrpCreateFile_New(
+    OUT PFILE_OBJECT* FileObject,
+    IN PVOID VolumeVpb,
+    IN PDEVICE_OBJECT NtfsDevice,
+    IN PUNICODE_STRING FilePath,       // 传入完整 NT 路径，如 "\??\C:\test.txt"
+    IN ACCESS_MASK DesiredAccess,
+    IN ULONG FileAttributes,
+    IN ULONG ShareAccess,
+    IN ULONG CreateDisposition,
+    IN ULONG CreateOptions,
+    IN PVOID EaBuffer OPTIONAL,
+    IN ULONG EaLength)
+{
+    NTSTATUS ntStatus;
+    PFILE_OBJECT pFile = NULL;
+    PIRP Irp = NULL;
+    PKEVENT pkEvent = NULL;
+    PACCESS_STATE pAccessState = NULL;
+    PAUX_ACCESS_DATA pAuxData = NULL;
+    PIO_SECURITY_CONTEXT pSecCtx = NULL;
+    PIO_STACK_LOCATION irpSp;
+    IO_STATUS_BLOCK ioStatusBlock = { 0 };
+
+    // 1. 分配安全上下文
+    pAccessState = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACCESS_STATE), 'aest');
+    pAuxData = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(AUX_ACCESS_DATA), 'aaed');
+    pSecCtx = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(IO_SECURITY_CONTEXT), 'iosc');
+    if (!pAccessState || !pAuxData || !pSecCtx) {
+        ntStatus = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(pAccessState, sizeof(ACCESS_STATE));
+    RtlZeroMemory(pAuxData, sizeof(AUX_ACCESS_DATA));
+    RtlZeroMemory(pSecCtx, sizeof(IO_SECURITY_CONTEXT));
+    SeCreateAccessState(pAccessState, pAuxData, DesiredAccess, IoGetFileObjectGenericMapping());
+    pSecCtx->SecurityQos = NULL;
+    pSecCtx->AccessState = pAccessState;
+    pSecCtx->DesiredAccess = DesiredAccess;
+    pSecCtx->FullCreateOptions = 0;
+
+    // 2. 手工创建 FILE_OBJECT
+    ntStatus = ObCreateObject(KernelMode, *IoFileObjectType, NULL, KernelMode,
+        NULL, sizeof(FILE_OBJECT), 0, 0, (PVOID*)&pFile);
+    if (!NT_SUCCESS(ntStatus)) goto Cleanup;
+
+    RtlZeroMemory(pFile, sizeof(FILE_OBJECT));
+    pFile->Type = IO_TYPE_FILE;
+    pFile->Size = sizeof(FILE_OBJECT);
+    pFile->Vpb = VolumeVpb;
+    pFile->DeviceObject = NtfsDevice;
+    pFile->Flags = FO_SYNCHRONOUS_IO;
+    KeInitializeEvent(&pFile->Event, NotificationEvent, FALSE);
+    KeInitializeEvent(&pFile->Lock, SynchronizationEvent, FALSE);
+
+    // ✅ 自动处理路径前缀：去掉 "\??\C:"，只留下相对卷的路径
+    UNICODE_STRING relativePath;
+    if (FilePath->Length >= 6 * sizeof(WCHAR) &&
+        FilePath->Buffer[0] == L'\\' && FilePath->Buffer[1] == L'?' &&
+        FilePath->Buffer[2] == L'?' && FilePath->Buffer[3] == L'\\' &&
+        FilePath->Buffer[5] == L':')
+    {
+        relativePath.Buffer = FilePath->Buffer + 6;
+        relativePath.Length = FilePath->Length - 6 * sizeof(WCHAR);
+        relativePath.MaximumLength = relativePath.Length;
+    }
+    else
+    {
+        relativePath = *FilePath;   // 已经不带前缀的直接使用
+    }
+
+    pFile->FileName.Buffer = relativePath.Buffer;
+    pFile->FileName.Length = relativePath.Length;
+    pFile->FileName.MaximumLength = relativePath.Length;
+
+    // 3. 分配事件 + IRP
+    pkEvent = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) { ntStatus = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+
+    Irp = IoAllocateIrp(NtfsDevice->StackSize, FALSE);
+    if (!Irp) { ntStatus = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
+
+    Irp->MdlAddress = NULL;
+    Irp->AssociatedIrp.SystemBuffer = EaBuffer;
+    Irp->Flags = IRP_CREATE_OPERATION | IRP_SYNCHRONOUS_API;
+    Irp->RequestorMode = KernelMode;
+    Irp->UserIosb = &ioStatusBlock;
+    Irp->UserEvent = pkEvent;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Tail.Overlay.OriginalFileObject = pFile;
+
+    irpSp = IoGetNextIrpStackLocation(Irp);
+    irpSp->MajorFunction = IRP_MJ_CREATE;
+    irpSp->DeviceObject = NtfsDevice;
+    irpSp->FileObject = pFile;
+    irpSp->Parameters.Create.SecurityContext = pSecCtx;
+    irpSp->Parameters.Create.Options = (CreateDisposition << 24) | CreateOptions;
+    irpSp->Parameters.Create.FileAttributes = (USHORT)FileAttributes;
+    irpSp->Parameters.Create.ShareAccess = (USHORT)ShareAccess;
+    irpSp->Parameters.Create.EaLength = EaLength;
+
+    IoSetCompletionRoutine(Irp, IoCompletionRoutine, NULL, TRUE, TRUE, TRUE);
+
+    // 4. 发送并等待
+    ntStatus = IoCallDriver(NtfsDevice, Irp);
+    if (ntStatus == STATUS_PENDING) {
+        KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
+        ntStatus = ioStatusBlock.Status;
+    }
+
+    if (!NT_SUCCESS(ntStatus)) goto Cleanup;
+
+    *FileObject = pFile;
+    pFile = NULL;  // 所有权转移
+
+Cleanup:
+    if (pFile) {
+        pFile->DeviceObject = NULL;
+        pFile->Vpb = NULL;
+        ObDereferenceObject(pFile);
+    }
+    if (pkEvent) ExFreePoolWithTag(pkEvent, 'kevn');
+    if (pAccessState) ExFreePoolWithTag(pAccessState, 'aest');
+    if (pAuxData) ExFreePoolWithTag(pAuxData, 'aaed');
+    if (pSecCtx) ExFreePoolWithTag(pSecCtx, 'iosc');
+    return ntStatus;
+}
+
 NTSTATUS
 IrpCloseFile(
     IN PFILE_OBJECT  FileObject)
@@ -326,6 +499,78 @@ IrpCloseFile(
 
     ntStatus = IoStatusBlock.Status;
     return ntStatus;
+}
+
+NTSTATUS
+IrpCloseFile_New(
+    IN PFILE_OBJECT  FileObject)
+{
+    NTSTATUS ntStatus;
+    IO_STATUS_BLOCK  IoStatusBlock;
+    PIRP Irp;
+    PKEVENT pkEvent = NULL;
+    PIO_STACK_LOCATION IrpSp;
+    PDEVICE_OBJECT pBaseDeviceObject = NULL;
+
+    if (!FileObject || FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    pBaseDeviceObject = FileObject->Vpb->DeviceObject;
+    Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
+    if (Irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    if (!pkEvent) {
+        IoFreeIrp(Irp);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
+
+    // ---- 第一步：CLEANUP ----
+    Irp->UserEvent = pkEvent;
+    Irp->UserIosb = &IoStatusBlock;
+    Irp->RequestorMode = KernelMode;
+    Irp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+
+    IrpSp = IoGetNextIrpStackLocation(Irp);
+    IrpSp->MajorFunction = IRP_MJ_CLEANUP;
+    IrpSp->FileObject = FileObject;
+
+    ntStatus = IoCallDriver(pBaseDeviceObject, Irp);
+    if (ntStatus == STATUS_PENDING)
+        KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
+
+    // CLEANUP 失败通常很少见，但我们仍继续发 CLOSE 以完成终结
+    KeClearEvent(pkEvent);
+    IoReuseIrp(Irp, STATUS_SUCCESS);
+
+    // ---- 第二步：CLOSE ----
+    Irp->UserEvent = pkEvent;
+    Irp->UserIosb = &IoStatusBlock;
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->AssociatedIrp.SystemBuffer = (PVOID)NULL;
+    Irp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
+
+    IrpSp = IoGetNextIrpStackLocation(Irp);
+    IrpSp->MajorFunction = IRP_MJ_CLOSE;
+    IrpSp->FileObject = FileObject;
+
+    ntStatus = IoCallDriver(pBaseDeviceObject, Irp);
+    if (ntStatus == STATUS_PENDING)
+        KeWaitForSingleObject(pkEvent, Executive, KernelMode, FALSE, NULL);
+
+    IoFreeIrp(Irp);                 // 没有完成例程，自己释放 IRP
+    ExFreePoolWithTag(pkEvent, 'kevn');
+
+    // ---- 第三步：释放对象引用（最关键的一行） ----
+    ObDereferenceObject(FileObject); // 对应 ObCreateObject 的初始引用
+
+    return IoStatusBlock.Status;
 }
 
 NTSTATUS
@@ -463,8 +708,9 @@ IrpSetInformationFile(
     IN PFILE_OBJECT  FileObject,
     OUT PIO_STATUS_BLOCK  IoStatusBlock,
     IN PVOID  FileInformation,
+    IN ULONG  Length,
     IN FILE_INFORMATION_CLASS  FileInformationClass,
-	IN ULONG  Length
+    IN BOOLEAN  ReplaceIfExists
 )
 {
     PIRP Irp;
@@ -501,6 +747,7 @@ IrpSetInformationFile(
     IrpSp->FileObject = FileObject;
     IrpSp->Parameters.SetFile.Length = Length;
     IrpSp->Parameters.SetFile.FileInformationClass = FileInformationClass;
+	IrpSp->Parameters.SetFile.ReplaceIfExists = ReplaceIfExists;
     IrpSp->Parameters.SetFile.FileObject = FileObject;
 
     IoSetCompletionRoutine(Irp, IoCompletionRoutine, 0, TRUE, TRUE, TRUE);
@@ -588,7 +835,7 @@ IrpReadFile(
     PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
 
-    if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_UNSUCCESSFUL;
+    if (FileObject->Vpb == 0 || FileObject->Vpb->DeviceObject == NULL) return STATUS_INVALID_PARAMETER;
 
     if (ByteOffset == NULL)
     {
@@ -721,6 +968,540 @@ IrpWriteFile(
     if (ntStatus == STATUS_PENDING) KeWaitForSingleObject(pkEvent, Executive, KernelMode, TRUE, NULL);
 
     return IoStatusBlock->Status;
+}
+
+// 通过 DOS 名称（如 L"C:"）打开卷设备对象
+NTSTATUS OpenVolumeDevice(
+    _In_ PCWSTR DosVolumeName,
+    _Out_ PDEVICE_OBJECT* VolumeDevice
+)
+{
+    NTSTATUS status;
+    UNICODE_STRING volName;
+    WCHAR buf[64];
+    HANDLE hFile;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    PFILE_OBJECT fileObject;
+
+    RtlStringCbPrintfW(buf, sizeof(buf), L"\\??\\%ws", DosVolumeName);
+    RtlInitUnicodeString(&volName, buf);
+
+    InitializeObjectAttributes(
+        &oa,
+        &volName,
+        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+        NULL,
+        NULL);
+
+    status = ZwCreateFile(
+        &hFile,
+        FILE_READ_ATTRIBUTES,
+        &oa,
+        &iosb,
+        NULL,
+        FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL,
+        0
+    );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    status = ObReferenceObjectByHandle(
+        hFile,
+        0,
+        *IoFileObjectType,
+        KernelMode,
+        (PVOID*)&fileObject,
+        NULL
+    );
+
+    ZwClose(hFile);
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    *VolumeDevice = IoGetRelatedDeviceObject(fileObject);
+
+    ObDereferenceObject(fileObject);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS GetVolumeDiskExtents(
+    _In_ PDEVICE_OBJECT VolumeDevice,
+    _Out_ ULONG* DiskNumber,
+    _Out_ LARGE_INTEGER* StartingOffset
+)
+{
+    NTSTATUS status;
+    KEVENT event;
+    IO_STATUS_BLOCK ioStatus;
+    PIRP irp;
+    PVOLUME_DISK_EXTENTS extents;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+    extents = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(VOLUME_DISK_EXTENTS), 'VdEx');
+    if (!extents)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    irp = IoBuildDeviceIoControlRequest(
+        IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+        VolumeDevice,
+        NULL,
+        0,
+        extents,
+        sizeof(VOLUME_DISK_EXTENTS),
+        FALSE,
+        &event,
+        &ioStatus);
+
+    if (!irp) {
+        ExFreePoolWithTag(extents, 'VdEx');
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    status = IoCallDriver(VolumeDevice, irp);
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = ioStatus.Status;
+    }
+
+    if (NT_SUCCESS(status)) {
+        *DiskNumber = extents->Extents[0].DiskNumber;
+        *StartingOffset = extents->Extents[0].StartingOffset;
+    }
+
+    ExFreePoolWithTag(extents, 'VdEx');
+    return status;
+}
+
+// 打开物理磁盘设备对象（\Device\HarddiskX\DRX）
+NTSTATUS OpenDiskDevice(
+    _In_ ULONG DiskNumber,
+    _Out_ PDEVICE_OBJECT* DiskDevice
+)
+{
+    NTSTATUS status;
+    WCHAR path[64];
+    UNICODE_STRING name;
+    PFILE_OBJECT fileObject;
+
+    RtlStringCbPrintfW(path, sizeof(path),
+        L"\\Device\\Harddisk%d\\DR%d",
+        DiskNumber, 0);
+
+    RtlInitUnicodeString(&name, path);
+
+    status = IoGetDeviceObjectPointer(
+        &name,
+        FILE_READ_DATA | FILE_WRITE_DATA,
+        &fileObject,
+        DiskDevice
+    );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    ObDereferenceObject(fileObject);
+    return STATUS_SUCCESS;
+}
+
+// 获取磁盘扇区大小
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS GetDiskSectorSize(
+    _In_ PDEVICE_OBJECT DiskDevice,
+    _Out_ PULONG BytesPerSector
+)
+{
+    NTSTATUS status;
+    KEVENT event;
+    IO_STATUS_BLOCK ioStatus;
+    PIRP irp;
+    DISK_GEOMETRY geometry;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+    irp = IoBuildDeviceIoControlRequest(
+        IOCTL_DISK_GET_DRIVE_GEOMETRY,
+        DiskDevice,
+        NULL,
+        0,
+        &geometry,
+        sizeof(geometry),
+        FALSE,
+        &event,
+        &ioStatus);
+
+    if (irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    // ===================== 绕过fltmgr核心修改 =====================
+    IoSkipCurrentIrpStackLocation(irp);
+
+    status = IoCallDriver(DiskDevice, irp);
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = ioStatus.Status;
+    }
+
+    if (NT_SUCCESS(status))
+        *BytesPerSector = geometry.BytesPerSector;
+
+    return status;
+}
+
+NTSTATUS DiskReadSectors(
+    _In_ PDEVICE_OBJECT DiskDevice,
+    _In_ LARGE_INTEGER ByteOffset,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length
+)
+{
+    KEVENT event;
+    IO_STATUS_BLOCK iosb;
+    PIRP irp;
+    PIO_STACK_LOCATION sp;
+    PMDL mdl;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+    mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+    if (!mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    __try {
+        MmProbeAndLockPages(mdl, KernelMode, IoModifyAccess);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        IoFreeMdl(mdl);
+        return GetExceptionCode();
+    }
+
+    irp = IoAllocateIrp(DiskDevice->StackSize, FALSE);
+    if (!irp) {
+        MmUnlockPages(mdl);
+        IoFreeMdl(mdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    IoSetNextIrpStackLocation(irp);
+    irp->MdlAddress = mdl;
+    irp->UserEvent = &event;
+    irp->UserIosb = &iosb;
+    irp->Flags = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
+
+    sp = IoGetNextIrpStackLocation(irp);
+    sp->MajorFunction = IRP_MJ_READ;
+    sp->Parameters.Read.ByteOffset = ByteOffset;
+    sp->Parameters.Read.Length = Length;
+
+    IoSetCompletionRoutine(irp,
+        IoCompletionRoutine,
+        &event,
+        TRUE, TRUE, TRUE);
+
+    NTSTATUS status = IoCallDriver(DiskDevice, irp);
+
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = iosb.Status;
+    }
+
+    MmUnlockPages(mdl);
+    IoFreeMdl(mdl);
+
+    return status;
+}
+
+NTSTATUS DiskWriteSectors(
+    _In_ PDEVICE_OBJECT DiskDevice,
+    _In_ LARGE_INTEGER ByteOffset,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length
+)
+{
+    KEVENT event;
+    IO_STATUS_BLOCK iosb;
+    PIRP irp;
+    PIO_STACK_LOCATION sp;
+    PMDL mdl;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+    mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+    if (!mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    __try {
+        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        IoFreeMdl(mdl);
+        return GetExceptionCode();
+    }
+
+    irp = IoAllocateIrp(DiskDevice->StackSize, FALSE);
+    if (!irp) {
+        MmUnlockPages(mdl);
+        IoFreeMdl(mdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    irp->MdlAddress = mdl;
+    irp->UserEvent = &event;
+    irp->UserIosb = &iosb;
+    irp->Flags = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
+
+    sp = IoGetNextIrpStackLocation(irp);
+    sp->MajorFunction = IRP_MJ_WRITE;
+    sp->Flags |= SL_FORCE_DIRECT_WRITE;
+
+    sp->Parameters.Write.ByteOffset = ByteOffset;
+    sp->Parameters.Write.Length = Length;
+
+    IoSetCompletionRoutine(irp,
+        IoCompletionRoutine,
+        &event,
+        TRUE, TRUE, TRUE);
+
+    NTSTATUS status = IoCallDriver(DiskDevice, irp);
+
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = iosb.Status;
+    }
+
+    MmUnlockPages(mdl);
+    IoFreeMdl(mdl);
+
+    return status;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS AlignRangeToSectors(
+    _In_ ULONGLONG ByteOffset,
+    _In_ ULONG Length,
+    _In_ ULONG BytesPerSector,
+    _Out_ ULONGLONG* AlignedByteOffset,
+    _Out_ ULONG* AlignedLength
+)
+{
+    // 新增校验：避免除零异常
+    if (BytesPerSector == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    ULONGLONG startSector = ByteOffset / BytesPerSector;
+    ULONGLONG endSector = (ByteOffset + Length - 1) / BytesPerSector;
+    ULONGLONG alignedOffset = startSector * BytesPerSector;
+    ULONG alignedLength = (ULONG)((endSector - startSector + 1) * BytesPerSector);
+
+    *AlignedByteOffset = alignedOffset;
+    *AlignedLength = alignedLength;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS HandleVolumeSectorRead(
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION Stack
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PVOLUME_SECTOR_IO pInput;
+    PDEVICE_OBJECT volumeDevice = NULL;
+    PDEVICE_OBJECT diskDevice = NULL;
+    PVOID kernelBuffer = NULL;
+    ULONG bytesPerSector;
+    ULONG diskNumber;
+    LARGE_INTEGER startOffset;
+
+    ULONG length;
+    ULONG alignedLength;
+    ULONGLONG alignedByteOffset;
+    PVOID userBuffer;
+    ULONG userLen;
+
+    pInput = (PVOLUME_SECTOR_IO)Irp->AssociatedIrp.SystemBuffer;
+
+    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(VOLUME_SECTOR_IO))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (pInput->VolumeName[0] == L'\0') {
+        DbgPrint("VolumeName is empty\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+    length = pInput->Length;
+    if (length == 0) {
+        DbgPrint("Length is zero\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // 新增校验：MDL空指针防护
+    if (Irp->MdlAddress == NULL) {
+        status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    status = OpenVolumeDevice(pInput->VolumeName, &volumeDevice);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Failed to open volume device for %ws: %X\n", pInput->VolumeName, status);
+        goto Cleanup;
+    }
+
+    status = GetVolumeDiskExtents(volumeDevice, &diskNumber, &startOffset);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Failed to get volume disk extents: %X\n", status);
+        goto Cleanup;
+    }
+
+    status = OpenDiskDevice(diskNumber, &diskDevice);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Failed to open disk device for disk number %u: %X\n", diskNumber, status);
+        goto Cleanup;
+    }
+
+    status = GetDiskSectorSize(diskDevice, &bytesPerSector);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Failed to get disk sector size: %X\n", status);
+        goto Cleanup;
+    }
+
+    AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
+        &alignedByteOffset, &alignedLength);
+
+    userLen = (ULONG)MmGetMdlByteCount(Irp->MdlAddress);
+    if (length > userLen) {
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto Cleanup;
+    }
+
+    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, alignedLength, 'SdRw');
+    if (!kernelBuffer) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    {
+        LARGE_INTEGER diskAlignedOffset;
+        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
+        status = DiskReadSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("Failed to read sectors from disk: %X\n", status);
+            goto Cleanup;
+        }
+    }
+
+    userBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, LowPagePriority);
+    if (!userBuffer) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    {
+        ULONG offsetInAligned = (ULONG)(pInput->ByteOffset.QuadPart - alignedByteOffset);
+        RtlCopyMemory(userBuffer, (PUCHAR)kernelBuffer + offsetInAligned, length);
+    }
+
+Cleanup:
+    if (kernelBuffer) ExFreePoolWithTag(kernelBuffer, 'SdRw');
+    if (diskDevice) ObDereferenceObject(diskDevice);
+    if (volumeDevice) ObDereferenceObject(volumeDevice);
+    return status;
+}
+
+NTSTATUS HandleVolumeSectorWrite(
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION Stack
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PVOLUME_SECTOR_IO pInput;
+    PDEVICE_OBJECT volumeDevice = NULL;
+    PDEVICE_OBJECT diskDevice = NULL;
+    PVOID kernelBuffer = NULL;
+    ULONG bytesPerSector;
+    ULONG diskNumber;
+    LARGE_INTEGER startOffset;
+
+    ULONG length;
+    ULONG alignedLength;
+    ULONGLONG alignedByteOffset;
+    PVOID userBuffer;
+
+    pInput = (PVOLUME_SECTOR_IO)Irp->AssociatedIrp.SystemBuffer;
+
+    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(VOLUME_SECTOR_IO))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (pInput->VolumeName[0] == L'\0')
+        return STATUS_INVALID_PARAMETER;
+    length = pInput->Length;
+    if (length == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    // 新增校验：MDL空指针防护
+    if (Irp->MdlAddress == NULL) {
+        status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    status = OpenVolumeDevice(pInput->VolumeName, &volumeDevice);
+    if (!NT_SUCCESS(status)) goto Cleanup;
+
+    status = GetVolumeDiskExtents(volumeDevice, &diskNumber, &startOffset);
+    if (!NT_SUCCESS(status)) goto Cleanup;
+
+    status = OpenDiskDevice(diskNumber, &diskDevice);
+    if (!NT_SUCCESS(status)) goto Cleanup;
+
+    status = GetDiskSectorSize(diskDevice, &bytesPerSector);
+    if (!NT_SUCCESS(status)) goto Cleanup;
+
+    AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
+        &alignedByteOffset, &alignedLength);
+
+    if (length > MmGetMdlByteCount(Irp->MdlAddress)) {
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto Cleanup;
+    }
+
+    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, alignedLength, 'SdRw');
+    if (!kernelBuffer) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    if (length != alignedLength || (ULONGLONG)pInput->ByteOffset.QuadPart != alignedByteOffset) {
+        LARGE_INTEGER diskAlignedOffset;
+        // ===================== 修复蓝屏核心错误：偏移计算 =====================
+        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
+        status = DiskReadSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
+        if (!NT_SUCCESS(status)) goto Cleanup;
+    }
+
+    userBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, LowPagePriority);
+    if (!userBuffer) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    {
+        ULONG offsetInAligned = (ULONG)(pInput->ByteOffset.QuadPart - alignedByteOffset);
+        RtlCopyMemory((PUCHAR)kernelBuffer + offsetInAligned, userBuffer, length);
+    }
+
+    {
+        LARGE_INTEGER diskAlignedOffset;
+        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
+        status = DiskWriteSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
+    }
+
+Cleanup:
+    if (kernelBuffer) ExFreePoolWithTag(kernelBuffer, 'SdRw');
+    if (diskDevice) ObDereferenceObject(diskDevice);
+    if (volumeDevice) ObDereferenceObject(volumeDevice);
+    return status;
 }
 
 UNICODE_STRING RtlGetUnicodeString(LPWSTR wStr)
@@ -1302,7 +2083,7 @@ NTSTATUS ForceCopyFile(IN PUNICODE_STRING SrcPath, IN PUNICODE_STRING DstPath)
         // 复制文件属性
         status = IrpQueryInformationFile(srcFile, &srcIosb, &basicInfo, sizeof(basicInfo), FileBasicInformation);
         if (NT_SUCCESS(status)) {
-            IrpSetInformationFile(dstFile, &dstIosb, &basicInfo, FileBasicInformation, sizeof(basicInfo));
+            IrpSetInformationFile(dstFile, &dstIosb, &basicInfo, FileBasicInformation, sizeof(basicInfo), FALSE);
         }
         DbgPrint("[ForceCopyFile] Create file: %wZ", DstPath);
         status = STATUS_SUCCESS;  // 忽略EOF错误

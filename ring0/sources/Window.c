@@ -2,6 +2,7 @@
 #include "OtherFunctions.h"
 #include "Module.h"
 #include "ntstrsafe.h"
+#include "Symbol.h"
 
 // SYSTEM_THREAD_INFORMATION 结构体定义（适用于大部分Windows版本）
 typedef struct _SYSTEM_THREAD_INFORMATION {
@@ -96,143 +97,6 @@ NTSTATUS InitializeTimerContext() {
 
     return STATUS_NOT_SUPPORTED;
 }
-
-// ====================== 【终极修复】复刻旧版正确解析逻辑 ======================
-//NTSTATUS EnumProcessTimers(
-//    _Out_ PWINDOW_TIMER* pArray,
-//    _Out_ PULONG pCount
-//) {
-//    NTSTATUS status = STATUS_SUCCESS;
-//    PVOID hashBase = NULL;
-//    ULONG timerCount = 0;
-//    PWINDOW_TIMER pResultArray = NULL;
-//
-//    if (!pArray || !pCount) {
-//        DbgPrint("[TIMER_ENUM] 输入参数无效！\n");
-//        return STATUS_INVALID_PARAMETER;
-//    }
-//    *pArray = NULL;
-//    *pCount = 0;
-//
-//    DbgPrint("[TIMER_ENUM] === 开始枚举进程定时器 ===");
-//
-//    status = InitializeTimerContext();
-//    if (!NT_SUCCESS(status)) {
-//        DbgPrint("[TIMER_ENUM] 初始化上下文失败！0x%X\n", status);
-//        return status;
-//    }
-//
-//    __try {
-//        g_TimerCtx.EnterCrit(0, 0);
-//        DbgPrint("[TIMER_ENUM] 已进入临界区\n");
-//
-//        __try {
-//            // 哈希表基址（和旧版完全一致）
-//            if (g_TimerCtx.isV2) {
-//                hashBase = (PVOID)((PUCHAR)g_TimerCtx.W32GetUserSessionState() + 16 * 3850);
-//            }
-//            else {
-//                hashBase = g_TimerCtx.gTimerHashTable;
-//            }
-//
-//            if (!hashBase || !MmIsAddressValid(hashBase)) {
-//                status = STATUS_INVALID_ADDRESS;
-//                goto EXIT_LABEL;
-//            }
-//
-//            DbgPrint("[TIMER_ENUM] 哈希表基址: %p\n", hashBase);
-//            DbgPrint("[TIMER_ENUM] 开始遍历 64 个哈希桶...\n");
-//            
-//            // 遍历桶（和旧版一致）
-//            for (UCHAR bucket = 0; bucket < 64; bucket++) {
-//                PLIST_ENTRY* bucketPtr = (PLIST_ENTRY*)((PUCHAR)hashBase + 16 * bucket);
-//                if (!MmIsAddressValid(bucketPtr)) continue;
-//                PLIST_ENTRY head = *bucketPtr;
-//                if (!head || !MmIsAddressValid(head)) continue;
-//
-//                // 遍历链表（和旧版一致）
-//                for (PLIST_ENTRY entry = head; entry != (PLIST_ENTRY)bucketPtr; entry = entry->Flink) {
-//                    if (!MmIsAddressValid(entry) || !MmIsAddressValid(entry->Flink)) break;
-//
-//                    PTIMER_ENTRY pTimer = g_TimerCtx.isV2 ? CONTAINING_RECORD(entry, TIMER_ENTRY_WIN11, HashListEntry) : CONTAINING_RECORD(entry, TIMER_ENTRY_WIN10, HashListEntry);
-//                    if (!MmIsAddressValid(pTimer) || (g_TimerCtx.isV2 ? pTimer->Win11->flags : pTimer->Win10->flags & 0x1000)) continue;
-//
-//                    // ====================== 【修复】1:1 复刻旧版正确的 PID 解析逻辑！======================
-//                    PVOID pti = g_TimerCtx.isV2 ? pTimer->Win11->threadInfo : pTimer->Win10->head.threadInfo;  // 旧版原版：直接取 threadInfo +0x18
-//                    if (!pti) continue;
-//
-//                    // Win10/11 偏移（旧版原版逻辑）
-//                    ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
-//                    PVOID ProcessInfo = *(PVOID*)((PUCHAR)pti + processOffset); // 第一层解引用
-//                    PEPROCESS pEprocess = *(PEPROCESS*)ProcessInfo;            // 第二层解引用（新版之前漏了这行！）
-//                    HANDLE currentPid = PsGetProcessId(pEprocess);
-//
-//                    // 线程ID（旧版原版逻辑）
-//                    PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
-//                    HANDLE dwThreadId = PsGetThreadId(pEthread);
-//
-//                    DbgPrint("[TIMER_ENUM] 找到定时器！PID=%llu, TID=%llu, nIDEvent=%lld\n", (ULONG64)currentPid, (ULONG64)dwThreadId, g_TimerCtx.isV2 ? pTimer->Win11->nIDEvent : pTimer->Win10->nIDEvent);
-//
-//                    // PID匹配过滤
-//                    /*if (currentPid != ProcessId && ProcessId != (HANDLE)-1) {
-//                        continue;
-//                    }*/
-//
-//                    // ====================== 匹配成功，分配内存 ======================
-//                    PWINDOW_TIMER pNewArray = (PWINDOW_TIMER)ExAllocatePool2(
-//                        POOL_FLAG_NON_PAGED,
-//                        sizeof(WINDOW_TIMER) * (timerCount + 1),
-//                        'meT'
-//                    );
-//                    if (!pNewArray) {
-//                        status = STATUS_NO_MEMORY;
-//                        goto EXIT_LABEL;
-//                    }
-//
-//                    if (pResultArray) {
-//                        memcpy(pNewArray, pResultArray, sizeof(WINDOW_TIMER) * timerCount);
-//                        ExFreePoolWithTag(pResultArray, 'meT');
-//                    }
-//
-//                    // 填充数据
-//                    pNewArray[timerCount].pfn = g_TimerCtx.isV2 ? pTimer->Win11->pfn : pTimer->Win10->pfn;
-//                    pNewArray[timerCount].nTimeout = g_TimerCtx.isV2 ? pTimer->Win11->nTimeout : pTimer->Win10->nTimeout;
-//                    pNewArray[timerCount].nIDEvent = g_TimerCtx.isV2 ? pTimer->Win11->nIDEvent : pTimer->Win10->nIDEvent;
-//                    pNewArray[timerCount].ThreadId = dwThreadId;
-//                    pNewArray[timerCount].ProcessId = currentPid;
-//                    pNewArray[timerCount].hWnd = *(PVOID*)(g_TimerCtx.isV2 ? pTimer->Win11->windowPtr : pTimer->Win10->nIDEvent);
-//                    //pNewArray[timerCount].param = 0;
-//
-//                    pResultArray = pNewArray;
-//                    timerCount++;
-//                    DbgPrint("[TIMER_ENUM] 匹配成功！总数：%lu\n", timerCount);
-//                }
-//            }
-//
-//            *pArray = pResultArray;
-//            *pCount = timerCount;
-//            DbgPrint("[TIMER_ENUM] 遍历完成，总匹配数量: %lu\n", timerCount);
-//
-//        EXIT_LABEL:;
-//        }
-//        __except (EXCEPTION_EXECUTE_HANDLER) {
-//            status = GetExceptionCode();
-//            DbgPrint("[TIMER_ENUM] 异常！代码: 0x%X\n", status);
-//        }
-//    }
-//    __finally {
-//        g_TimerCtx.UserSessionSwitchLeaveCrit();
-//        DbgPrint("[TIMER_ENUM] 已退出临界区\n");
-//
-//        if (!NT_SUCCESS(status) && pResultArray) {
-//            ExFreePoolWithTag(pResultArray, 'meT');
-//            *pArray = NULL;
-//            *pCount = 0;
-//        }
-//    }
-//
-//    return status;
-//}
 
 NTSTATUS EnumProcessTimers(
     _Out_ PWINDOW_TIMER* pArray,
@@ -452,6 +316,15 @@ PVOID FindGetHmodTableIndex() {
 }
 
 PVOID FindaatomSysLoaded() {
+    ULONG64 addr = 0;
+    NTSTATUS status = KernelQuerySymbolAddress(L"win32kfull.sys", L"aatomSysLoaded", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: aatomSysLoaded=%p\n", (PVOID)addr);
+        return (PVOID)addr;
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     // ====================== 保留：特征码3 → 匹配 lea r8, aatomSysLoaded ======================
     // 你的汇编：lea r8, ?aatomSysLoaded@@3PAGA + test eax,eax
     UCHAR pattern3[] = {
@@ -518,6 +391,15 @@ NTSTATUS GetModuleNameFromihMod(BOOLEAN bWin11, int ihmod, LPWSTR NameBuffer)
 }
 
 PVOID FindHMValidateHandle() {
+    ULONG64 addr = 0;
+    NTSTATUS status = KernelQuerySymbolAddress(L"win32kfull.sys", L"HMValidateHandle", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: HMValidateHandle=%p\n", (PVOID)addr);
+        return (PVOID)addr;
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     ULONG64 p = (ULONG64)KernelGetProcAddress("win32kfull.sys", "NtUserUnhookWindowsHookEx");
     if (!p || !MmIsAddressValid((PVOID)p)) {
         DbgPrint("NtUserUnhookWindowsHookEx not found!\n");
@@ -563,6 +445,15 @@ const char* GetHookTypeName(int iHookType)
 
 // 定位 PtiCurrent 的函数（增强版）
 PVOID FindPtiCurrent() {
+    ULONG64 addr = 0;
+    NTSTATUS status = KernelQuerySymbolAddress(L"win32kfull.sys", L"PtiCurrent", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: PtiCurrent=%p\n", (PVOID)addr);
+        return (PVOID)addr;
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     // 1. 获取 NtUserShowWindowAsync 地址
     PVOID pNtUserShowWindowAsync = KernelGetProcAddress("win32kfull.sys", "NtUserShowWindowAsync");
     if (NULL == pNtUserShowWindowAsync) {
@@ -1651,6 +1542,15 @@ EnumerateEventHook_Win10(
 
 PVOID FindgphkHashTable()
 {
+    ULONG64 addr = 0;
+    NTSTATUS status = KernelQuerySymbolAddress(L"win32kfull.sys", L"gphkHashTable", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: gphkHashTable=%p\n", (PVOID)addr);
+        return (PVOID)addr;
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     PVOID NtUserRegisterHotKeyAddr = KernelGetProcAddress("win32kfull.sys", "NtUserRegisterHotKey");
 
     if (NULL == NtUserRegisterHotKeyAddr)

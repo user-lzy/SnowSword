@@ -287,20 +287,7 @@ End Function
     Dim result As MEMORY_SCAN_RESULT
     
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            FrmMain.Check3.Value = False
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     
     Dim stMemory As MemoryStruct
@@ -379,20 +366,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     Dim result As MEMORY_SCAN_RESULT
     If AfxMsg("是否扫描?",, MB_YESNO) = IDNO Then Exit Sub
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            FrmMain.Check3.Value = False
-            Return
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     
     ' 计算总页数

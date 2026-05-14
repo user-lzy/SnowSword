@@ -162,19 +162,7 @@ Dim Shared g_FilteredDevObjs() As ULong64
 
 Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
@@ -221,19 +209,7 @@ End Sub
 
 Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim SystemTimers(63) As SYSTEM_TIMER
     Dim ret As Long, NewIndex As Long
@@ -279,20 +255,10 @@ Private Function GuidToString(g As GUID) As String
 End Function
 
 Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
+    If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
+        
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     
     Dim ret As Long, lpRet As DWORD = 0
@@ -354,20 +320,10 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
 End Sub
 
 Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
+    If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
+
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
@@ -428,19 +384,7 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
     ' 确保驱动已加载
     ' ----------------------------------
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\SnowSword", True)
-        If hDrv <> INVALID_HANDLE_VALUE Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
 
     ' ----------------------------------

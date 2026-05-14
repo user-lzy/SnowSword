@@ -394,7 +394,7 @@ TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
 Multiline=True
-Enabled=True
+Enabled=False
 Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
@@ -421,7 +421,7 @@ TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
 Multiline=True
-Enabled=True
+Enabled=False
 Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
@@ -589,7 +589,7 @@ AcceptFiles=False
 Name=mnuGDT
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuGDT_mnuRefresh0-10
+Menu=刷新FrmMain_mnuGDT_mnuRefresh0-10-FrmMain_mnuGDT_mnuStep10-10查看/编辑内存FrmMain_mnuGDT_FrmMain_mnuGDT_mnuEditMemory0-10
 Left=220
 Top=280
 Tag=
@@ -645,10 +645,10 @@ Top=220
 Tag=
 
 [PopupMenu]
-Name=mnuReg
+Name=mnuRegKey
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuReg_mnuRefresh0-10-FrmMain_mnuReg_mnuStep10-10启用Hive分析FrmMain_mnuReg_mnuEnableHiveAnalysis0-10
+Menu=刷新FrmMain_mnuRegKey_mnuRefresh0-10-FrmMain_mnuRegKey_mnuStep10-10新建FrmMain_mnuRegKey_mnuCreateKey0-10删除FrmMain_mnuRegKey_mnuDeleteKey0-10重命名FrmMain_mnuRegKey_mnuRenameKey0-10-FrmMain_mnuRegKey_mnuStep20-10启用Hive分析FrmMain_mnuRegKey_mnuEnableHiveAnalysis0-10
 Left=220
 Top=220
 Tag=
@@ -702,7 +702,7 @@ Tag=
 Name=mnuIDT
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuIDT_mnuRefresh0-10
+Menu=刷新FrmMain_mnuIDT_mnuRefresh0-10-FrmMain_mnuIDT_mnuStep10-10查看/编辑内存FrmMain_mnuIDT_FrmMain_mnuGDT_mnuEditMemory0-10
 Left=260
 Top=280
 Tag=
@@ -722,6 +722,24 @@ Help=
 Index=-1
 Menu=刷新FrmMain_mnuWfpFilter_mnuRefresh0-10
 Left=380
+Top=280
+Tag=
+
+[PopupMenu]
+Name=mnuFolder
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuFolder_mnuRefresh0-10-FrmMain_mnuFolder_mnuStep10-10新建文件夹FrmMain_mnuFolder_mnuCreateFolder0-10复制文件夹FrmMain_mnuFolder_mnuCopyFolder0-10删除文件夹FrmMain_mnuFolder_mnuDeleteFolder0-10-FrmMain_mnuFolder_mnuStep20-10开启物理磁盘分析FrmMain_mnuFolder_mnuEnablePhysicalAnalyze0-10
+Left=300
+Top=280
+Tag=
+
+[PopupMenu]
+Name=mnuRegValue
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuRegValue_mnuRefresh0-10-FrmMain_mnuRegValue_mnuStep10-10新建FrmMain_mnuRegValue_mnuCreate0-10{新建字符串值FrmMain_mnuRegValue_mnuCreateString0-10}删除FrmMain_mnuRegValue_mnuDeleteValue0-10修改FrmMain_mnuRegValue_mnuModifyValue0-10
+Left=420
 Top=280
 Tag=
 
@@ -754,7 +772,7 @@ ToolTipBalloon=False
 Name=mnuFile
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuFile_mnuRefresh0-10新建FrmMain_mnuFile_mnuCreate0-10{新建文件FrmMain_mnuFile_mnuCreateFile0-10新建文件夹FrmMain_mnuFile_mnuCreateFolder0-10}复制FrmMain_mnuFile_mnuCopy0-10强制复制到...FrmMain_mnuFile_mnuForceCopyTo0-10粘贴FrmMain_mnuFile_mnuPaste0-10删除FrmMain_mnuFile_mnuDelete0-10强制删除FrmMain_mnuFile_mnuForceDelete0-10-FrmMain_mnuFile_mnuStep10-10开启物理磁盘分析FrmMain_mnuFile_mnuIsPhysicalAnalyze0-10-FrmMain_mnuFile_mnuStep20-10复制文字FrmMain_mnuFile_mnuCopyStr0-10{复制单格数据FrmMain_mnuFile_mnuLittleCopy0-10}
+Menu=刷新FrmMain_mnuFile_mnuRefresh0-10新建文件FrmMain_mnuFile_mnuCreateFile0-10复制到FrmMain_mnuFile_mnuCopyTo0-10强制复制到...FrmMain_mnuFile_mnuForceCopyTo0-10删除FrmMain_mnuFile_mnuDelete0-10强制删除FrmMain_mnuFile_mnuForceDelete0-10-FrmMain_mnuFile_mnuStep10-10查看文件流FrmMain_mnuFile_mnuViewFileStream0-10-FrmMain_mnuFile_mnuStep20-10复制文字FrmMain_mnuFile_mnuCopyStr0-10{复制单格数据FrmMain_mnuFile_mnuLittleCopy0-10}
 Left=460
 Top=220
 Tag=
@@ -772,7 +790,7 @@ Tag=
 [TopMenu]
 Name=TopMenu1
 Help=
-Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb0-10{防火墙FrmMain_TopMenu1_mnuFireWall000}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10检测更新FrmMain_TopMenu1_mnuCheckUpdate0-10}
+Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10以管理员身份运行FrmMain_TopMenu1_mnuRunasAdmin0-10}网络FrmMain_TopMenu1_mnuWeb000{防火墙FrmMain_TopMenu1_mnuFireWall000}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10检测更新FrmMain_TopMenu1_mnuCheckUpdate0-10}
 Tag=
 
 [TreeView]
@@ -1258,46 +1276,31 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     SendMessage(mCtrlTreeList1.hWnd, TVM_GETEXTENDEDSTYLE, 0, 0) And (Not TVS_LINESATROOT)
     If Command(1) = "-LoadDriver" And IsAdmin Then
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-            If Not LoadDriver(App.Path & "SnowSword.sys", False) Then AfxMsg "加载失败!"
-            hDrv = OpenDrv("\\.\\SnowSword", True)
-            If (hDrv <> INVALID_HANDLE_VALUE) Then
-                AfxMsg "加载成功!"
-                Check6.Value =True
-                IsDriverLoaded = True
-            Else
-                AfxMsg "加载失败!"
-            End If
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!"
         End If
     ElseIf Command(1) = "-DeleteFile" Then
         AfxMsg Command(2)
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-            If Not LoadDriver(App.Path & "SnowSword.sys", False) Then AfxMsg "加载失败!"
-            hDrv = OpenDrv("\\.\\SnowSword", True)
-            If (hDrv <> INVALID_HANDLE_VALUE) Then
-                AfxMsg "加载成功!"
-                Check6.Value =True
-                IsDriverLoaded = True
-                Dim ustrFilePath As WString * MAX_PATH = "\??\" & Command(2)
-                #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
-                Dim status As NTSTATUS = MyDeleteFile(@ustrFilePath)
-                Print "MyDeleteFile:status=" & WHex(status)
-                If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
-                    IoControl hDrv, IOCTL_DeleteFileByIRP, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
-                Else ' 是被打开的文件
-                    IoControl hDrv, IOCTL_DeleteFileByXCB, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
-                    DeleteFile ustrFilePath
-                    Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
-                End If
-                AfxMsg "粉碎成功!"
-            Else
-                AfxMsg "加载失败!"
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+            Dim ustrFilePath As WString * MAX_PATH = "\??\" & Command(2)
+            #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
+            Dim status As NTSTATUS = MyDeleteFile(@ustrFilePath)
+            Print "MyDeleteFile:status=" & WHex(status)
+            If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
+                IoControl hDrv, IOCTL_DeleteFileByIRP, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
+            Else ' 是被打开的文件
+                IoControl hDrv, IOCTL_DeleteFileByXCB, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
+                DeleteFile ustrFilePath
+                Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
             End If
+            AfxMsg "粉碎成功!"
         End If
     ElseIf Command(1) = "-UnlockFile" Then
-        If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+        /'If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If LoadDriver(App.Path & "SnowSword.sys", False) Then
                 hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
+                    SymbolService_StartWorkers
                     AfxMsg "加载成功!"
                     Check6.Value =True
                     IsDriverLoaded = True
@@ -1310,7 +1313,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
             Else
                 AfxMsg "加载失败!"
             End If
-        End If
+        End If'/
     End If
     InitNtUserFunction
     InitAllModuleCache
@@ -1321,7 +1324,6 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     InitCustomTooltip hWndForm
     Dim bytData() As Byte
     'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
-    Dim DriverInfo As DRIVER_INFO
     InitLog
     
     InitThreadPool
@@ -1329,16 +1331,18 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     bFrmMainShowed = True
     
     SymEngine_Init
-    'Print "MC_TLI_ROOT:0x" & WHex(MC_TLI_ROOT)
-    /'Dim buf As WString * MAX_PATH = ""
-
-    If GetKernelModulePath(StrPtrW("ntoskrnl.exe"), @buf) Then
-        Print "Module path: "; buf
+    
+    Dim names() As String
+    Dim sizes() As ULongLong
+    /'Dim cnt As Long = EnumerateFileStreams("F:\Deep Code\settings.json", names(), sizes())
+    If cnt > 0 Then
+        For i As Long = 0 To cnt - 1
+            Print "Stream: '" & names(i) & "', Size: " & sizes(i)
+        Next
     Else
-        Print "Module path not found"
+        Print "枚举失败或文件无流"
     End If'/
-    'UltimateTest
-    'SymbolService_StartThread
+    'AfxMsg SizeOf(VOLUME_SECTOR_IO)
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1396,10 +1400,12 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
             'Print "DriverObject:" & ListView1.GetItemText(LastClickedItem, 5)
             SetMenuStatus mnuKernelModule, FrmMain_mnuKernelModule_mnuViewIOFunction, (ListView1.GetItemText(LastClickedItem, 5) <> "0x0")
             PopupMenu hWndForm, mnuKernelModule.HMENU
-        Case KernelThread
+        Case KernelThread, WorkItemThread
             PopupMenu hWndForm, mnuKernelThread.HMENU
         Case Callbacks
             PopupMenu hWndForm, mnuCallbacks.HMENU
+        Case Registry
+            PopupMenu hWndForm, mnuRegValue.HMENU
         Case Service
             PopupMenu hWndForm, mnuService.HMENU
         Case WinsockSPI
@@ -2280,14 +2286,14 @@ Function FrmMain_TreeView_NM_DBLCLK(hWndForm As hWnd, hWndControl As hWnd) As LR
         Select Case CurrentInformation.intType
             Case File
                 lblNum.Caption = "正在获取..."
-                GetFileList hClickedItem, TreeView, ListView1, True, True, GetMenuCheckState(mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
+                GetFileList hClickedItem, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
                 GetPathByNodeW hClickedItem, TreeView, currentPath
                 lblNum.Caption = "文件数量:" & ListView1.ItemCount
                 If currentPath <> "" Then txtFilePath.Text = currentPath
                 'TreeView.ExpandEx(CurrentNode, TVE_EXPAND)
             Case Registry
                 lblNum.Caption = "正在获取..."
-                GetRegList hClickedItem, TreeView, ListView1, GetMenuCheckState(mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis)
+                GetRegList hClickedItem, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
                 GetPathByNodeW hClickedItem, TreeView, currentPath
                 If currentPath <> "" Then txtFilePath.Text = currentPath
                 lblNum.Caption = "值数量:" & ListView1.ItemCount
@@ -2305,7 +2311,7 @@ Function FrmMain_TreeView_NM_RCLICK(hWndForm As hWnd, hWndControl As hWnd) As LR
     Dim hClickedItem As HTREEITEM = TreeView_GetClickedItem(hWndControl)
     Dim currentPath As StringW
     GetPathByNodeW hClickedItem, TreeView, currentPath
-    If currentPath <> "" Then txtFilePath.Text = currentPath
+    'If currentPath <> "" Then txtFilePath.Text = currentPath
     
     If hClickedItem <> 0 Then
         ' 找到节点了，主动选择它
@@ -2317,9 +2323,9 @@ Function FrmMain_TreeView_NM_RCLICK(hWndForm As hWnd, hWndControl As hWnd) As LR
         ' 只在点击到节点时才弹出菜单
         Select Case CurrentInformation.intType
             Case File
-                PopupMenu hWndForm, mnuFile.HMENU
+                PopupMenu hWndForm, mnuFolder.HMENU
             Case Registry
-                PopupMenu hWndForm, mnuReg.HMENU
+                PopupMenu hWndForm, mnuRegKey.HMENU
         End Select
     End If
    Function = False '返回 TRUE 非零以防止默认处理，返回 False 零以允许默认处理。
@@ -2330,20 +2336,7 @@ End Function
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Check3.Value = False
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim isStatus As BOOLEAN = Check3.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyCreateProcess, @isStatus, SizeOf(BOOLEAN)
@@ -2354,7 +2347,7 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check6_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Check6.Value) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
+        /'If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
             AfxMsg "加载失败!"
             Exit Sub
         End If
@@ -2367,14 +2360,16 @@ Sub FrmMain_Check6_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             AfxMsg "加载失败!"
             Exit Sub
         End If
-        AfxMsg "加载成功!"
         SymbolService_StartWorkers
-        IsDriverLoaded = True
+        AfxMsg "加载成功!"
+        IsDriverLoaded = True '/
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!"
     Else
-        CloseDrv hDrv
+        /'CloseDrv hDrv
         SymbolService_StopWorkers
         UnloadDriver App.Path & "SnowSword.sys", False
-        IsDriverLoaded = False
+        IsDriverLoaded = False '/
+        UninitDriver
         AfxMsg "卸载成功!"
         Check3.Value = False
         Check4.Value = False
@@ -2389,20 +2384,7 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check5_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Check5.Value = False
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim isStatus As BOOLEAN = Check5.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyAccessRegistry, @isStatus, SizeOf(BOOLEAN)
@@ -2413,20 +2395,7 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check7_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Check7.Value = False
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim isStatus As BOOLEAN = Check7.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyLoadDriver, @isStatus, SizeOf(BOOLEAN)
@@ -2444,20 +2413,7 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check8_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Check8.Value = False
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim dwProcessId As DWORD = GetCurrentProcessId, ret As Long, bStatus As BOOLEAN = Check8.Value
     If (Check8.Value) Then
@@ -2640,6 +2596,16 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
 
                 End Select
             End Select
+        ElseIf Nmhdr->hwndFrom = mCtrlTreeList1.hWnd Then
+            If Nmhdr->code = TVN_KEYDOWN Then
+                ' 判断 Ctrl + C
+                Dim pKey As NMTVKEYDOWN Ptr = Cast(NMTVKEYDOWN Ptr, lParam)
+                If pKey->wVKey = Asc("C") Then
+                    If (GetKeyState(VK_CONTROL) And &H8000) <> 0 Then
+                        CopyDataToClipboard mCtrlTreeList1.GetItemText(LastSelectItem, LastClickedSubItem)
+                    End If
+                End If
+            End If
         End If
     Case WM_USER + TrayIco1.CallMsg
         Select Case lParam
@@ -2811,20 +2777,7 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check4_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Check4.Value = False
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     Dim bStatus As BOOLEAN = Check4.Value
     IoControl hDrv, IOCTL_DenyRemoteThread, @bStatus, SizeOf(BOOLEAN)
@@ -3493,6 +3446,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                 End If
                 hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
+                    SymbolService_StartWorkers
                     AfxMsg "加载成功!"
                     Check6.Value =True
                     IsDriverLoaded = True
@@ -3524,19 +3478,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmMain_mnuProcess_mnuViolentTerminateProcess '暴力结束进程
             Dim dwProcessId As HANDLE = Cast(HANDLE, ValULng(ListView1.GetItemText(ListView1.SelectedItem, 0)))
             If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
-                hDrv = OpenDrv("\\.\\SnowSword", True)
-                If (hDrv <> INVALID_HANDLE_VALUE) Then
-                    AfxMsg "加载成功!"
-                    Check6.Value =True
-                    IsDriverLoaded = True
-                Else
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
             End If
             IoControl hDrv, IOCTL_MemKillProcess, @dwProcessId, SizeOf(DWORD) ' 容易导致线程在KeSynchronizeExecution+0x4891处死锁,杀不死
             'IoControl hDrv, IOCTL_ForceKillProcess, @dwProcessId, SizeOf(HANDLE)
@@ -3558,37 +3500,13 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             Next
         Case FrmMain_mnuProcess_mnuProtectProcess
             If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
-                hDrv = OpenDrv("\\.\\SnowSword", True)
-                If (hDrv <> INVALID_HANDLE_VALUE) Then
-                    AfxMsg "加载成功!"
-                    FrmMain.Check6.Value =True
-                    IsDriverLoaded = True
-                Else
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
             End If
             Dim dwProcessId As DWORD = ValULng(ListView1.GetItemText(ListView1.SelectedItem, 0)), ret As Long, lpRet As DWORD
             IoControl hDrv, IOCTL_AddProtectedProcess, @dwProcessId, SizeOf(DWORD)
         Case FrmMain_mnuProcess_mnuCheckHideProcess '检测隐藏进程
             If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
-                hDrv = OpenDrv("\\.\\SnowSword", True)
-                If (hDrv <> INVALID_HANDLE_VALUE) Then
-                    AfxMsg "加载成功!"
-                    FrmMain.Check6.Value =True
-                    IsDriverLoaded = True
-                Else
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
             End If
             SetMenuCheckState mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess, Not GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
         Case FrmMain_mnuProcess_mnuCheckSign ' 校验数字签名
@@ -3816,124 +3734,54 @@ Sub FrmMain_mCtrlTreeList1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd,
     End Select
 End Sub
 
-'[FrmMain.mnuFile]事件 : 点击了菜单项
+'[FrmMain.mnuRegKey]事件 : 点击了菜单项
 'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 ''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
 'wID      菜单项命令ID
-Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
-    Dim CurrentPath As StringW
-    GetPathByNodeW CurrentNode, TreeView, CurrentPath
+Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim CurrentPath As StringW = "", hHKEY As HKEY
+    hHKEY = GetRegPathByNodeW(CurrentNode, TreeView, CurrentPath)
     Select Case wID
-        Case FrmMain_mnuFile_mnuRefresh ' 刷新
+        Case FrmMain_mnuRegKey_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
-            GetFileList CurrentNode, TreeView, ListView1, (GetFocus = TreeView.hWnd), True, GetMenuCheckState(mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
+            GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
             TreeView.ExpandEx CurrentNode, TVE_EXPAND
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-        Case FrmMain_mnuFile_mnuCreateFile ' 新建文件
-            Dim hFile As HANDLE
-            Dim FileName As String = AfxInputBox(hWndForm,,, "提示", "请输入文件名:")
-            hFile = CreateFileW(CurrentPath & FileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-            If (hFile > 0) Then
-                Dim nFileSize As LARGE_INTEGER
-                ListView1.AddItem FileName
-                GetFileSizeEx hFile, @nFileSize
-                ListView1.SetItemText ListView1.ItemCount - 1, 1, WStr(nFileSize.HighPart*(2^32) + nFileSize.LowPart)
-                'GetFileList CurrentNode,TreeView,ListView1
-                AfxMsg "创建文件成功!"
-                CloseHandle hFile
-            End If
-        Case FrmMain_mnuFile_mnuCreateFolder ' 新建文件夹
-            Dim FolderName As String = AfxInputBox(NULL,,,"提示","请输入文件夹名:")
-            If (MkDir(CurrentPath & FolderName) = 0) Then
-                TreeView.InsertItem CurrentNode,TVI_SORT,FolderName
-                'GetFileList CurrentNode,TreeView,ListView1
-                AfxMsg "创建文件夹成功!"
+        Case FrmMain_mnuRegKey_mnuCreateKey ' 新建
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新子键名称:", "新项 #1")
+            Dim hkResult As HKEY
+            Print "新子键:" & CurrentPath & "\" & NewKey
+            If RegCreateKey(hHKEY, CurrentPath & "\" & NewKey, @hkResult) = ERROR_SUCCESS Then
+                AfxMsg "创建成功!"
+                TreeView.InsertItem CurrentNode, TVI_SORT, NewKey
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                Print "新建文件夹:" & Err
-                AfxMsg "创建文件夹失败!"
+                MyLog.PrintWin32Error "", "RegCreateKey", CurrentPath & "\" & NewKey
+                AfxMsg "创建失败!"
             End If
-        Case FrmMain_mnuFile_mnuCopy ' 复制
-            
-        Case FrmMain_mnuFile_mnuForceCopyTo ' 强制复制到...
-            Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            Dim TargetPath As StringW = AfxInputBox(,,, "目标路径")
-            
-            If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
-            If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
-            TargetPath = TargetPath & GetNameByPath(SourcePath)
-            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
-            If IsDriverLoaded Then
-                If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
+        Case FrmMain_mnuRegKey_mnuDeleteKey ' 删除
+            Dim hkResult As HKEY
+            If RegDeleteTree(hHKEY, CurrentPath) = ERROR_SUCCESS Then
+                AfxMsg "删除成功!"
+                TreeView.DeleteItem CurrentNode
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                If MyCopyFile(SourcePath, TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
+                MyLog.PrintWin32Error "", "RegDeleteTree", CurrentPath
+                AfxMsg "删除失败!"
             End If
-        Case FrmMain_mnuFile_mnuPaste ' 粘贴
-
-        Case FrmMain_mnuFile_mnuDelete ' 删除
-            Dim Path As StringW, ret As NTSTATUS
-            Path = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            ret = MyDeleteFile(Path)
-            If NT_SUCCESS(ret) Then
-                If CurrentNode = NULL Then
-                    TreeView.DeleteItem CurrentNode
-                    ListView1.DeleteAllItems ' 此处是否有问题
-                Else
-                    ListView1.DeleteItem ListView1.SelectedItem
-                End If
-                AfxMsg "删除文件(夹)成功!"
+        Case FrmMain_mnuRegKey_mnuRenameKey ' 重命名
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入子键新名称:", "新项 #1")
+            Print "子键新名称:" & CurrentPath & "\" & NewKey
+            If RegRenameKey(hHKEY, CurrentPath, NewKey) = ERROR_SUCCESS Then
+                AfxMsg "重命名成功!"
+                TreeView_SetItemText(TreeView.hWnd, CurrentNode, StrPtrW(NewKey))
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                AfxMsg "删除文件(夹)失败!Status=" & WHex(ret)
+                MyLog.PrintWin32Error "", "RegRenameKey", CurrentPath & " " & NewKey
+                AfxMsg "重命名失败!"
             End If
-        Case FrmMain_mnuFile_mnuForceDelete ' 强制删除
-            Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
-            If (strFile = NULL) Then
-                Print "[FrmMain_mnuFile_ForceDelete]分配内存失败"
-                Exit Sub
-            End If
-            *strFile = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            'AfxMsg *strFile
-            If IsDriverLoaded Then
-                #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
-                Dim status As NTSTATUS = MyDeleteFile(strFile)
-                If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
-                    IoControl hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)
-                Else ' 是被打开的文件
-                    IoControl hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)
-                    DeleteFile strFile
-                    Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
-                End If
-            End If
-            Deallocate strFile
-        Case FrmMain_mnuFile_mnuIsPhysicalAnalyze ' 是否物理磁盘分析
-            SetMenuCheckState mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze, Not GetMenuCheckState(mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
-        Case FrmMain_mnuFile_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
-
-            ' ==========================================
-            ' 3. 复制到剪贴板
-            ' ==========================================
-            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
-               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
-                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
-            End If
-    End Select
-End Sub
-
-'[FrmMain.mnuReg]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmMain_mnuReg_WM_Command(hWndForm As hWnd, wID As ULong)
-    Dim CurrentPath As StringW
-    GetPathByNodeW CurrentNode, TreeView, CurrentPath
-    Select Case wID
-        Case FrmMain_mnuReg_mnuRefresh ' 刷新
-            lblNum.Caption = "正在刷新..."
-            GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis)
-            TreeView.ExpandEx CurrentNode, TVE_EXPAND
-            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-        Case FrmMain_mnuReg_mnuEnableHiveAnalysis ' 启用Hive分析
-            SetMenuCheckState mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis, Not GetMenuCheckState(mnuReg, FrmMain_mnuReg_mnuEnableHiveAnalysis)
+        Case FrmMain_mnuRegKey_mnuEnableHiveAnalysis ' 启用Hive分析
+            SetMenuCheckState mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis, Not GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
     End Select
 End Sub
 
@@ -4088,4 +3936,209 @@ Sub FrmMain_mnuMinifilter_WM_Command(hWndForm As hWnd,wID As ULong)
     End Select
 
 End Sub
+
+'[FrmMain.mnuFile]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
+    Dim CurrentPath As StringW
+    GetPathByNodeW CurrentNode, TreeView, CurrentPath
+    Select Case wID
+        Case FrmMain_mnuFile_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetFileList CurrentNode, TreeView, ListView1, False, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+            'TreeView.ExpandEx CurrentNode, TVE_EXPAND
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+        Case FrmMain_mnuFile_mnuCreateFile ' 新建文件
+            Dim hFile As HANDLE
+            Dim FileName As String = AfxInputBox(hWndForm,,, "提示", "请输入文件名:")
+            hFile = CreateFileW(CurrentPath & FileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+            If (hFile > 0) Then
+                Dim nFileSize As LARGE_INTEGER
+                GetFileSizeEx hFile, @nFileSize
+                AddItemColListEx ListView1, 3,,, WStr(FileName), WStr(""), WStr(nFileSize.HighPart * (2 ^ 32) + nFileSize.LowPart)
+                CommitListViewView ListView1
+                'GetFileList CurrentNode, TreeView, ListView1
+                AfxMsg "创建文件成功!"
+                SaveCurrentListViewState ListView1, CurrentInformation.intType
+                CloseHandle hFile
+            End If
+        Case FrmMain_mnuFile_mnuCopyTo ' 复制到
+            'CopyFileToClipboard FilePath
+            Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            Dim TargetPath As StringW = AfxInputBox(,,,"提示", "目标路径")
+            
+            If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
+            If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
+            TargetPath = TargetPath & GetNameByPath(SourcePath)
+            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
+            If CopyFile(SourcePath, TargetPath, True) <> 0 Then
+                AfxMsg "复制成功!"
+            Else
+                AfxMsg "复制失败!"
+            End If
+        Case FrmMain_mnuFile_mnuForceCopyTo ' 强制复制到...
+            Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            Dim TargetPath As StringW = AfxInputBox(,,, "目标路径")
+            
+            If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
+            If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
+            TargetPath = TargetPath & GetNameByPath(SourcePath)
+            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
+            If IsDriverLoaded Then
+                If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
+            Else
+                If MyCopyFile(SourcePath, TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
+            End If
+        'Case FrmMain_mnuFile_mnuPaste ' 粘贴
+
+        Case FrmMain_mnuFile_mnuDelete ' 删除
+            Dim Path As StringW, ret As NTSTATUS
+            Path = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            ret = MyDeleteFile(Path)
+            If NT_SUCCESS(ret) Then
+                DeleteItemEx ListView1, ListView1.SelectedItem
+                AfxMsg "删除文件(夹)成功!"
+            Else
+                AfxMsg "删除文件(夹)失败!Status=" & WHex(ret)
+            End If
+        Case FrmMain_mnuFile_mnuForceDelete ' 强制删除
+            Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
+            If (strFile = NULL) Then
+                Print "[FrmMain_mnuFile_ForceDelete]分配内存失败"
+                Exit Sub
+            End If
+            *strFile = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            'AfxMsg *strFile
+            If IsDriverLoaded Then
+                #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
+                Dim status As NTSTATUS = MyDeleteFile(strFile)
+                If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
+                    IoControl hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)
+                Else ' 是被打开的文件
+                    IoControl hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)
+                    DeleteFile strFile
+                    Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
+                End If
+            End If
+            Deallocate strFile
+            DeleteItemEx ListView1, ListView1.SelectedItem
+        Case FrmMain_mnuFile_mnuViewFileStream ' 查看文件流
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo->FilePath = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            CurrentInfo->intType = FileStream
+            FrmListView.Show,, Cast(Integer, CurrentInfo)
+        Case FrmMain_mnuFile_mnuLittleCopy ' 复制单格数据
+            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+
+            ' ==========================================
+            ' 3. 复制到剪贴板
+            ' ==========================================
+            If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
+               (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
+                CopyDataToClipboard ListView1.GetItemText(LastClickedItem, LastClickedSubItem)
+            End If
+    End Select
+End Sub
+
+'[FrmMain.mnuFolder]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim CurrentPath As StringW
+    GetPathByNodeW CurrentNode, TreeView, CurrentPath
+    Select Case wID
+        Case FrmMain_mnuFolder_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+            TreeView.ExpandEx CurrentNode, TVE_EXPAND
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+        Case FrmMain_mnuFolder_mnuCreateFolder ' 新建文件夹
+            Dim FolderName As String = AfxInputBox(NULL,,,"提示","请输入文件夹名:")
+            If (MkDir(CurrentPath & FolderName) = 0) Then
+                TreeView.InsertItem CurrentNode, TVI_SORT, FolderName
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+                'GetFileList CurrentNode,TreeView,ListView1
+                AfxMsg "创建文件夹成功!"
+            Else
+                Print "新建文件夹:" & Err
+                AfxMsg "创建文件夹失败!"
+            End If
+        Case FrmMain_mnuFolder_mnuCopyFolder ' 复制文件夹
+            Dim SourcePath As StringW = CurrentPath
+            Dim TargetPath As StringW = AfxInputBox(,,,"提示", "目标路径")
+            
+            If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
+            TargetPath = TargetPath & GetNameByPath(SourcePath)
+            
+            If FB_ShellCopyFile(SourcePath, TargetPath, NULL) <> 0 Then
+                AfxMsg "复制成功!"
+            Else
+                AfxMsg "复制失败!"
+            End If
+        Case FrmMain_mnuFolder_mnuDeleteFolder ' 删除文件夹
+            If RmDir(CurrentPath) = 0 Then
+                AfxMsg "删除文件夹成功!"
+                TreeView.DeleteItem CurrentNode
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+            Else
+                Print "删除文件夹:" & Err
+                AfxMsg "删除文件夹失败!"
+            End If
+        Case FrmMain_mnuFolder_mnuEnablePhysicalAnalyze ' 是否物理磁盘分析
+            SetMenuCheckState mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, Not GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+   End Select
+End Sub
+
+'[FrmMain.mnuRegValue]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd,wID As ULong)
+    Select Case wID
+        Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
+
+        Case FrmMain_mnuRegValue_mnuCreate ' 新建
+
+        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值
+
+        Case FrmMain_mnuRegValue_mnuDeleteValue ' 删除
+
+        Case FrmMain_mnuRegValue_mnuModifyValue ' 修改
+
+    End Select
+End Sub
+
+'[FrmMain.mCtrlTreeList1]事件 : 按下鼠标左键
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+'MouseFlags  MK_CONTROL   MK_LBUTTON     MK_MBUTTON     MK_RBUTTON    MK_SHIFT     MK_XBUTTON1       MK_XBUTTON2 
+''           CTRL键按下   鼠标左键按下   鼠标中键按下   鼠标右键按下  SHIFT键按下  第一个X按钮按下   第二个X按钮按下
+'检查什么键按下用  If (MouseFlags And MK_CONTROL)<>0 Then CTRL键按下 
+'xPos yPos   当前鼠标位置，相对于控件。就是在控件里的坐标。
+Sub FrmMain_mCtrlTreeList1_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd, MouseFlags As Long, xPos As Long, yPos As Long)
+    Dim SelectItem As MC_HTREELISTITEM, SelectColumn As Long
+    TreeList_SubItemHitTest mCtrlTreeList1, xPos, yPos, SelectItem, SelectColumn, False
+    If SelectItem <> NULL AndAlso (SelectColumn >= 0 AndAlso SelectColumn <= mCtrlTreeList1.GetColumnCount - 1) Then
+        Print "SelectItem:" & mCtrlTreeList1.GetItemText(SelectItem, 0) & " SelectColumn:" & SelectColumn
+        LastSelectItem = SelectItem
+        LastClickedSubItem = SelectColumn
+    End If
+End Sub
+
+'[FrmMain.Check1]事件 : 单击
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+Sub FrmMain_Check1_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
+
+End Sub
+
+
+
+
+
+
+
 

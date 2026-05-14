@@ -235,6 +235,15 @@ Left=690
 Top=280
 Tag=
 
+[PopupMenu]
+Name=mnuFileStream
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuFileStream_mnuRefresh0-10-FrmListView_mnuFileStream_mnuStep10-10新建流FrmListView_mnuFileStream_mnuCreateStream0-10从文件复制为流FrmListView_mnuFileStream_mnuCreateStreamFromFile0-10从流复制为文件FrmListView_mnuFileStream_mnuCreateFileFromStream0-10修改流内容FrmListView_mnuFileStream_mnuEditStream0-10删除流FrmListView_mnuFileStream_mnuDeleteStream0-10
+Left=290
+Top=250
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -800,6 +809,9 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
         Case MinifilterInstances
             EnumMinifilterInstances ListView, @CurrentInfo->CurrentDriver.DriverName
             Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "]" & " 实例列表"
+        Case FileStream
+            EnumerateFileStreams ListView, CurrentInfo->FilePath
+            Me.Caption = "[" & CurrentInfo->FilePath & "]" & " 流列表"
     End Select
     lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
 End Sub
@@ -835,6 +847,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case Memory
             mnuMemory.hWndForm = hWndForm
             PopupMenu hWndForm, mnuMemory.HMENU
+        Case Privilege
+            mnuPrivilege.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuPrivilege.HMENU
         Case WebConnect
             mnuWebConnect.hWndForm = hWndForm
             PopupMenu hWndForm, mnuWebConnect.HMENU
@@ -858,7 +873,11 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
             PopupMenu hWndForm, mnuHotkey.HMENU
         Case UnlockTheFile
             mnuUnlock_File.hWndForm = hWndForm
-            PopupMenu hWndForm,mnuUnlock_FIle.HMENU
+            PopupMenu hWndForm, mnuUnlock_File.HMENU
+            
+        Case FileStream
+            mnuFileStream.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuFileStream.HMENU
     End Select
 End Sub
 
@@ -1482,5 +1501,122 @@ Sub FrmListView_mnuMinifilterInstance_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
    End Select
 End Sub
+
+'[FrmListView.mnuFileStream]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuFileStream_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Select Case wID
+        Case FrmListView_mnuFileStream_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            EnumerateFileStreams ListView, CurrentInfo->FilePath
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuFileStream_mnuCreateStream ' 新建流
+            Dim StreamName As StringW = AfxInputBox(,,, "提示", "请输入流的名称", "new")
+            Dim StreamPath As StringW = CurrentInfo->FilePath & ":" & StreamName
+            Dim hStream As HANDLE = CreateFileW(StreamPath.WstrPtr, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL)
+            If hStream <> INVALID_HANDLE_VALUE Then
+                AfxMsg "创建流成功!"
+                CloseHandle hStream
+                AddItemColListEx ListView, 2,,, WStr(StreamName), WStr("0")
+                CommitListViewView ListView
+            Else
+                AfxMsg "创建流失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStream", "CreateFileW", "StreamPath = " & StreamPath
+            End If
+        Case FrmListView_mnuFileStream_mnuCreateStreamFromFile ' 从文件复制为流
+            Dim StreamName As StringW = AfxInputBox(,,, "提示", "请输入流的名称", "new")
+            Dim StreamPath As StringW = CurrentInfo->FilePath & ":" & StreamName
+            Dim FilePath As StringW = AfxInputBox(,,, "提示", "请输入文件路径")
+            Dim hStream As HANDLE = CreateFileW(StreamPath.WstrPtr, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL)
+            Dim hFile As HANDLE = CreateFileW(FilePath.WstrPtr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+            If hStream = INVALID_HANDLE_VALUE Then
+                AfxMsg "创建流失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStreamFromFile", "CreateFileW", "StreamPath = " & StreamPath
+                Exit Sub
+            End If
+            If hFile = INVALID_HANDLE_VALUE Then
+                CloseHandle hStream
+                AfxMsg "打开文件失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStreamFromFile", "CreateFileW", "FilePath = " & FilePath
+                Exit Sub
+            End If
+            
+            Dim bytData() As Byte, dwFileSizeLow As DWORD, dwFileSizeHigh As DWORD
+            dwFileSizeLow = GetFileSize(hFile, @dwFileSizeHigh)
+            Dim dwFileSize As ULongLong = dwFileSizeHigh * (2 ^ 32) + dwFileSizeLow
+            ReDim bytData(dwFileSize - 1) As Byte
+            Dim bytRead As DWORD = 0
+            If ReadFile(hFile, @bytData(0), dwFileSize, @bytRead, NULL) = 0 OrElse bytRead <> dwFileSize Then
+                CloseHandle hStream
+                CloseHandle hFile
+                AfxMsg "读取文件失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStreamFromFile", "ReadFile", "FilePath = " & FilePath & " dwFileSize:" & dwFileSize & " bytRead:" & bytRead
+                Exit Sub
+            End If
+            Dim bytWritten As DWORD = 0
+            If WriteFile(hStream, @bytData(0), dwFileSize, @bytWritten, NULL) = 0 OrElse bytWritten <> dwFileSize Then
+                AfxMsg "写入流失败!"
+                CloseHandle hStream
+                CloseHandle hFile
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStreamFromFile", "WriteFile", "StreamPath:" & StreamPath & " FilePath = " & FilePath & " dwFileSize:" & dwFileSize & " bytWritten:" & bytWritten
+                Exit Sub
+            End If
+            CloseHandle hStream
+            CloseHandle hFile
+            AfxMsg "从文件复制为流成功!"
+            AddItemColListEx ListView, 2,,, WStr(StreamName), WStr(dwFileSize)
+            CommitListViewView ListView
+        Case FrmListView_mnuFileStream_mnuCreateFileFromStream ' 从流复制为文件
+            Dim StreamPath As StringW = CurrentInfo->FilePath & ":" & ListView.GetItemText(ListView.SelectedItem, 0)
+            Dim FilePath As StringW = AfxInputBox(,,, "提示", "请输入文件路径")
+            Dim hStream As HANDLE = CreateFileW(StreamPath.WstrPtr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+            Dim hFile As HANDLE = CreateFileW(FilePath.WstrPtr, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL)
+            If hStream = INVALID_HANDLE_VALUE Then
+                AfxMsg "打开流失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateFileFromStream", "CreateFileW", "StreamPath = " & StreamPath
+                Exit Sub
+            End If
+            If hFile = INVALID_HANDLE_VALUE Then
+                CloseHandle hStream
+                AfxMsg "创建文件失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateFileFromStream", "CreateFileW", "FilePath = " & FilePath
+                Exit Sub
+            End If
+            
+            Dim bytData() As Byte, dwStreamSizeLow As DWORD, dwStreamSizeHigh As DWORD
+            dwStreamSizeLow = GetFileSize(hStream, @dwStreamSizeHigh)
+            Dim dwStreamSize As ULongLong = dwStreamSizeHigh * (2 ^ 32) + dwStreamSizeLow
+            ReDim bytData(dwStreamSize - 1) As Byte
+            Dim bytRead As DWORD = 0
+            If ReadFile(hStream, @bytData(0), dwStreamSize, @bytRead, NULL) = 0 OrElse bytRead <> dwStreamSize Then
+                CloseHandle hStream
+                CloseHandle hFile
+                AfxMsg "读取流失败!"
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateFileFromStream", "ReadFile", "FilePath = " & FilePath & " dwStreamSize:" & dwStreamSize & " bytRead:" & bytRead
+                Exit Sub
+            End If
+            Dim bytWritten As DWORD = 0
+            If WriteFile(hFile, @bytData(0), dwStreamSize, @bytWritten, NULL) = 0 OrElse bytWritten <> dwStreamSize Then
+                AfxMsg "写入文件失败!"
+                CloseHandle hStream
+                CloseHandle hFile
+                MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateFileFromStream", "WriteFile", "StreamPath:" & StreamPath & " FilePath = " & FilePath & " dwStreamSize:" & dwStreamSize & " bytWritten:" & bytWritten
+                Exit Sub
+            End If
+            CloseHandle hStream
+            CloseHandle hFile
+            AfxMsg "从流复制为文件成功!"
+        Case FrmListView_mnuFileStream_mnuEditStream ' 修改流内容
+
+        Case FrmListView_mnuFileStream_mnuDeleteStream ' 删除流
+
+    End Select
+End Sub
+
 
 

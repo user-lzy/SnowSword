@@ -120,19 +120,36 @@ Private Function GetNode(ByVal szPath As LPWSTR,treFolder As Class_TreeView) As 
 End Function
 
 Public Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
-    Dim CurrentNode As HTREEITEM = Node, PathLen As Integer = 256
-    Dim i As Integer
-    Do While True
-        FilePath = treFolder.Text(CurrentNode) & "\" & FilePath
-        'Print "CurrentNode:" & treFolder.Text(CurrentNode) & " FilePath:" & FilePath
-        If (treFolder.GetParent(CurrentNode) = NULL) Then Exit Do
-        CurrentNode = treFolder.GetParent(CurrentNode)
-    Loop
-    'Print "FilePath:" & FilePath
-    Dim pos1 As Integer, pos2 As Integer
-    pos1 = InStrRevW(FilePath, "(")
-    pos2 = InStrRevW(FilePath, ")")
-    If pos1 <> 0 AndAlso pos2 <> 0 Then FilePath = MidW(FilePath, pos1 + 1, pos2 - pos1 - 1) & RightW(FilePath, Len(FilePath) - pos2)
+    Dim CurrentNode As HTREEITEM = Node
+    Dim FullPath As StringW = ""  ' 初始化空路径，核心修复
+    Dim ParentNode As HTREEITEM
+    
+    Do
+        ParentNode = treFolder.GetParent(CurrentNode)
+        Dim NodeText As StringW = treFolder.Text(CurrentNode)
+        
+        ' ============== 核心修复：只有根节点(磁盘)才提取括号内的盘符 ==============
+        If ParentNode = NULL Then
+            ' 根节点(磁盘)：提取 (E:) 这种格式里的盘符
+            Dim pos1 As Integer = InStrRevW(NodeText, "(")
+            Dim pos2 As Integer = InStrRevW(NodeText, ")")
+            If pos1 > 0 And pos2 > 0 And pos2 > pos1 Then
+                NodeText = MidW(NodeText, pos1 + 1, pos2 - pos1 - 1)
+            End If
+        End If
+        
+        ' 拼接路径
+        If FullPath = "" Then
+            FullPath = NodeText
+        Else
+            FullPath = NodeText & "\" & FullPath
+        End If
+        
+        CurrentNode = ParentNode
+    Loop While CurrentNode <> NULL
+    
+    ' 最终赋值（自动补尾\）
+    FilePath = FullPath & "\"
 End Sub
 
 'Private Function PrintFileSize(ByVal FileSize As QWORD) As LPWSTR
@@ -215,7 +232,11 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
             If fileInfo(j).bDirectory Then
                 If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fileInfo(j).cFileName
             ElseIf IsEnumFile Then
-                Dim ItemIndex As Long = AddItemColListEx(lvwFile,3,,, WStr(fileInfo(j).cFileName), WStr(""), WStr(fileInfo(j).dwFileSizeHigh * (2 ^ 32) + fileInfo(j).dwFileSizeLow))
+                Dim ItemIndex As Long = AddItemColListEx(lvwFile, 3,,, WStr(fileInfo(j).cFileName), WStr(""), WStr(fileInfo(j).dwFileSizeHigh * (2 ^ 32) + fileInfo(j).dwFileSizeLow))
+                If fileInfo(j).bSuspicious Then ' 是ADS流文件
+                    SetItemTextEx lvwFile, ItemIndex, 1, "Stream"
+                    SetItemColor lvwFile, ItemIndex, FB_Black, FB_GoldenYellow
+                End If
                 If IsBeAccess Then
                     For k As Integer = 0 To i - 1
                         If fData(k).cFileName = fileInfo(j).cFileName Then Continue For, For ' 找到则进入下一次循环
@@ -228,13 +249,10 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
                 szPath1 = RightW(szPath, LenW(szPath) - pos1)
                 'Print "szPath:" & szPath & " szPath1:" & szPath1
                 ' OrElse (LeftW(szPath1, 9) = "\$Extend\")
+                'Print "fileInfo(j).cFileName:" & fileInfo(j).cFileName & " fileInfo(j).bSuspicious:" & fileInfo(j).bSuspicious
                 If (fileInfo(j).mftRecordNumber >= 0 AndAlso fileInfo(j).mftRecordNumber <= 16) Then ' 是元文件(如$MFT,$Extend\$ObjId)
                     SetItemTextEx lvwFile, ItemIndex, 1, "Metafile"
                     SetItemColor lvwFile, ItemIndex, FB_LightPinkRed, FB_White
-                /'ElseIf fileInfo(j).bStreamFile Then ' 是ADS流文件
-                    SetItemTextEx lvwFile, ItemIndex, 0, fileInfo(j).cFileName & ":" & 
-                    SetItemTextEx lvwFile, ItemIndex, 1, "Stream"
-                    SetItemColor lvwFile, ItemIndex, FB_LightRed, FB_White'/
                 Else ' 是隐藏文件!
                     SetItemTextEx lvwFile, ItemIndex, 1, "Hidden"
                     SetItemColor lvwFile, ItemIndex, FB_Red, FB_White
@@ -281,7 +299,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
                 hRootNode = hCurrentNode
                 'Print sDriveLetter
                 If iNumParts > 1 Then
-                    GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
+                    GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
                     treFolder.ExpandEx hCurrentNode, TVE_EXPAND
                     'hCurrentNode = treFolder.GetChild(hCurrentNode)
                 Else
@@ -334,7 +352,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
                 If i < iNumParts - 1 Then
                     ' 如果节点未展开，则展开
                     If Not treFolder.Expand(hCurrentNode) Then
-                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFile_mnuIsPhysicalAnalyze)
+                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
                         treFolder.ExpandEx hCurrentNode, TVE_EXPAND
                         Exit While
                     End If
@@ -400,6 +418,48 @@ Function LocateFilePathByExplorer(ByVal lpFilePath As LPCWSTR) As Boolean
         Print "无法创建文件路径的 ITEMIDLIST。:" & WinErrorMsg(GetLastError) & GetLastError
         Return False
     End If 
+End Function
+
+' 封装一个更易用的复制函数
+Function FB_ShellCopyFile(sFrom As StringW, sTo As StringW, ByVal hOwner As HWND = NULL) As Long
+    Dim FileOp As SHFILEOPSTRUCTW
+    Dim wsFrom As WString * (MAX_PATH + 2) ' +2 是为了存放结尾的双null终止符
+    Dim wsTo As WString * (MAX_PATH + 2)
+    Dim ret As Long = 0
+
+    ' 1. 初始化结构体
+    ZeroMemory(@FileOp, SizeOf(SHFILEOPSTRUCTW))
+
+    ' 2. 准备源和目标缓冲区。SHFileOperation 要求路径字符串以双null结尾
+    wsFrom = sFrom & WChr(0)
+    wsTo   = sTo   & WChr(0)
+
+    ' 3. 填充结构体
+    FileOp.hWnd   = hOwner                          ' 父窗口句柄，用于显示对话框
+    FileOp.wFunc  = FO_COPY                         ' 操作类型：复制
+    FileOp.pFrom  = @wsFrom                         ' 指向源文件/文件夹路径
+    FileOp.pTo    = @wsTo                           ' 指向目标文件夹路径
+    FileOp.fFlags = FOF_ALLOWUNDO Or FOF_SILENT' 操作标志：允许撤销 | 完全静默操作，不显示任何进度对话框
+    ' 其他可用标志，可按需组合：
+    ' FOF_NOCONFIRMMKDIR : 创建目录时不提示
+    ' FOF_NOCONFIRMATION  : 对所有对话框都选择“是”。
+    ' FOF_RENAMEONCOLLISION : 在发生冲突时自动重命名新文件。
+    ' FOF_NOERRORUI       : 发生错误时不显示用户界面。
+
+    ' 4. 执行文件操作
+    ret = SHFileOperationW(@FileOp)
+
+    ' 5. 检查用户是否取消了操作
+    If FileOp.fAnyOperationsAborted <> 0 Then
+        Print "操作被用户取消！"
+        Return False
+    End If
+    If ret = 0 Then
+        Return True
+    Else
+        Print "SHFileOperationW failed, 0x" & WHex(ret)
+        Return False
+    End If
 End Function
 
 ' 辅助函数：解析错误码为文字描述

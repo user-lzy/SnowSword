@@ -1,16 +1,15 @@
-﻿#include Once "win/imagehlp.bi"
-#include Once "win/winbase.bi"
-'Extern "C"
-Declare Function RtlGetVersion Lib "ntdll.dll" Alias "RtlGetVersion"(ByVal pVersion As PRTL_OSVERSIONINFOEXW) As NTSTATUS
-'End Extern
+﻿#include Once "win/winbase.bi"
 
-Type SYMBOL_CONTEXT
-    FuncAddr As ULONG64 Ptr
-    pFuncName As LPWSTR
-End Type
- 
-Declare Function SymLoadModuleEx2 Lib "DbgHelp.dll" Alias "SymLoadModuleEx"(ByVal hProcess As HANDLE, ByVal HFILE As HANDLE, ByVal ImageName As PCSTR, ByVal ModuleName As PCSTR, ByVal BaseOfDll As DWORD64, ByVal DllSize As DWORD, ByVal Data As PMODLOAD_DATA, ByVal FLAGS As DWORD) As DWORD64
-'Declare Function SymEnumSymbolsW Lib "Dbghelp.dll" Alias "SymEnumSymbolsW"(ByVal hProcess As HANDLE, ByVal BaseOfDll As ULONG64, ByVal Mask As PCWSTR, ByVal EnumSymbolsCallback As PSYM_ENUMERATESYMBOLS_CALLBACKW, ByVal UserContext As PVOID) As WINBOOL
+Declare Function RtlGetVersion Lib "ntdll.dll" Alias "RtlGetVersion"(ByVal pVersion As PRTL_OSVERSIONINFOEXW) As NTSTATUS
+
+Declare Function SHCreateDataObject Lib "shell32.dll" Alias "SHCreateDataObject" ( _
+    ByVal pidlFolder As Any Ptr, _
+    ByVal cidl As UInteger, _
+    ByVal apidl As Any Ptr, _
+    ByVal pdtInner As Any Ptr, _
+    ByVal riid As GUID Ptr, _
+    ByRef ppv As Any Ptr _
+    ) As Long
 
 ' 初始化函数 - 获取Dll基址和导出表
 Private Function GetDllExports(ByVal DllName As String, ByRef exportDir As IMAGE_EXPORT_DIRECTORY Ptr) As PVOID
@@ -180,111 +179,6 @@ Function GetSystemVersion() As String
     End If
 End Function
 
-'Function EnumSymCallBack(ByVal pSymInfo As PSYMBOL_INFO, ByVal SymbolSize As DWORD, ByVal UserContext As PVOID) As BOOL
-'    Dim pSymbolContext As SYMBOL_CONTEXT Ptr = CPtr(SYMBOL_CONTEXT Ptr, UserContext)
-'    /'If (* (pSymbolContext->FuncAddr) <> NULL) AndAlso (pSymInfo->ADDRESS = * (pSymbolContext->FuncAddr)) Then
-'        * (pSymbolContext->pFuncName) = pSymInfo->Name
-'        Print "0x" & WHex(pSymInfo->ADDRESS) & "->" & pSymInfo->Name
-'        Return False
-'    ElseIf (pSymbolContext->pFuncName <> NULL) AndAlso (pSymInfo->Name = * (pSymbolContext->pFuncName)) Then
-'        * (pSymbolContext->FuncAddr) = pSymInfo->ADDRESS
-'        Print * (pSymbolContext->pFuncName) & "->" & "0x" & WHex(pSymInfo->ADDRESS)
-'        Return False
-'    Else
-'        Return True
-'    End If '/
-'    Print pSymInfo->Name & "->" & "0x" & WHex(pSymInfo->ADDRESS)
-'    Return True
-'End Function
-'
-'Function EnumSymbolsCallback(ByVal sym As SYMBOL_INFO Ptr, ByVal SymbolSize As ULong, ByVal UserContext As PVOID) As Boolean
-'    Print "[+] Found: "; sym->Name; " @ "; Hex(sym->ADDRESS)
-'    Return True ' 继续枚举
-'End Function
-'
-'' 加载内核模块符号
-'Function QuerySymbol(ByVal Addr As ULONG64 Ptr, pName As LPWSTR) As Boolean
-'    ' 常见的内核模块名称
-'    Dim kernelModules(0) As WString * 50 = {"drivers\ntfs.sys"} ' {"drivers\ntfs.sys"}
-'    
-'    Dim i As Integer
-'    For i = 0 To UBound(kernelModules)
-'        Dim ModuleBase As ULONG64, ModuleSize As DWORD
-'        ModuleBase = Cast(ULONG64, GetKernelModuleBase(@kernelModules(i), ModuleSize))
-'        Print "ModuleBase:" & WHex(ModuleBase)
-'        Print "ModulePath:" & "C:\Windows\System32\" & kernelModules(i)
-'        Dim hFile As HANDLE = CreateFile("C:\Windows\System32\" & kernelModules(i), GENERIC_READ, FILE_SHARE_READ Or FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL)
-'        If hFile = INVALID_HANDLE_VALUE Then Print "[QuerySymbol]CreateFile:" & "C:\Windows\System32\" & kernelModules(i) & " " & WinErrorMsg(GetLastError) & GetLastError
-'        Dim dwFileSize As DWORD = GetFileSize(hFile, NULL)
-'        CloseHandle hFile
-'        'Print kernelModules(i) & ":0x" & WHex(ModuleBase)
-'        'Print kernelModules(i) & " 0x" & WHex(ModuleBase) & " " & "0x" & WHex(ModuleSize)
-'        'Dim SymLoadModule64(byval hProcess as HANDLE, byval hFile as HANDLE, byval ImageName as PSTR, byval ModuleName as PSTR, byval BaseOfDll as DWORD64, byval SizeOfDll as DWORD) as DWORD64 = DyLibSymbol(GetModuleHandle("DbgHelp.dll"), "SymLoadModuleExW")
-'        Dim dwBase As ULONG64 = SymLoadModule64(GetCurrentProcess, NULL, "C:\Windows\System32\" & kernelModules(i), NULL, ModuleBase, ModuleSize) ' ModuleBase
-'        Print "dwBase:" & WHex(dwBase)
-'        Print "[SymLoadModule64]" & WinErrorMsg(GetLastError) & GetLastError
-'        Dim SymInfo As SYMBOL_CONTEXT
-'        SymInfo.FuncAddr = Addr
-'        SymInfo.pFuncName = pName
-'        Print "[SymEnumSymbols]" & SymEnumSymbols(GetCurrentProcess, dwBase, StrPtr("!*!"), @EnumSymCallBack, @SymInfo) & " " & WinErrorMsg(GetLastError) & GetLastError
-'        SymUnloadModule64 GetCurrentProcess, dwBase
-'        If (*(SymInfo.pFuncName) <> "") AndAlso (*Addr <> NULL) Then Return True
-'    Next
-'    Print "无法加载任何内核模块符号:" & WinErrorMsg(GetLastError) & GetLastError
-'    Return False
-'End Function
-'
-'Function SymInit(ByVal hProcess As HANDLE) As Boolean
-'    Dim symbolPath As WString * 50
-'    
-'    '' 直接使用在线符号服务器，不进行本地缓存
-'    symbolPath = "SRV*" & "C:\symbols*" & "https://msdl.microsoft.com/download/symbols" ' "http://msdl.blackint3.com:88/download/symbols"
-'    
-'    SetEnvironmentVariable("_NT_SYMBOL_PATH", @symbolPath)
-'    Print "使用在线符号服务器（无缓存）"
-'    
-'    Dim options As DWORD = SymSetOptions(SYMOPT_UNDNAME Or SYMOPT_LOAD_LINES Or SYMOPT_DEBUG)
-'    
-'    ' 初始化符号处理
-'    If SymInitialize(hProcess, NULL, False) = False Then
-'        Print "SymInitialize 失败: " & GetLastError
-'        Return False
-'    End If
-'    Return True
-'End Function
-'
-'Function LoadModuleSymbols(ByVal imagePath As ZString Ptr, ByVal dwBase As ULONG_PTR) As Boolean
-'    Dim hProc As HANDLE = GetCurrentProcess
-'
-'    Dim ret As ULONG_PTR = SymLoadModuleEx(hProc, NULL, imagePath, StrPtr("nt"), dwBase, 0, NULL, 0)
-'
-'    if ret = 0 then
-'        Print "SymLoadModuleEx failed: "; GetLastError
-'        return FALSE
-'    end if
-'
-'    Print "[+] Module loaded: "; *imagePath
-'    Return True
-'End Function
-'
-'Function GetSymbolAddress(ByVal pszName As ZString Ptr) As ULONG64
-'    Dim hProc As HANDLE = GetCurrentProcess
-'
-'    dim buffer(1023) as ubyte
-'    dim sym as SYMBOL_INFO ptr = cast(SYMBOL_INFO ptr, @buffer(0))
-'
-'    sym->SizeOfStruct = sizeof(SYMBOL_INFO)
-'    sym->MaxNameLen = 255
-'
-'    If SymFromName(hProc, pszName, sym) = 0 Then
-'        Print "SymFromName failed: "; *pszName; " err="; GetLastError
-'        return 0
-'    end if
-'
-'    Print "[+] "; *pszName; " = "; Hex(sym->ADDRESS)
-'    Return sym->ADDRESS
-'End Function
-
 Sub CopyDataToClipboard(ByVal strData As String)
     Dim hMemory As HGLOBAL
     Dim pMemory As LPVOID
@@ -316,4 +210,138 @@ Sub CopyDataToClipboard(ByVal strData As String)
     Else
         Print "[CopyDataToClipboard]OpenClipboard:" & WinErrorMsg(GetLastError) & GetLastError
     End If
+End Sub
+
+' 复制文件到剪贴板（等同于资源管理器复制文件）
+Sub CopyFileToClipboard(sFilePath As StringW)
+#define CF_PREFERREDDROPHEFFECT &H0105
+    Dim hDrop As HGLOBAL
+    Dim pDrop As DROPFILES Ptr
+    Dim pData As LPVOID
+    Dim bufSize As DWORD
+    
+    ' 打开剪贴板
+    If OpenClipboard(GetForegroundWindow) = 0 Then
+        Print "[CopyFileToClipboard]OpenClipboard 失败"
+        Exit Sub
+    End If
+    EmptyClipboard
+
+    ' ===================== 修复1：使用 UNICODE 宽字符（系统原生格式） =====================
+    ' 路径必须以 双宽字符结束符 结尾
+    Dim cbData As DWORD = LenW(sFilePath) * 2 + 2
+    bufSize = SizeOf(DROPFILES) + cbData
+
+    ' 分配内存
+    hDrop = GlobalAlloc(GMEM_MOVEABLE Or GMEM_ZEROINIT, bufSize)
+    If hDrop = NULL Then
+        CloseClipboard
+        Print "[CopyFileToClipboard]GlobalAlloc 失败"
+        Exit Sub
+    End If
+
+    pDrop = GlobalLock(hDrop)
+    If pDrop = NULL Then
+        GlobalFree hDrop
+        CloseClipboard
+        Print "[CopyFileToClipboard]GlobalLock 失败"
+        Exit Sub
+    End If
+
+    ' 填充 DROPFILES（UNICODE 模式）
+    pDrop->pFiles = SizeOf(DROPFILES)
+    pDrop->fWide = 1  ' 关键：切换为 Unicode，兼容现代系统
+
+    ' 复制宽字符路径
+    pData = Cast(LPVOID, pDrop) + SizeOf(DROPFILES)
+    memcpy pData, StrPtrW(sFilePath), LenW(sFilePath) * 2
+
+    GlobalUnlock hDrop
+    SetClipboardData 15, hDrop  ' CF_HDROP = 15
+
+    ' ===================== 修复2：添加系统必需的「复制操作标记」（核心！） =====================
+    ' CF_PREFERREDDROPHEFFECT = 0x0105，DROPEFFECT_COPY = 1
+    /'Dim hEffect As HGLOBAL = GlobalAlloc(GMEM_MOVEABLE Or GMEM_ZEROINIT, 4)
+    If hEffect Then
+        Dim pEffect As Long Ptr = GlobalLock(hEffect)
+        *pEffect = 1 ' 声明：这是【复制操作】
+        GlobalUnlock hEffect
+        SetClipboardData CF_PREFERREDDROPHEFFECT, hEffect ' 写入拖放效果格式
+    End If'/
+    ' ========================================================================================
+
+    CloseClipboard
+End Sub
+
+Sub CopyFileToClipboardFull(sFilePath As StringW)
+    Dim pidlFile As Any Ptr
+    Dim pidlFolder As Any Ptr
+    Dim apidl(0) As Any Ptr
+    Dim pDataObject As LPDATAOBJECT
+    Dim IID_IDataObject As GUID = Type <GUID>(&H0000010E, &H0000, &H0000, {&HC0, &H00, &H00, &H00, &H00, &H00, &H00, &H46})
+    Dim parentPath As StringW
+    Dim hr As Long
+
+    ' 初始化 COM
+    hr = OleInitialize(NULL)
+    If hr <> 0 And hr <> &H1 Then ' S_OK 或 S_FALSE
+        Print "CoInitialize FAILED: "; hr
+        Exit Sub
+    End If
+
+    ' 获取文件完整 PIDL
+    pidlFile = ILCreateFromPathW(StrPtrW(sFilePath))
+    If pidlFile = NULL Then
+        Print "ILCreateFromPathW FAILED, "; GetLastError()
+        CoUninitialize
+        Exit Sub
+    End If
+
+    ' 获取父目录路径
+    parentPath = LeftW(sFilePath, InStrRevW(sFilePath, "\") - 1)
+    pidlFolder = ILCreateFromPathW(StrPtrW(parentPath))
+    If pidlFolder = NULL Then
+        Print "ILCreateFromPathW parent FAILED, "; GetLastError()
+        ILFree pidlFile
+        CoUninitialize
+        Exit Sub
+    End If
+
+    ' 获取子 PIDL（文件名相对父目录）
+    apidl(0) = ILFindLastID(pidlFile)
+    If apidl(0) = NULL Then
+        Print "ILFindLastID FAILED"
+        ILFree pidlFile
+        ILFree pidlFolder
+        CoUninitialize
+        Exit Sub
+    End If
+
+    ' 创建 IDataObject
+    hr = SHCreateDataObject(pidlFolder, 1, Varptr(apidl(0)), NULL, @IID_IDataObject, pDataObject)
+    If hr <> 0 Or pDataObject = NULL Then
+        Print "SHCreateDataObject FAILED, "; hr
+        ILFree pidlFile
+        ILFree pidlFolder
+        CoUninitialize
+        Exit Sub
+    End If
+
+    ' 设置到剪贴板
+    hr = OleSetClipboard(pDataObject)
+    If hr <> 0 Then
+        Print "OleSetClipboard FAILED, "; hr
+    End If
+
+    ' 释放 PIDL
+    ILFree pidlFile
+    ILFree pidlFolder
+
+    ' 释放 IDataObject（剪贴板拥有引用）
+    If pDataObject <> NULL Then
+        'ReleaseCOMObject(pDataObject)
+    End If
+
+    ' 解除 COM
+    OleUninitialize
 End Sub

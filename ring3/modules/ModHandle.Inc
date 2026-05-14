@@ -541,19 +541,7 @@ End Function
 Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
     Dim st As NTSTATUS
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value =True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
     
     InitListViewData ListView
@@ -605,7 +593,7 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
         "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
         j += 1
         ContinueDo : 
-        FF_DoEvents
+        'FF_DoEvents
     Next
     CommitListViewView ListView
 End Sub
@@ -666,6 +654,9 @@ Private Function GetThreadIdOfThreadHandle(ByVal dwProcessId As DWORD, ByVal dwH
 End Function
 
 Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
+    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+    End If
     Dim st As NTSTATUS
     
     InitListViewData lvwHandle

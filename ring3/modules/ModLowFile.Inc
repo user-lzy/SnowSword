@@ -1,4 +1,10 @@
-﻿Type NTFS_BOOT_SECTOR Field = 1
+﻿Type VOLUME_SECTOR_IO
+    VolumeName As Wstring * 8          ' DOS 卷名，例如 L"C:"，必须以 null 结尾
+    ByteOffset As LARGE_INTEGER     ' 卷内字节偏移（扇区对齐）
+    Length As ULong                ' 字节长度（扇区对齐）
+End Type
+
+Type NTFS_BOOT_SECTOR Field = 1
     jump(0 To 2)       As UByte
     oemID(0 To 7)      As UByte
     BytesPerSector     As Short
@@ -211,7 +217,9 @@ Type WIN32_FILE_DATAEX2W
     logicalClusterNumber As ULONGLONG ' 逻辑簇号（LCN）
     LinkCount As DWORD ' 链接数
     bDeleted As Boolean ' 是否被删除
-    bStreamFile As Boolean ' 是否为ADS流文件(如$Repair:$Verify)
+    'bStreamFile As Boolean ' 是否为ADS流文件(如$Repair:$Verify)
+    bHasAlternateStream As Boolean ' 新字段：是否包含附加数据流
+    bSuspicious As Boolean           ' 新增：存在多个数据流（含未命名流）
     bDirectory As Boolean
 End Type
 
@@ -219,7 +227,8 @@ End Type
 ' 内部上下文结构（原全局变量全部移入此处）
 '======================================================================
 Type NTFS_CONTEXT
-    ' 卷句柄与基础参数（原全局 hVol, bytesPerSector 等）
+    ' 卷句柄与基础参数
+    VolName As Wstring * 8
     hVol As HANDLE
     bytesPerSector As ULong
     sectorsPerCluster As ULong
@@ -285,18 +294,120 @@ Dim Shared g_Initialized As Boolean = False
 ' 底层 IO 函数（新增 ctx 参数）
 '======================================================================
 Private Function ReadAtOffset(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
-    Dim li As LARGE_INTEGER
-    li.QuadPart = offset
-    If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
-        ctx->lastError = GetLastError()
-        Return False
+    ' 驱动模式下也无需关心扇区对齐
+    /'If IsDriverLoaded Then
+        Dim SectorIo As VOLUME_SECTOR_IO
+
+        SectorIo.VolumeName = ctx->VolName
+        SectorIo.ByteOffset.QuadPart = offset
+        SectorIo.Length = size
+
+        SetLastError 0
+        If IoControl(hDrv, IOCTL_ReadDiskSector, @SectorIo, SizeOf(SectorIo), buf, size) = 0 Then
+            MyLog.PrintWin32Error "ReadAtOffset", "IOCTL_ReadDiskSector", _
+                "vol=" & SectorIo.VolumeName & " offset=" & SectorIo.ByteOffset.QuadPart & " Length=" & SectorIo.Length
+            Return False
+        End If
+        Return True
+    Else'/
+        ' 普通文件系统路径
+        Dim li As LARGE_INTEGER
+        li.QuadPart = offset
+        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Dim bytesRead As DWORD
+        If ReadFile(ctx->hVol, buf, size, @bytesRead, NULL) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Return (bytesRead = size)
+    'End If
+End Function
+
+Private Function WriteAtOffset(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
+    If IsDriverLoaded Then
+        ' 写入数据必须扇区对齐且长度为扇区倍数
+        If (offset Mod ctx->bytesPerSector) <> 0 Or (size Mod ctx->bytesPerSector) <> 0 Then
+            MyLog.PrintLog LOG_ERROR, "WriteAtOffset",  "offset or size not sector-aligned"
+            ctx->lastError = ERROR_INVALID_PARAMETER
+            Return False
+        End If
+
+        Dim SectorIo As VOLUME_SECTOR_IO
+        SectorIo.VolumeName = ctx->VolName
+        SectorIo.ByteOffset.QuadPart = offset
+        SectorIo.Length = size
+
+        SetLastError 0
+        If IoControl(hDrv, IOCTL_WriteDiskSector, @SectorIo, SizeOf(SectorIo), buf, size) = 0 Then
+            MyLog.PrintWin32Error "WriteAtOffset", "IOCTL_WriteDiskSector", _
+                "vol=" & SectorIo.VolumeName & " offset=" & SectorIo.ByteOffset.QuadPart & " Length=" & SectorIo.Length
+            Return False
+        End If
+        Return True
+    Else
+        Dim li As LARGE_INTEGER
+        li.QuadPart = offset
+        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Dim bytesWritten As DWORD
+        If WriteFile(ctx->hVol, buf, size, @bytesWritten, NULL) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Return (bytesWritten = size)
     End If
-    Dim bytesRead As DWORD
-    If ReadFile(ctx->hVol, buf, size, @bytesRead, NULL) = 0 Then
-        ctx->lastError = GetLastError()
-        Return False
+End Function
+
+Private Function WriteAtOffset_Advanced(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
+    If IsDriverLoaded Then
+        ' 计算需要操作的扇区
+        Dim firstSectorOffset As ULongLong = (offset \ ctx->bytesPerSector) * ctx->bytesPerSector
+        Dim lastByteOffset As ULongLong = offset + size - 1
+        Dim lastSectorOffset As ULongLong = (lastByteOffset \ ctx->bytesPerSector) * ctx->bytesPerSector
+        Dim alignedSize As ULongLong = lastSectorOffset - firstSectorOffset + ctx->bytesPerSector
+
+        If firstSectorOffset = offset And alignedSize = size Then
+            ' 完美对齐，直接写
+            Return WriteAtOffset(ctx, offset, buf, size)
+        End If
+
+        ' 分配临时缓冲区存放完整的扇区数据
+        Dim tempBuf As Any Ptr = Allocate(alignedSize)
+        If tempBuf = NULL Then Return False
+
+        ' 先读取原始数据
+        If Not ReadAtOffset(ctx, firstSectorOffset, tempBuf, alignedSize) Then
+            Deallocate tempBuf
+            Return False
+        End If
+
+        ' 修改需要改写的部分
+        Dim startOffsetInBuf As ULong = CUInt(offset - firstSectorOffset)
+        memcpy (CPtr(PUCHAR, tempBuf) + startOffsetInBuf), buf, size
+
+        ' 写入整个扇区
+        Dim result As Boolean = WriteAtOffset(ctx, firstSectorOffset, tempBuf, alignedSize)
+        Deallocate tempBuf
+        Return result
+    Else
+        Dim li As LARGE_INTEGER
+        li.QuadPart = offset
+        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Dim bytesWritten As DWORD
+        If WriteFile(ctx->hVol, buf, size, @bytesWritten, NULL) = 0 Then
+            ctx->lastError = GetLastError()
+            Return False
+        End If
+        Return (bytesWritten = size)
     End If
-    Return (bytesRead = size)
 End Function
 
 Private Function ReadClusters(ctx As NTFS_CONTEXT Ptr, ByVal startCluster As ULongLong, ByVal numClusters As ULong, ByVal buf As Any Ptr) As Boolean
@@ -309,6 +420,18 @@ Private Function ReadClusters(ctx As NTFS_CONTEXT Ptr, ByVal startCluster As ULo
     Dim offsetBytes As ULongLong = startCluster * ctx->clusterSize
     Dim bytesToRead As ULong = numClusters * ctx->clusterSize
     Return ReadAtOffset(ctx, offsetBytes, buf, bytesToRead)
+End Function
+
+Private Function WriteClusters(ctx As NTFS_CONTEXT Ptr, ByVal startCluster As ULongLong, ByVal numClusters As ULong, ByVal buf As Any Ptr) As Boolean
+    If startCluster = 0 Then
+        memset(buf, 0, numClusters * ctx->clusterSize)
+        Return False
+    End If
+    If numClusters = 0 Then Return False
+    
+    Dim offsetBytes As ULongLong = startCluster * ctx->clusterSize
+    Dim bytesToWrite As ULong = numClusters * ctx->clusterSize
+    Return WriteAtOffset(ctx, offsetBytes, buf, bytesToWrite)
 End Function
 
 '======================================================================
@@ -468,6 +591,9 @@ Private Function OpenVolumeInternal(ctx As NTFS_CONTEXT Ptr, strDrive As String)
                       NULL, OPEN_EXISTING, 0, NULL)
     
     If ctx->hVol = INVALID_HANDLE_VALUE Then Return False
+    Print "strDrive:" & strDrive
+    ctx->VolName = strDrive
+    Print "ctx->VolName:" & ctx->VolName
     
     Dim bootBuf(0 To 511) As UByte
     If Not ReadAtOffset(ctx, 0, @bootBuf(0), 512) Then Goto Cleanup
@@ -1079,8 +1205,11 @@ Private Sub FillFileInfo(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLong, 
     
     fileInfo.LinkCount = mrh->linkCount
     fileInfo.logicalClusterNumber = mrh->lsn
+    fileInfo.bHasAlternateStream = False
     
     Dim attrOff As ULong = mrh->attrOffset
+    
+    Dim dataStreamCount As Long = 0      ' 统计 $DATA 属性个数
     
     Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
         Dim g As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
@@ -1098,14 +1227,12 @@ Private Sub FillFileInfo(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLong, 
             ConvertToFileTime standardInfo->lastWriteTime, fileInfo.ftLastWriteTime
             
         Case ATTR_TYPE_DATA
+            dataStreamCount += 1
             Dim streamName As String = GetAttributeName(g)
             If streamName <> "" Then
-                fileInfo.bStreamFile = True
-                fileInfo.cFileName = streamName
-            Else
-                fileInfo.bStreamFile = False
+                fileInfo.bHasAlternateStream = True
             End If
-            
+            'Print "streamName:" & streamName & " dataStreamCount:" & dataStreamCount
             If g->nonResident Then
                 Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, g)
                 fileInfo.dwFileSizeLow = nr->dataSize And &HFFFFFFFF
@@ -1118,6 +1245,7 @@ Private Sub FillFileInfo(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLong, 
         End Select
         attrOff += g->totalLen
     Loop
+    fileInfo.bSuspicious = (dataStreamCount >= 2)   ' 只要多一个流就标记可疑
 End Sub
 
 Private Function IsDirectory(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLong) As Boolean
@@ -1129,39 +1257,6 @@ Private Function IsDirectory(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLo
     If mrh->magic <> NTFS_MFT_RECORD_MAGIC Then Return False
     Return (mrh->dwFlags And &H2) <> 0
 End Function
-
-'======================================================================
-' 卷生命周期管理（内部使用）
-'======================================================================
-Private Function OpenVolume(ctx As NTFS_CONTEXT Ptr, strDrive As String) As Boolean
-    ctx->hVol = CreateFile("\\.\" & strDrive, GENERIC_READ Or GENERIC_WRITE, _
-                      FILE_SHARE_READ Or FILE_SHARE_WRITE, _
-                      NULL, OPEN_EXISTING, 0, NULL)
-    
-    If ctx->hVol = INVALID_HANDLE_VALUE Then Return False
-    
-    Dim bootBuf(0 To 511) As UByte
-    If Not ReadAtOffset(ctx, 0, @bootBuf(0), 512) Then Goto Cleanup
-    If Not ParseBoot(ctx, @bootBuf(0)) Then Goto Cleanup
-    If Not ParseMFTDataAttribute(ctx) Then Goto Cleanup
-    
-    Return True
-    
-Cleanup:
-    CloseHandle(ctx->hVol)
-    ctx->hVol = INVALID_HANDLE_VALUE
-    Return False
-End Function
-
-Private Sub CloseVolume(ctx As NTFS_CONTEXT Ptr)
-    If ctx->hVol <> INVALID_HANDLE_VALUE And ctx->hVol <> NULL Then
-        CloseHandle(ctx->hVol)
-        ctx->hVol = INVALID_HANDLE_VALUE
-    End If
-    Erase ctx->mftFragments
-    Erase ctx->dirCache
-    Erase ctx->pathCache
-End Sub
 
 '======================================================================
 ' 对外接口 Internal 实现（供包装层调用）
@@ -1268,6 +1363,7 @@ ProcessResults:
                                 fileInfo(j).bDirectory = (FileMftHeader->dwFlags And &H2)
                             End If
                             FillFileInfo ctx, fileInfo(j).mftRecordNumber, fileInfo(j)
+                            'Print "fileInfo.bSuspicious:" & fileInfo(j).bSuspicious
                             fileInfoList(fileCount) = fileInfo(j)
                             fileCount += 1
                         End If
@@ -1302,17 +1398,17 @@ Private Function GetMFTRecordByPath(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
     ' 拆分路径为目录和文件名（如C:\Test.txt → 目录=C:\，文件名=Test.txt）
     dirPath = Left(lpFilePath, InStrRev(lpFilePath, "\") - 1)
     fileName = Mid(lpFilePath, InStrRev(lpFilePath, "\") + 1)
-    Print "dirPath:" & dirPath
+    'Print "dirPath:" & dirPath
     ' 调用你现有GetDirList遍历目录，获取文件列表
     listCount = GetDirList_Internal(ctx, dirPath, fileInfoList()) ' 假设GetDirList返回文件数量，并填充fileInfoList
     If listCount <= 0 Then Return 0
     
-    Print "fileName:" & fileName
+    'Print "fileName:" & fileName
     
     ' 遍历文件列表，匹配文件名
     For i As Long = 0 To listCount - 1
         'Print fileInfoList(i).cFileName
-        Print "fileInfoList(i).cFileName:" & fileInfoList(i).cFileName
+        'Print "fileInfoList(i).cFileName:" & fileInfoList(i).cFileName
         If LCase(fileInfoList(i).cFileName) = LCase(fileName) Then
             outMftNum = fileInfoList(i).mftRecordNumber
             'CloseHandle hVol
@@ -1336,11 +1432,11 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Print "错误：路径不存在或无法解析MFT记录 → " & lpFilePath
         Return False
     End If
-    Print ">>> [调试] 卷基础参数:"
+    /'Print ">>> [调试] 卷基础参数:"
     Print "      ClusterSize: " & ctx->clusterSize
     Print "      MFT Start LCN: " & ctx->mftStartLCN
     Print "      MFT Record Size: " & ctx->mftRecordSize
-    Print "成功解析路径，对应MFT记录号：" & targetMftRecordNum
+    Print "成功解析路径，对应MFT记录号：" & targetMftRecordNum'/
     
     ' ========== 步骤2：读取MFT记录（带USA修复） ==========
     'If Not ParseVolume(parts(0)) Then Return -1
@@ -1359,10 +1455,10 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Return False
     End If
     
-    Print "      Magic: " & Hex(mrh->magic, 8) & " (期望: 454C4946)"
+    /'Print "      Magic: " & Hex(mrh->magic, 8) & " (期望: 454C4946)"
     Print "      Flags: " & Hex(mrh->dwFlags, 4) & " (Bit0=InUse, Bit1=IsDir)"
     Print "      AttrOffset: " & mrh->attrOffset
-    Print "      BytesInUse: " & mrh->bytesInUse
+    Print "      BytesInUse: " & mrh->bytesInUse'/
     
     ' ========== 步骤3：解析DATA属性（类型0x80） ==========
     Dim dataAttr As ATTR_HEADER_NONRESIDENT Ptr = NULL
@@ -1377,22 +1473,22 @@ FindDataAttr:
     
     ' 遍历MFT记录的所有属性，找到DATA属性
     Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
-        Print ">>> [调试] 检查属性偏移: " & attrOff
+        'Print ">>> [调试] 检查属性偏移: " & attrOff
         gAttr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
-        Print "      TypeID: " & Hex(gAttr->typeID, 8) & " (80=DATA, 30=FILENAME)"
+        /'Print "      TypeID: " & Hex(gAttr->typeID, 8) & " (80=DATA, 30=FILENAME)"
         Print "      TotalLen: " & gAttr->totalLen
-        Print "      NonResident: " & gAttr->nonResident
+        Print "      NonResident: " & gAttr->nonResident'/
         
         ' 终止条件：属性类型ID为0xFFFFFFFF
         If gAttr->typeID = &HFFFFFFFF Then Exit Do
         
         ' 找到DATA属性（类型0x80）
         If gAttr->typeID = &H80 Then
-            Print ">>> [√] 找到 DATA 属性 (在" & IIf(isExternalRecord, "外部", "当前") & "记录中)"
+            'Print ">>> [√] 找到 DATA 属性 (在" & IIf(isExternalRecord, "外部", "当前") & "记录中)"
             ' 直接移交控制权给下方的现有处理逻辑
             Goto ProcessFoundDataAttr
         ElseIf gAttr->typeID = ATTR_TYPE_ATTRIBUTE_LIST AndAlso Not isExternalRecord Then
-            Print ">>> [调试] 发现 Attribute List，开始搜索外部 DATA..."
+            'Print ">>> [调试] 发现 Attribute List，开始搜索外部 DATA..."
             
             ' 1. 解析 Attribute List 的数据内容
             Dim listDataPtr As UByte Ptr
@@ -1439,7 +1535,7 @@ FindDataAttr:
                 ' 检查：这个条目是不是 DATA 属性 (0x80)？
                 If entry->typeID = ATTR_TYPE_DATA Then
                     Dim extMftRecNo As ULongLong = entry->mftRef And &HFFFFFFFFFFFFULL
-                    Print ">>> [调试] 找到外部 DATA，位于 MFT 记录: " & extMftRecNo
+                    'Print ">>> [调试] 找到外部 DATA，位于 MFT 记录: " & extMftRecNo
                     
                     ' 3. 读取外部 MFT 记录
                     ReDim targetMftBuf(0 To ctx->mftRecordSize - 1)
@@ -1475,12 +1571,12 @@ ProcessFoundDataAttr :
     Dim dataSize As ULong = 0
    If gAttr->nonResident = 1 Then
         Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
-        Print ">>> [调试] 非常驻 DATA 属性详情:"
+        /'Print ">>> [调试] 非常驻 DATA 属性详情:"
         Print "      LowVCN: " & nr->lowVCN
         Print "      HighVCN: " & nr->highVCN
         Print "      DataSize: " & nr->dataSize
         Print "      AllocSize: " & nr->allocSize
-        Print "      RunOff: " & nr->runOff
+        Print "      RunOff: " & nr->runOff'/
         dataSize = nr->dataSize
         Dim allocatedSize As ULongLong = nr->allocSize ' 已分配大小
         
@@ -1515,7 +1611,7 @@ ProcessFoundDataAttr :
             Goto ContinueDo
         End If
         
-        Print "    开始解析RunList..."
+        'Print "    开始解析RunList..."
         Dim runIndex As Integer = 0
         Dim baseVCN As ULongLong = nr->lowVCN  ' 新增：保存该属性的起始 VCN
 
@@ -1525,7 +1621,7 @@ ProcessFoundDataAttr :
             
             If runPtr = NULL Then Exit While
             
-            Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
+            'Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
             
             If runLen = 0 Or runLen > 1000000 Then
                 Print "    [!] 无效的run长度: " & runLen
@@ -1684,4 +1780,212 @@ Function MyCopyFile(lpSourceFile As StringW, lpTargetFile As StringW) As Boolean
     If ctx = NULL Then Return False
     Return MyCopyFile_Internal(ctx, lpSourceFile, lpTargetFile)
 End Function
+
+'======================================================================
+' 内部辅助：从单条 MFT 记录中收集所有 $DATA 流
+' 参数：
+'   ctx          - 卷上下文
+'   recBuf       - 已修复的 MFT 记录缓冲区
+'   streamNames()- 输出流名数组
+'   streamSizes()- 输出流大小数组
+'   streamCount  - 输入/输出：当前已收集的流个数
+' 返回值：成功返回 True，否则 False
+'======================================================================
+Private Function CollectDataStreamsFromRecord(ctx As NTFS_CONTEXT Ptr, _
+                                              recBuf() As UByte, _
+                                              streamNames() As String, _
+                                              streamSizes() As ULongLong, _
+                                              ByRef streamCount As Long) As Boolean
+    Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, @recBuf(0))
+    If mrh->magic <> NTFS_MFT_RECORD_MAGIC Then Return False
+
+    Dim attrOff As ULong = mrh->attrOffset
+    Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
+        Dim g As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
+
+        If g->typeID = &HFFFFFFFF Then Exit Do
+        If g->totalLen = 0 Then Exit Do
+        If attrOff + g->totalLen > ctx->mftRecordSize Then Exit Do
+
+        If g->typeID = ATTR_TYPE_DATA Then
+            ' 获取流名（未命名流返回空字符串）
+            Dim curName As String = GetAttributeName(g)
+            Dim curSize As ULongLong = 0
+
+            If g->nonResident Then
+                Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, g)
+                curSize = nr->dataSize
+            Else
+                Dim res As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, g)
+                curSize = res->dataLen
+            End If
+
+            ' 扩展输出数组并存储
+            ReDim Preserve streamNames(0 To streamCount)
+            ReDim Preserve streamSizes(0 To streamCount)
+            streamNames(streamCount) = curName
+            streamSizes(streamCount) = curSize
+            streamCount += 1
+        End If
+
+        attrOff += g->totalLen
+    Loop
+
+    Return True
+End Function
+
+'======================================================================
+' 对外接口：枚举指定文件的所有数据流（未命名 + 命名流）
+' 参数：
+'   lpFilePath    - 完整文件路径，如 "C:\test.txt"
+'   streamNames() - 输出：流名称数组，未命名流为 ""，命名流如 "Zone.Identifier"
+'   streamSizes() - 输出：对应流的数据大小（字节）
+' 返回值：
+'   >0   - 流的总个数（至少为1，即未命名流）
+'   -1   - 失败（路径无效、读取错误等）
+'======================================================================
+Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath As String) As Long
+    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpFilePath)
+    If ctx = NULL Then Return -1
+
+    ' 步骤1：根据路径获取文件 MFT 记录号
+    Dim targetRecNo As ULongLong
+    If GetMFTRecordByPath(ctx, lpFilePath, targetRecNo) = 0 Then
+        Return -1
+    End If
+
+    ' 步骤2：读取主 MFT 记录
+    Dim recBuf() As UByte
+    ReDim recBuf(0 To ctx->mftRecordSize - 1)
+    If Not ReadExternalMFTRecord(ctx, targetRecNo, @recBuf(0)) Then
+        Return -1
+    End If
+
+    Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, @recBuf(0))
+    If mrh->magic <> NTFS_MFT_RECORD_MAGIC Then Return -1
     
+    InitListViewData lvwFileStream
+    
+    ' 步骤3：收集当前记录中的 $DATA 流
+    Dim totalStreams As Long = 0
+    Dim streamNames() As String
+    Dim streamSizes() As ULongLong
+    ReDim streamNames(0 To 0)  ' 占位，将在 CollectDataStreamsFromRecord 中扩展
+    ReDim streamSizes(0 To 0)
+    If Not CollectDataStreamsFromRecord(ctx, recBuf(), streamNames(), streamSizes(), totalStreams) Then
+        CommitListViewView lvwFileStream
+        Return -1
+    End If
+
+    ' 步骤4：检查是否存在属性列表（$ATTRIBUTE_LIST），若有则处理外部记录
+    Dim hasAttrList As Boolean = False
+    Dim attrListAttr As ATTR_HEADER_GENERIC Ptr = NULL
+    Dim attrOff As ULong = mrh->attrOffset
+    Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
+        Dim g As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
+        If g->typeID = &HFFFFFFFF Then Exit Do
+        If g->typeID = ATTR_TYPE_ATTRIBUTE_LIST Then
+            hasAttrList = True
+            attrListAttr = g
+            Exit Do
+        End If
+        attrOff += g->totalLen
+    Loop
+
+    If hasAttrList And attrListAttr <> NULL Then
+        ' 解析属性列表数据
+        Dim listDataPtr As UByte Ptr
+        Dim listDataSize As ULong
+        Dim tempListBuf() As UByte
+
+        If attrListAttr->nonResident = 0 Then
+            Dim resAttr As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, attrListAttr)
+            listDataPtr = Cast(UByte Ptr, resAttr) + resAttr->dataOff
+            listDataSize = resAttr->dataLen
+        Else
+            ' 非常驻属性列表（较罕见，但仍做简单处理）
+            Dim nrAttr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, attrListAttr)
+            listDataSize = nrAttr->dataSize
+            If listDataSize = 0 Or listDataSize > 1024 * 1024 Then
+                ' 大小异常，放弃处理外部流，返回当前已收集的流个数
+                CommitListViewView lvwFileStream
+                Return totalStreams
+            End If
+            ReDim tempListBuf(0 To listDataSize - 1)
+            If Not ReadNonResidentAttributeData(ctx, nrAttr, @tempListBuf(0), listDataSize) Then
+                CommitListViewView lvwFileStream
+                Return totalStreams
+            End If
+            listDataPtr = @tempListBuf(0)
+        End If
+
+        ' 记录已处理过的 MFT 记录号，避免重复收集
+        Dim processedRecNos(Any) As ULongLong
+        ReDim processedRecNos(0 To 0)
+        Dim processedCount As Long = 0
+        processedRecNos(0) = targetRecNo
+        processedCount = 1
+
+        ' 遍历属性列表条目
+        Dim entry As ATTRIBUTE_LIST_ENTRY Ptr = Cast(ATTRIBUTE_LIST_ENTRY Ptr, listDataPtr)
+        Dim offset As ULong = 0
+
+        Do While offset + SizeOf(ATTRIBUTE_LIST_ENTRY) <= listDataSize
+            If entry->recordLen < SizeOf(ATTRIBUTE_LIST_ENTRY) Then Exit Do
+            If offset + entry->recordLen > listDataSize Then Exit Do
+
+            If entry->typeID = ATTR_TYPE_DATA Then
+                Dim extRecNo As ULongLong = entry->mftRef And &HFFFFFFFFFFFFULL
+
+                ' 跳过已经处理过的记录（包括当前记录）
+                Dim alreadyProcessed As Boolean = False
+                For i As Long = 0 To processedCount - 1
+                    If processedRecNos(i) = extRecNo Then
+                        alreadyProcessed = True
+                        Exit For
+                    End If
+                Next
+
+                If Not alreadyProcessed Then
+                    ' 读取并修复外部记录
+                    Dim extBuf() As UByte
+                    ReDim extBuf(0 To ctx->mftRecordSize - 1)
+                    If ReadExternalMFTRecord(ctx, extRecNo, @extBuf(0)) Then
+                        ' 收集该记录中的 $DATA 流
+                        If Not CollectDataStreamsFromRecord(ctx, extBuf(), streamNames(), streamSizes(), totalStreams) Then
+                            ' 收集失败，忽略此记录
+                        End If
+                        Print "streamSizes:" & streamSizes(0) & " streamSizes:" & streamSizes(0)
+                    End If
+
+                    ' 标记为已处理
+                    ReDim Preserve processedRecNos(0 To processedCount)
+                    processedRecNos(processedCount) = extRecNo
+                    processedCount += 1
+                End If
+            End If
+
+            offset += entry->recordLen
+            entry = Cast(ATTRIBUTE_LIST_ENTRY Ptr, listDataPtr + offset)
+        Loop
+    End If
+
+' ====================== 核心修改：参照GetWfpFilterList填充ListView ======================
+    ' 遍历所有流，填充列表（对齐WFP函数的写法）
+    For i As Long = 0 To totalStreams - 1
+        Dim sName As String = streamNames(i)
+        ' 无名主流显示为默认名称，有名ADS显示原名
+        If sName = "" Then sName = "(默认主数据流)"
+        
+        ' 格式化大小：千分位+字节单位
+        Dim sSize As String = Format(streamSizes(i), "#,##0") & " 字节"
+        
+        ' 完全参照GetWfpFilterList的AddItemColListEx调用格式
+        AddItemColListEx lvwFileStream, 2,,, WStr(sName), WStr(sSize)
+    Next
+' ======================================================================================
+
+    ' 返回最终收集到的流个数
+    CommitListViewView lvwFileStream
+    Return totalStreams
+End Function

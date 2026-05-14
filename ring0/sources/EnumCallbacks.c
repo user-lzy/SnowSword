@@ -913,7 +913,7 @@ EnumerateMiniFilterInstances(
 	PINSTANCE_DETAIL_INFO instanceArray = NULL;
 
 	PAGED_CODE();
-
+	
 	*Instances = NULL;
 	*InstanceCount = 0;
 

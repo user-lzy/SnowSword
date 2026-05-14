@@ -28,17 +28,11 @@ PDEVICE_OBJECT g_SymbolDevice = NULL;
 UNICODE_STRING g_SymbolDeviceName = RTL_CONSTANT_STRING(L"\\Device\\SnowSymbol");
 UNICODE_STRING g_SymbolDosName = RTL_CONSTANT_STRING(L"\\DosDevices\\SnowSymbol");
 
-//DRIVER_INITIALIZE DriverEntry;
-
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING RegistryPath);
 NTSTATUS DispatchRoutine(PDEVICE_OBJECT  pDeviceObject, PIRP pIrp);
 NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT  pDeviceObject, PIRP pIrp);
 VOID DriverUnload(PDRIVER_OBJECT pDriverObject);
 
-NTSTATUS status = STATUS_SUCCESS;
-HANDLE hEvent = NULL;
-PKEVENT pUserEvent = NULL;
-PKEVENT pKernelEvent = NULL;
 struct AdvancedOptions MyAdvancedOptions = { 0 };
 struct MemoryStruct stMemory = { 0 };
 PEPROCESS Notepad_EProcess = NULL;
@@ -48,6 +42,7 @@ extern PVOID HalPrivateDispatchTable;
 
 NTSTATUS CreateSymbolDevice(PDRIVER_OBJECT DriverObject)
 {
+    NTSTATUS status = STATUS_SUCCESS;
     status = IoCreateDevice(
         DriverObject,
         0,
@@ -107,43 +102,197 @@ NTSTATUS DispatchDeviceControl(
     }
 }
 
-/*
- * 示例：调用上述函数并打印所有实例信息
- * 参数 Filter 由外部传入（例如在 DriverEntry 或 IRP_MJ_CREATE 处理中获取）
- */
-VOID
-PrintAllInstanceInformation(_In_ PFLT_FILTER Filter)
+NTSTATUS GetVolumeDeviceObjectByPath(
+    IN PUNICODE_STRING FullPath,
+    OUT PDEVICE_OBJECT* RealNtfsDevice,    // 真正的 NTFS FDO（无过滤）
+    OUT PVOID* VolumeVpb,                  // 有效的 Vpb 指针
+    OUT PDEVICE_OBJECT* PhysicalVolDevice_Opt) // 可选，底层卷设备对象
 {
-    PINSTANCE_DETAIL_INFO instances = NULL;
-    ULONG count = 0;
+    NTSTATUS status;
+    UNICODE_STRING volLink = { 0 };
+    WCHAR volRoot[64] = L"\\??\\X:";
+    OBJECT_ATTRIBUTES objAttr;
+    HANDLE hLink = NULL;
+    UNICODE_STRING target = { 0 };
+    PDEVICE_OBJECT topDevice = NULL;
+    PFILE_OBJECT tempFileObj = NULL;
 
-    status = EnumerateMiniFilterInstances(Filter, &instances, &count);
+    // 参数检查
+    if (!RealNtfsDevice || !VolumeVpb || !FullPath || !FullPath->Buffer || FullPath->Length < 6 * sizeof(WCHAR))
+        return STATUS_INVALID_PARAMETER;
+    *RealNtfsDevice = NULL;
+    *VolumeVpb = NULL;
+    if (PhysicalVolDevice_Opt) *PhysicalVolDevice_Opt = NULL;
 
+    // 提取盘符，构造 "\??\C:"
+    volRoot[4] = FullPath->Buffer[4];
+    RtlInitUnicodeString(&volLink, volRoot);
+
+    // 1. 打开卷符号链接
+    InitializeObjectAttributes(&objAttr, &volLink, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    status = ZwOpenSymbolicLinkObject(&hLink, GENERIC_READ, &objAttr);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("EnumerateMiniFilterInstances failed: 0x%08x\n", status);
-        return;
+        DbgPrint("[!] ZwOpenSymbolicLinkObject failed: 0x%X\n", status);
+        return status;
     }
 
-    DbgPrint("Total instances: %u\n", count);
+    // 2. 查询符号链接目标，得到卷设备路径
+    target.MaximumLength = 128 * sizeof(WCHAR);
+    target.Buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, target.MaximumLength, 'tvol');
+    if (!target.Buffer) {
+        ZwClose(hLink);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(target.Buffer, target.MaximumLength);
 
-    for (ULONG i = 0; i < count; i++) {
-        PINSTANCE_DETAIL_INFO p = &instances[i];
-        DbgPrint("--- Instance %u ---\n", i);
-        DbgPrint("  实例标识 (ID)    : %u\n", p->InstanceId);
-        DbgPrint("  实例名称         : %ws\n", p->InstanceName);
-        DbgPrint("  挂载卷路径       : %ws\n", p->VolumePath);
-        DbgPrint("  实例状态 (Flags) : 0x%08x\n", p->InstanceFlags);
+    ULONG retLen = 0;
+    status = ZwQuerySymbolicLinkObject(hLink, &target, &retLen);
+    ZwClose(hLink);
+    if (!NT_SUCCESS(status)) {
+        ExFreePool(target.Buffer);
+        return status;
+    }
+    target.Length = (USHORT)retLen;
+    // 剔除可能的多余 null 终止符
+    if (retLen >= sizeof(WCHAR) && target.Buffer[retLen / sizeof(WCHAR) - 1] == L'\0')
+        target.Length -= sizeof(WCHAR);
+
+    DbgPrint("[*] Volume device path: %wZ\n", &target);
+
+    status = IoGetDeviceObjectPointer(&target, FILE_READ_ATTRIBUTES, &tempFileObj, &topDevice);
+    if (!NT_SUCCESS(status)) {
+        ExFreePool(target.Buffer);
+        return status;
+    }
+    ExFreePool(target.Buffer);
+    ObDereferenceObject(tempFileObj);  // 临时对象不需要
+
+    // ✅ 穿透设备栈，直到找到【Vpb 非空且 Vpb->DeviceObject 非空】的设备
+    PDEVICE_OBJECT current = topDevice;
+    while (current) {
+        if (current->Vpb && current->Vpb->DeviceObject) {
+            break;  // 找到了可用的 Vpb
+        }
+        current = IoGetLowerDeviceObject(current);
     }
 
-    if (instances != NULL) {
-        ExFreePoolWithTag(instances, 'tIsF');
+    if (!current) {
+        DbgPrint("[!] No device with valid Vpb->DeviceObject found\n");
+        ObDereferenceObject(topDevice);
+        return STATUS_UNSUCCESSFUL;
     }
+
+    *VolumeVpb = (PVOID)current->Vpb;
+    *RealNtfsDevice = current->Vpb->DeviceObject;
+
+    // 安全打印
+    PDRIVER_OBJECT driverObj = (*RealNtfsDevice)->DriverObject;
+    if (driverObj) {
+        DbgPrint("[+] Vpb: 0x%p, NTFS Device: 0x%p, Driver: %wZ\n",
+            *VolumeVpb, *RealNtfsDevice, &driverObj->DriverName);
+    }
+    else {
+        DbgPrint("[+] Vpb: 0x%p, NTFS Device: 0x%p (DriverObject NULL)\n",
+            *VolumeVpb, *RealNtfsDevice);
+    }
+
+    // 可选返回物理卷设备对象
+    if (PhysicalVolDevice_Opt) {
+        ObReferenceObject(current);
+        *PhysicalVolDevice_Opt = current;
+    }
+
+    ObDereferenceObject(topDevice);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
+{
+    NTSTATUS status;
+    UNICODE_STRING filePath;
+    PFILE_OBJECT fileObject = NULL;
+    PDEVICE_OBJECT physicalVol = NULL;
+    PDEVICE_OBJECT ntfsDevice = NULL;
+    PVOID vpb = NULL;
+    IO_STATUS_BLOCK ioStatus = { 0 };
+    PVOID buffer = NULL;
+    ULONG bytesToRead = 512;
+    LARGE_INTEGER byteOffset = { 0 };
+
+    // ✅ 关键：将传入的常量字符串拷贝到我们自己的可写非分页内存
+    USHORT pathLength = (USHORT)(wcslen(filePathWchar) * sizeof(WCHAR));
+    PWCHAR pathBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, pathLength + sizeof(WCHAR), 'Path');
+    if (!pathBuffer) return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(pathBuffer, filePathWchar, pathLength);
+    pathBuffer[pathLength / sizeof(WCHAR)] = L'\0';  // 可选的 NULL 终止
+    RtlInitUnicodeString(&filePath, filePathWchar);     // 这只是为了取得 Length，但我们需要用自己的 Buffer
+    // 重新初始化 filePath，使用我们的可写缓冲区
+    filePath.Buffer = pathBuffer;
+    filePath.Length = pathLength;
+    filePath.MaximumLength = pathLength + sizeof(WCHAR);
+
+    // 1. 获取 NTFS 设备 + Vpb
+    status = GetVolumeDeviceObjectByPath(&filePath, &ntfsDevice, &vpb, &physicalVol);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[Sample] GetVolumeDeviceObjectByPath failed: 0x%X\n", status);
+        goto Cleanup;
+    }
+
+    // 2. 打开文件（现在 filePath.Buffer 是可写的，NTFS 不会蓝屏）
+    status = IrpCreateFile_New(&fileObject, vpb, ntfsDevice, &filePath,
+        FILE_GENERIC_READ, FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING, NULL, 0);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[Sample] IrpCreateFile_New failed: 0x%X\n", status);
+        goto Cleanup;
+    }
+
+    // 3. 分配读缓冲区
+    buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bytesToRead, 'pdAr');
+    if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
+
+    // 4. 读取文件开头 512 字节
+    status = IrpReadFile(fileObject, &ioStatus, buffer, bytesToRead, &byteOffset);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[Sample] IrpReadFile failed: 0x%X\n", status);
+        goto Cleanup;
+    }
+
+    ULONG bytesRead = (ULONG)ioStatus.Information;
+    if (bytesRead == 0) {
+        DbgPrint("[Sample] File is empty.\n");
+        goto Cleanup;
+    }
+
+    // 5. 打印为 ASCII 可视字符串
+    {
+        PCHAR asciiStr = ExAllocatePool2(POOL_FLAG_NON_PAGED, bytesRead + 1, 'sApm');
+        if (!asciiStr) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
+
+        PUCHAR src = (PUCHAR)buffer;
+        for (ULONG i = 0; i < bytesRead; i++)
+            asciiStr[i] = (src[i] >= 0x20 && src[i] <= 0x7E) ? (CHAR)src[i] : '.';
+        asciiStr[bytesRead] = '\0';
+
+        DbgPrint("[Sample] File header (%lu bytes):\n%s\n", bytesRead, asciiStr);
+        ExFreePoolWithTag(asciiStr, 'sApm');
+    }
+
+Cleanup:
+    if (buffer) ExFreePoolWithTag(buffer, 'pdAr');
+    if (fileObject) IrpCloseFile_New(fileObject);
+    if (physicalVol) ObDereferenceObject(physicalVol);
+    // ✅ 释放我们自己分配的路径缓冲区
+    if (pathBuffer) ExFreePoolWithTag(pathBuffer, 'Path');
+    return status;
 }
 
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING RegistryPath) {
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
+    NTSTATUS status = STATUS_SUCCESS;
     PDEVICE_OBJECT pDeviceObject = NULL;
     UNICODE_STRING DeviceObjectName = { 0 };
     UNICODE_STRING DeviceLinkName = { 0 };
@@ -222,7 +371,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     //    }
     //    FreeNdisFilterArray(pFilterArray);
     //}
-    //PrintAllInstanceInformation((PFLT_FILTER)0xFFFFDD0D6A8ED9F0);
+	//SampleReadAndPrintAsciiHeader(L"\\??\\C:\\Users\\21607\\Desktop\\Shellcode32版本3.txt");
     return STATUS_SUCCESS;
 }
 
@@ -233,7 +382,7 @@ NTSTATUS DispatchRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     switch (irpStack->MajorFunction)
     {
     case IRP_MJ_CLOSE:
-        DbgPrint("Dispatch: 收到 IRP_MJ_CLOSE\n");
+        //DbgPrint("Dispatch: 收到 IRP_MJ_CLOSE\n");
         return DispatchClose_Symbol(DeviceObject, Irp);  // ⚠️ 直接 return
 
     default:
@@ -249,7 +398,7 @@ NTSTATUS DispatchRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
 NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 {
-    //NTSTATUS status = 0;
+    NTSTATUS status = STATUS_SUCCESS;
     ULONG_PTR Information = 0;
     PVOID pInputData = NULL;
     ULONG InputDataLength = 0;
@@ -262,10 +411,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     static CallbackInfo Callbacks[64] = { 0 };
     static ObCallbackInfo ObCallbacks[64] = {0};
     PWSTR ustrFileName = NULL;
-    //PVOID NotifyRoutine = NULL;
-
-    //DbgPrint("Enter the IoctlDispatchRoutine!");
-    //DbgPrint("Current PID:%Iu", (ULONG_PTR)PsGetCurrentProcessId());
 
     IoControlCode = IoStackLocation->Parameters.DeviceIoControl.IoControlCode;
     pInputData = pIrp->AssociatedIrp.SystemBuffer;
@@ -276,20 +421,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     switch (IoControlCode)
     {
     case IOCTL_KillProcess:
-        //// 内核调用示例：查询任意模块
-        //ULONG64 addr = 0;
-        //LONG offset = 0;
-        //WCHAR symName[256] = { 0 };
-        //// 1. 查询 win32kfull 符号
-        //KernelQuerySymbolAddress(L"C:\\Windows\\System32\\win32kfull.sys", L"PenHotkeyCallback", &addr);
-        //DbgPrint("PenHotkeyCallback address: 0x%llx\n", addr);
-        //// 2. 查询 ntoskrnl 结构体偏移
-        //KernelQueryStructOffset(L"C:\\Windows\\System32\\ntoskrnl.exe", L"_EPROCESS", L"ImageFileName", &offset);
-        //DbgPrint("_EPROCESS.ImageFileName offset: 0x%X\n", offset);
-        //// 3. 查询 ntfs.sys 地址→符号
-        //KernelQueryAddressToSymbol(L"C:\\Windows\\System32\\drivers\\ntfs.sys", 0xFFFFF80427531020, symName, 256);
-        //DbgPrint("Address 0xFFFFF80427531020 in ntfs.sys corresponds to symbol: %ws\n", symName);
-
         if (pInputData != NULL && InputDataLength > 0)
         {
             dwProcessId = *(PHANDLE)pInputData;
@@ -468,18 +599,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             SetThreadProtectionStatus(TRUE);
         }
         break;
-    case IOCTL_SetEvent:
-        hEvent = *(PHANDLE)pInputData;
-        status = ObReferenceObjectByHandle(hEvent, EVENT_MODIFY_STATE, *ExEventObjectType, KernelMode, (PVOID*)&pUserEvent, NULL);
-        ObDereferenceObject(pUserEvent);
-        break;
-    case IOCTL_GetEvent:
-        WCHAR wEventName[] = L"\\BaseNamedObjects\\KernelEvent";
-        UNICODE_STRING uEventName;
-
-        RtlInitUnicodeString(&uEventName, wEventName);
-        pKernelEvent = IoCreateNotificationEvent(&uEventName, &hEvent);
-        break;
 
     case IOCTL_EnumProcesses:
         if (pInputData != NULL && InputDataLength >= sizeof(PHANDLE)) {
@@ -508,7 +627,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 			}
         }
         break;
-
+        
     case IOCTL_DeleteFileByXCB:
 		ustrFileName = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
 		if (ustrFileName == NULL) {
@@ -1692,6 +1811,13 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             PDEVICE_OBJECT DeviceObject = *(PDEVICE_OBJECT*)pInputData;
             status = RemoveAttachedDevice(DeviceObject) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 		}
+        break;
+
+    case IOCTL_ReadDiskSector:
+        status = HandleVolumeSectorRead(pIrp, IoStackLocation);
+        break;
+    case IOCTL_WriteDiskSector:
+		status = HandleVolumeSectorWrite(pIrp, IoStackLocation);
         break;
 
     default: 

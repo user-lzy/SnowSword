@@ -2,9 +2,19 @@
 #include "Module.h"
 #include "ObjectInfo.h"
 #include "OtherFunctions.h"
+#include "Symbol.h"
 
 PVOID FindIopTimerQueueHead()
 {
+    ULONG64 addr = 0;
+    NTSTATUS status = GetNtSymbolAddress(L"IopTimerQueueHead", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: IopTimerQueueHead=%p\n", (PVOID)addr);
+        return (PVOID)addr;
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     UNICODE_STRING IoInitializeTimerName = RTL_CONSTANT_STRING(L"IoInitializeTimer");
     PVOID IoInitializeTimerAddr = MmGetSystemRoutineAddress(&IoInitializeTimerName);
     if (NULL == IoInitializeTimerAddr)
@@ -132,7 +142,24 @@ PVOID FindKeSetTimerEx()
 
 VOID FindKiWaitXXX(PVOID KeSetTimerEx, PVOID* KiWaitNever, PVOID* KiWaitAlways)
 {
+    ULONG64 addr = 0;
+    NTSTATUS status = GetNtSymbolAddress(L"KiWaitNever", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: KiWaitNever=%p\n", (PVOID)addr);
+        *KiWaitNever = (PVOID)addr;
 
+        status = GetNtSymbolAddress(L"KiWaitAlways", &addr);
+        if (status == STATUS_SUCCESS && addr)
+        {
+            DbgPrint("Symbol: KiWaitAlways=%p\n", (PVOID)addr);
+            *KiWaitAlways = (PVOID)addr;
+            return;
+        }
+
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
     // LyShark 开始定位特征
 
     if (NULL == KeSetTimerEx) return;

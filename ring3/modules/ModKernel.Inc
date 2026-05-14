@@ -565,19 +565,7 @@ End Function
 Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
     Dim GDTArray() As GDT_INFO
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
@@ -690,19 +678,7 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
     
     Dim IDTArray() As IDT_INFO
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
@@ -740,19 +716,7 @@ End Function
 Function GetSSDT(lvwSSDT As Class_ListView) As ULong
     Dim Count As DWORD = 0
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     
     InitListViewData lvwSSDT
@@ -781,19 +745,7 @@ End Function
 Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
     Dim Count As DWORD = 0, Index As DWORD = 0
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     
     InitListViewData lvwSSSDT
@@ -823,19 +775,7 @@ End Function
 Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
     Dim Count As DWORD = 0
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     
     InitListViewData lvwHalDistapch
@@ -879,19 +819,7 @@ End Function
 Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As ULong
     Dim Count As DWORD = 0
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Return 0
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
     End If
     
     InitListViewData lvwHalPrivateDistapch

@@ -244,3 +244,19 @@ Public Function UnloadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Bo
     Return (ret = 0)
 End Function
 
+Function InitDriver() As Boolean
+    If Not LoadDriver(App.Path & "SnowSword.sys", False) Then Return False
+    hDrv = OpenDrv("\\.\\SnowSword", True)
+    If (hDrv = INVALID_HANDLE_VALUE) Then Return False
+    If (Not OpenSymbolDevice) OrElse (hSymbolDrv = INVALID_HANDLE_VALUE) Then Return False
+    SymbolService_StartWorkers
+    IsDriverLoaded = True
+    Return True
+End Function
+
+Sub UninitDriver()
+    CloseDrv hDrv
+    SymbolService_StopWorkers
+    UnloadDriver App.Path & "SnowSword.sys", False
+    IsDriverLoaded = False
+End Sub

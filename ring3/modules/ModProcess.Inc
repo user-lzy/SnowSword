@@ -1481,19 +1481,7 @@ End Sub
 
 Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_ListView)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If (hDrv <> INVALID_HANDLE_VALUE) Then
-            AfxMsg "加载成功!"
-            FrmMain.Check6.Value = True
-            IsDriverLoaded = True
-        Else
-            AfxMsg "加载失败!"
-            Exit Sub
-        End If
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
 
     ' ############################## 核心修复2：变量定义 ##############################

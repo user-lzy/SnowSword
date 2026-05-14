@@ -23,6 +23,8 @@ Enum Interface
     WorkItemThread
     
     File
+    FileStream
+    
     Callbacks
     WfpCallout
     WfpFilter
@@ -73,7 +75,7 @@ Type CURRENT_INFORMATION
     ThreadId As DWORD
     CurrentModule As CurrentModuleInfo
     CurrentDriver As CurrentDriverInfo
-    'MemoryInfo As MemoryStruct
+    FilePath As Wstring * MAX_PATH
 End Type
 
 Type TempTextNode
@@ -378,6 +380,10 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "名称",, 250
                 .ADdColumn "类型",, 200
                 .AddColumn "大小",, 100
+            Case FileStream
+                .AddColumn "名称",, 300
+                .AddColumn "大小",, 100
+                
             Case UnlockTheFile
                 .AddColumn "进程名",, 200
                 .AddColumn "PID",, 100
@@ -513,33 +519,6 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
     End With
 End Sub
 
-'Sub Cache_AddRow(ByVal moduleType As Interface, ByVal row As LVRow Ptr)
-'    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
-'    If cache->pSnap = 0 Then Exit Sub
-'
-'    Dim snap As ListViewSnapshot Ptr = cache->pSnap
-'
-'    Dim idx As Long = snap->RowCount
-'    snap->RowCount += 1
-'    ReDim Preserve snap->Rows(idx)
-'
-'    ' 深拷贝一行（避免指针共享）
-'    Dim newRow As LVRow Ptr = Callocate(1, SizeOf(LVRow))
-'    newRow->ColCount = row->ColCount
-'    newRow->Fore = row->Fore
-'    newRow->Back = row->Back
-'    newRow->Cols = Callocate(newRow->ColCount, SizeOf(WString Ptr))
-'
-'    Dim i As Long
-'    For i = 0 To newRow->ColCount - 1
-'        If row->Cols[i] <> 0 Then
-'            newRow->Cols[i] = DupWStr(row->Cols[i])
-'        End If
-'    Next
-'
-'    snap->Rows(idx) = newRow
-'End Sub
-
 Private Function DupWStr(ByVal src As WCHAR Ptr) As WCHAR Ptr
     If src = 0 Then Return 0
 
@@ -558,6 +537,40 @@ Private Function DupFromStringW(ByRef s As StringW) As WCHAR Ptr
     memcpy(buf, src, (nLen + 1) * SizeOf(WCHAR))
     Return buf
 End Function
+
+Sub Cache_AddRow(ByVal moduleType As Interface, ByVal row As LVRow Ptr)
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache->pListSnap = 0 Then Exit Sub
+
+    Dim snap As ListViewSnapshot Ptr = cache->pListSnap
+
+    ' 新行下标
+    Dim idx As Long = snap->RowCount
+
+    snap->Rows = ReAllocate(snap->Rows, (idx + 1) * SizeOf(LVRow Ptr))
+
+    ' 扩容失败保护
+    If snap->Rows = 0 Then Exit Sub
+
+    ' 深拷贝新行（不变）
+    Dim newRow As LVRow Ptr = CAllocate(1, SizeOf(LVRow))
+    newRow->ColCount = row->ColCount
+    newRow->Fore = row->Fore
+    newRow->Back = row->Back
+    newRow->Cols = CAllocate(newRow->ColCount, SizeOf(Wstring Ptr))
+
+    Dim i As Long
+    For i = 0 To newRow->ColCount - 1
+        If row->Cols[i] <> 0 Then
+            newRow->Cols[i] = DupWStr(row->Cols[i])
+        End If
+    Next
+
+    snap->Rows[idx] = newRow
+
+    ' 行数+1
+    snap->RowCount += 1
+End Sub
 
 Private Sub FreeLVRow(row As LVRow Ptr)
     'Print "  [FreeLVRow] 开始释放行: " & Hex(row)
@@ -1059,7 +1072,7 @@ Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
     Dim colCount As Long = tls.GetColumnCount : If colCount <= 0 Then colCount = 1
     Dim pNewSnap As TreeListSnapshot Ptr = Callocate(1, SizeOf(TreeListSnapshot))
     pNewSnap->RowCount = totalCount
-    pNewSnap->Rows = Callocate(totalCount, SizeOf(TLRow Ptr))
+    pNewSnap->Rows = CAllocate(totalCount, SizeOf(TLRow Ptr))
     Dim hItemMap As MC_HTREELISTITEM Ptr = Callocate(totalCount, SizeOf(MC_HTREELISTITEM))
 
     ' 遍历保存数据（DFS + 深度计算）
@@ -1398,7 +1411,7 @@ Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
     Next i
 End Sub
 
-Sub InitListViewData(ListView As Class_ListView)
+/'Sub InitListViewData(ListView As Class_ListView)
     Dim oldCtx As ListViewContext Ptr = GetCtx(ListView)
     If oldCtx <> NULL Then
         oldCtx->IsValid = False
@@ -1428,6 +1441,74 @@ Sub InitListViewData(ListView As Class_ListView)
 
     SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
 
+    ListView.DeleteAllItems
+    ListView_SetUnicodeFormat(ListView.hWnd, True)
+    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
+End Sub '/
+
+Sub InitListViewData(ListView As Class_ListView)
+    Dim oldCtx As ListViewContext Ptr = GetCtx(ListView)
+    
+    ' ==============================================
+    ' 🔥 核心修复：不销毁旧上下文，复用保留配置
+    ' ==============================================
+    If oldCtx = NULL Then
+        ' 【首次初始化】：全新分配上下文
+        Dim ctx As ListViewContext Ptr = CAllocate(1, SizeOf(ListViewContext))
+        ctx->hLV = ListView.hWnd
+
+        Static g_InstanceId As ULong = 0
+        g_InstanceId += 1
+        ctx->InstanceId = g_InstanceId
+        ctx->IsValid = True
+
+        ' 初始化快照
+        ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
+        ctx->Snap->RowCount = 0
+        ctx->Snap->Rows = NULL
+
+        ' 初始化可见项
+        ReDim ctx->VisibleIndex(-1)
+        ctx->VisibleCount = 0
+
+        ' 初始化默认配置
+        ctx->Filter = NULL
+        ctx->SortedColumn = -1
+        ctx->SortAscending = True
+        ReDim ctx->ColumnIsNumber(-1)
+
+        ' 绑定上下文到窗口
+        SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
+    Else
+        ' 【非首次初始化】：复用旧上下文，仅重置数据，保留所有配置（Filter/排序/列类型）
+        oldCtx->IsValid = True ' 标记有效
+
+        ' ==============================================
+        ' 安全释放旧快照内存（避免内存泄漏）
+        ' ==============================================
+        If oldCtx->Snap <> NULL Then
+            ' 释放所有行数据
+            For i As Long = 0 To oldCtx->Snap->RowCount - 1
+                Dim row As LVRow Ptr = oldCtx->Snap->Rows[i]
+                If row <> NULL Then
+                    ' 释放列文本内存
+                    If row->Cols <> NULL Then Deallocate row->Cols
+                    Deallocate row
+                End If
+            Next
+            ' 释放行指针数组
+            If oldCtx->Snap->Rows <> NULL Then Deallocate oldCtx->Snap->Rows
+            ' 重置快照
+            oldCtx->Snap->RowCount = 0
+            oldCtx->Snap->Rows = NULL
+        End If
+
+        ' 重置可见项（保留筛选条件 Filter）
+        ReDim oldCtx->VisibleIndex(-1)
+        oldCtx->VisibleCount = 0
+    End If
+
+    ' 列表通用初始化（与配置无关）
     ListView.DeleteAllItems
     ListView_SetUnicodeFormat(ListView.hWnd, True)
     ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
@@ -1534,6 +1615,8 @@ Function AddItemColListEx CDecl ( _
     If ctx->Snap->Rows Then Deallocate ctx->Snap->Rows
     ctx->Snap->Rows = newRows
     ctx->Snap->Rows[idx] = row
+    
+    'Cache_AddRow CurrentInformation.intType, row ' 这里需要防止因为缓存未初始化导致崩溃的问题
 
     Return idx
 End Function

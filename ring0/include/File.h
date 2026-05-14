@@ -18,6 +18,13 @@ typedef struct _COPY_PATH {
 	BOOLEAN IsDirectory;
 } COPY_PATH, * PCOPY_PATH;
 
+// 输入结构体，必须扇区对齐
+typedef struct _VOLUME_SECTOR_IO {
+    WCHAR VolumeName[8];          // DOS 卷名，例如 L"C:"，必须以 null 结尾
+    LARGE_INTEGER ByteOffset;     // 卷内字节偏移（扇区对齐）
+    ULONG Length;                 // 字节长度（扇区对齐）
+} VOLUME_SECTOR_IO, * PVOLUME_SECTOR_IO;
+
 NTKERNELAPI
 NTSTATUS
 IoGetDeviceObjectPointer(
@@ -130,6 +137,19 @@ IrpCreateFile(
     IN ULONG  EaLength
 );
 
+NTSTATUS IrpCreateFile_New(
+    OUT PFILE_OBJECT* FileObject,
+    IN PVOID VolumeVpb,                 // 有效的 Vpb 指针
+    IN PDEVICE_OBJECT NtfsDevice,        // 真正的 NTFS FDO
+    IN PUNICODE_STRING FilePath,
+    IN ACCESS_MASK DesiredAccess,
+    IN ULONG FileAttributes,
+    IN ULONG ShareAccess,
+    IN ULONG CreateDisposition,
+    IN ULONG CreateOptions,
+    IN PVOID EaBuffer OPTIONAL,
+    IN ULONG EaLength);
+
 //
 // IrpClose
 //
@@ -150,9 +170,13 @@ IrpCreateFile(
 //
 
 NTSTATUS
-IrpClose(
+IrpCloseFile(
     IN PFILE_OBJECT  FileObject
 );
+
+NTSTATUS
+IrpCloseFile_New(
+    IN PFILE_OBJECT  FileObject);
 
 //
 // IrpQueryDirectoryFile
@@ -251,7 +275,7 @@ IrpQueryInformationFile(
 // This is equivalent to NtSetInformationFile.
 //
 
-/*NTSTATUS
+NTSTATUS
 IrpSetInformationFile(
     IN PFILE_OBJECT  FileObject,
     OUT PIO_STATUS_BLOCK  IoStatusBlock,
@@ -259,7 +283,7 @@ IrpSetInformationFile(
     IN ULONG  Length,
     IN FILE_INFORMATION_CLASS  FileInformationClass,
     IN BOOLEAN  ReplaceIfExists
-);*/
+);
 
 //
 // IrpReadFile
@@ -323,6 +347,16 @@ IrpWriteFile(
     IN PVOID  Buffer,
     IN ULONG  Length,
     IN PLARGE_INTEGER  ByteOffset  OPTIONAL
+);
+
+NTSTATUS HandleVolumeSectorRead(
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION Stack
+);
+
+NTSTATUS HandleVolumeSectorWrite(
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION Stack
 );
 
 NTSTATUS

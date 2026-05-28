@@ -372,6 +372,10 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     //    FreeNdisFilterArray(pFilterArray);
     //}
 	//SampleReadAndPrintAsciiHeader(L"\\??\\C:\\Users\\21607\\Desktop\\Shellcode32版本3.txt");
+    //PVOID pArray = NULL;
+    //ULONG Count = 0;
+    //NdisEnumMiniportsAlloc((PNDIS_MINIPORT_ENUM_ENTRY*)&pArray, &Count);
+    //DbgPrint("Count:%d", Count);
     return STATUS_SUCCESS;
 }
 
@@ -1592,6 +1596,71 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         status = STATUS_SUCCESS;
         break;
     }
+
+    case IOCTL_EnumNdisMiniport:
+    {
+        PNDIS_MINIPORT_ENUM_ENTRY pEntries = NULL;
+        ULONG entryCount = 0;
+        ULONG bytesNeeded = 0;
+
+        // 调用已有的便捷函数，自动分配内存并枚举
+        status = NdisEnumMiniportsAlloc(&pEntries, &entryCount);
+        if (!NT_SUCCESS(status))
+        {
+            // 如果内部失败（如锁获取失败、未找到模块等），直接返回错误码
+            // entryCount 此时可能无效，统一设 Information = 0
+            Information = 0;
+            break;
+        }
+
+        // 计算需要传输的字节数
+        bytesNeeded = entryCount * sizeof(NDIS_MINIPORT_ENUM_ENTRY);
+        DbgPrint("entryCount:%d", entryCount);
+
+        // 检查输出缓冲区是否足够
+        DbgPrint("OutputDataLength:%d", OutputDataLength);
+        if (OutputDataLength >= bytesNeeded)
+        {
+            // 缓冲区足够，拷贝数据
+            RtlCopyMemory(pOutputData, pEntries, bytesNeeded);
+            Information = bytesNeeded;
+            DbgPrint("缓冲区足够");
+            status = STATUS_SUCCESS;
+        }
+        else
+        {
+            // 缓冲区太小：告诉调用者所需的正确大小
+            Information = bytesNeeded;
+            DbgPrint("缓冲区不足");
+            status = STATUS_SUCCESS;
+        }
+
+        // 无论如何都要释放在 NdisEnumMiniportsAlloc 中分配的内存
+        if (pEntries)
+        {
+            ExFreePoolWithTag(pEntries, NDIS_ENUM_TAG);
+        }
+        break;
+    }
+
+  //  case IOCTL_EnumNdisMiniport:
+  //  {
+  //      // 第一次调用：获取数量
+		//ULONG needed = OutputDataLength / sizeof(NDIS_MINIPORT_ENUM_ENTRY);
+  //      ULONG actual = 0;
+		//DbgPrint("pOutputData=%p, OutputDataLength=%d, needed=%d\n", pOutputData, OutputDataLength, needed);
+  //      status = NdisEnumMiniports(pOutputData, sizeof(NDIS_MINIPORT_ENUM_ENTRY), needed, &needed, &actual);
+		//DbgPrint("needed=%d, actual=%d, status=0x%X", needed, actual, status);
+  //      if (status == STATUS_BUFFER_TOO_SMALL && needed == 0) {
+		//	DbgPrint("Buffer too small. Needed entries: %lu\n", needed);
+		//	Information = needed * sizeof(NDIS_MINIPORT_ENUM_ENTRY);
+  //          break;
+  //      }
+  //      
+		//Information = actual * sizeof(NDIS_MINIPORT_ENUM_ENTRY);
+		//DbgPrint("Enumerated %lu miniports, total size: %lu bytes\n", actual, Information);
+  //      break;
+  //  }
 
     // ====================== 消息钩子枚举 IOCTL ======================
     case IOCTL_EnumMsgHook:

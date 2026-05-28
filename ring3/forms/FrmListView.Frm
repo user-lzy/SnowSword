@@ -762,9 +762,19 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             GetWindowList CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 窗口列表"
         Case ProcessTimer
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetProcessTimerList CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 定时器列表"
         Case Handles
+            If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" ' : Exit Sub
+            End If
             GetHandleList CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 句柄列表"
             'Print "1"'下面的Print和SetListViewData在执行此次Case后均不会被执行
@@ -790,15 +800,46 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             GetCallStack CurrentPID, CurrentTID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & " TID:" & CurrentTID & "]" & " 调用栈"
         Case MsgHook
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetMsgHookList CurrentPID, ListView
+            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
         Case EventHook
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetEventHookList CurrentPID, ListView
+            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
         Case Hotkey
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetHotkeyList CurrentPID, ListView
+            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
         Case UnlockTheFile
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             Unlock_File ListView', FilePathByUnlock
             Me.Caption = "文件占用查看小工具"
         Case IOFunction
@@ -1276,7 +1317,14 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
     Select Case wID
         Case FrmListView_mnuMsgHook_mnuRefresh ' 刷新
-           lblNum.Caption = "正在刷新..."
+            lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
                 GetMsgHookList -1, ListView
             Else
@@ -1294,6 +1342,13 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
         Case FrmListView_mnuMsgHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
                 GetMsgHookList CurrentPID, ListView
                 SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, False
@@ -1324,6 +1379,13 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
     Select Case wID
         Case FrmListView_mnuEventHook_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
                 GetEventHookList -1, ListView
             Else
@@ -1341,6 +1403,13 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
         Case FrmListView_mnuEventHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
                 GetEventHookList CurrentPID, ListView
@@ -1371,6 +1440,13 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
     Select Case wID
         Case FrmListView_mnuHotkey_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
                 GetHotkeyList -1, ListView
             Else
@@ -1389,6 +1465,13 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
             End If
         Case FrmListView_mnuHotkey_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
                 GetHotkeyList CurrentPID, ListView
@@ -1418,6 +1501,13 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
     Select Case wID
         Case FrmListView_mnuProcessTimer_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
                 GetProcessTimerList -1, ListView
             Else
@@ -1435,6 +1525,13 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
         Case FrmListView_mnuProcessTimer_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 进程定时器列表"
                 GetProcessTimerList CurrentPID, ListView

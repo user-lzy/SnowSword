@@ -21,6 +21,7 @@ Enum Interface
     KernelModule
     KernelThread
     WorkItemThread
+    ObjectDirectory
     
     File
     FileStream
@@ -43,6 +44,7 @@ Enum Interface
     Minifilter
     MinifilterInstances
     FilterDriver
+    Ndis
     ViolentCheck
     HalDispatch
     HalPrivateDispatch
@@ -183,6 +185,7 @@ Const FB_Red As COLORREF = BGR(255, 0, 0)
 Const FB_LightPinkRed As COLORREF = BGR(240, 210, 210)
 Const FB_LightRed As COLORREF = BGR(250, 225, 225)
 Const FB_GoldenYellow As COLORREF = BGR(255, 240, 128)
+Const FB_AliceBlue As COLORREF = BGR(240, 248, 255)
 Const FB_White As COLORREF = BGR(255, 255, 255)
 Const FB_Black As COLORREF = BGR(0, 0, 0)
 Const FB_LightGreen As COLORREF = BGR(50, 200, 50)
@@ -251,6 +254,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "名称",, 350
                 .AddColumn "值",, 100
                 .AddColumn "访问权限",, 150
+                .AddColumn "标志",, 200
                 .AddColumn "对象地址",, 350
             Case Privilege
                 .AddColumn "LUID",, 100
@@ -337,6 +341,10 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "状态",, 100
                 .AddColumn "入口地址",, 200
                 .AddColumn "所属模块",, 250
+            Case ObjectDirectory
+                .AddColumn "名称",, 300
+                .AddColumn "类型",, 150
+                .AddColumn "符号链接路径",, 300
             Case SSDT
                 .AddColumn "序号",, 100
                 .AddColumn "索引",, 100
@@ -515,6 +523,12 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
                 .AddColumn "路径", 500
                 .AddColumn "设备名称", 250
                 .AddColumn "设备对象地址", 250
+            Case Ndis
+                .AddColumn "名称", 300
+                .AddColumn "类型", 80
+                .AddColumn "标识信息", 300
+                .AddColumn "驱动 / 协议映像", 400
+                .AddColumn "地址", 200
         End Select
     End With
 End Sub
@@ -839,7 +853,7 @@ End Function
 Sub SaveCurrentListViewState(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
     Print "===== [DEBUG] SaveListView 模块: " & moduleType & " ====="
     Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
-    If ctx = 0 Or ctx->Snap = 0 Or ctx->Snap->RowCount = 0 Then Exit Sub
+    If ctx = 0 OrElse ctx->Snap = 0 OrElse ctx->Snap->RowCount = 0 Then Exit Sub
 
     If g_ViewCache(moduleType).pListSnap <> 0 Then
         FreeListViewSnapshot g_ViewCache(moduleType).pListSnap
@@ -865,7 +879,7 @@ End Sub
 Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
     Print "===== [DEBUG] RestoreListView 模块: " & moduleType & " ====="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
-    If cache = NULL Or cache->IsCached = False Or cache->pListSnap = NULL Then 
+    If cache = NULL OrElse cache->IsCached = False OrElse cache->pListSnap = NULL Then 
         Print "  缓存无效"
         Exit Sub
     End If
@@ -873,7 +887,7 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
     Dim snap As ListViewSnapshot Ptr = cache->pListSnap
     Print "  缓存项数: " & snap->RowCount
     Print "  选中: " & cache->List_SelectedIndex & " | 顶部: " & cache->List_TopVisibleIndex & " | 保存的CountPerPage: " & cache->List_SavedCountPerPage
-    If snap->RowCount <= 0 Or snap->Rows = 0 Then Exit Sub
+    If snap->RowCount <= 0 OrElse snap->Rows = 0 Then Exit Sub
 
     InitListViewData lvw
     Dim i As Long, c As Long
@@ -990,7 +1004,7 @@ End Sub
 Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As Interface)
     Print "===== [DEBUG] RestoreTreeView 模块: " & moduleType & " ====="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
-    If cache = NULL Or cache->IsCached = False Or cache->pTreeSnap = NULL Then 
+    If cache = NULL OrElse cache->IsCached = False OrElse cache->pTreeSnap = NULL Then 
         Print "  缓存无效，退出"
         Exit Sub
     End If
@@ -998,7 +1012,7 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
     Dim snap As TreeViewSnapshot Ptr = cache->pTreeSnap
     Print "  缓存总项数: " & snap->NodeCount
     Print "  缓存选中: " & cache->Tree_SelectedIndex & " | 缓存顶部: " & cache->Tree_TopVisibleIndex
-    If snap->NodeCount <= 0 Or snap->Nodes = 0 Then Exit Sub
+    If snap->NodeCount <= 0 OrElse snap->Nodes = 0 Then Exit Sub
 
     tvw.DeleteAllItems()
     Dim hNewNodes(snap->NodeCount - 1) As HTREEITEM
@@ -1199,7 +1213,7 @@ End Sub
 Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)
     Print "=== [Restore] Enter ==="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
-    If cache = 0 Or cache->IsCached = False Or cache->pTreeListSnap = 0 Then
+    If cache = 0 OrElse cache->IsCached = False OrElse cache->pTreeListSnap = 0 Then
         Print "[Restore] 无有效缓存，退出"
         Exit Sub
     End If
@@ -1207,7 +1221,7 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
     Dim snap As TreeListSnapshot Ptr = cache->pTreeListSnap
     Print "[Restore] 缓存总节点数 = " & snap->RowCount
     Print "[Restore] 选中索引: " & cache->TreeList_SelectedIndex & " | 顶部索引: " & cache->TreeList_TopVisibleIndex
-    If snap->RowCount <= 0 Or snap->Rows = 0 Then Exit Sub
+    If snap->RowCount <= 0 OrElse snap->Rows = 0 Then Exit Sub
     
     ' 清空控件
     tls.DeleteItem MC_TLI_ROOT

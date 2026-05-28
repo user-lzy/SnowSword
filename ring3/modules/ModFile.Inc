@@ -92,14 +92,20 @@ Const ThreadCount As Integer = 4
 
 Public Sub GetDriveList(treFolder As Class_TreeView)
     treFolder.DeleteAllItems
-    Dim i As Integer,CurrentNode As HTREEITEM,DiskName As StringW
+    Dim i As Integer, CurrentNode As HTREEITEM, DiskName As StringW
+    If g_CuiMode Then SafeStdOut("驱动器名称" & vbCrlfW)
     For i = Asc("A") To Asc("Z")
         If (GetDriveType(Chr(i) & ":\")) <> 1 Then
             DiskName = GetDiskLabel(Chr(i) & ":")
             If (DiskName = "") Then
-                treFolder.AddItem NULL, "本地磁盘" & "(" & Chr(i) & ":" & ")"
+                DiskName = "本地磁盘" & "(" & Chr(i) & ":" & ")"
             Else
-                treFolder.AddItem NULL,DiskName & "(" & Chr(i) & ":" & ")"
+                DiskName = DiskName & "(" & Chr(i) & ":" & ")"
+            End If
+            If g_CuiMode Then
+                SafeStdOut(DiskName & vbCrlfW)
+            Else
+                treFolder.AddItem NULL, DiskName
             End If
         End If
     Next
@@ -261,6 +267,145 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
         Next
     End If
     CommitListViewView lvwFile
+End Sub
+
+' ===================== CLI 专属文件列表导出 =====================
+' 参数：
+'   szPath            - 绝对路径（如 "C:\Windows\"）
+'   IsPhysicalAnalyze - 是否启用底层 MFT 分析（检测 Hidden/Stream/Metafile）
+'   IsEnumFolder      - 是否输出目录
+'   IsEnumFile        - 是否输出文件
+Public Sub GetFileList_CLI(ByVal szPath As StringW, ByVal IsPhysicalAnalyze As Boolean = False, ByVal IsEnumFolder As Boolean = True, ByVal IsEnumFile As Boolean = True)
+    Dim colNames(2) As StringW = {"名称", "类型", "大小"}
+    
+    ' 规范化路径
+    If RightW(szPath, 1) <> "\" AndAlso RightW(szPath, 1) <> "/" Then
+        szPath = szPath & "\"
+    End If
+    
+    ' ====== 1. 普通 Win32 枚举 ======
+    Dim fData() As WIN32_FIND_DATAW, i As ULong
+    ReDim fData(10) As WIN32_FIND_DATAW
+    Dim IsBeAccess As Boolean = True
+    i = 0
+    
+    Dim hFind As HANDLE = FindFirstFileW(szPath & "*.*", @fData(i))
+    If hFind = INVALID_HANDLE_VALUE Then
+        If IsPhysicalAnalyze Then
+            IsBeAccess = False
+        Else
+            Print "[GetFileList_CLI]FindFirstFileW" & WinErrorMsg(GetLastError)
+            Dim emptyRows() As CuiFlatRow
+            ReDim emptyRows(-1) As CuiFlatRow
+            CuiPrintFlatData("FILE", emptyRows(), colNames(), 3)
+            Exit Sub
+        End If
+    Else
+        Do
+            i += 1
+            If i >= UBound(fData) Then ReDim Preserve fData(UBound(fData) + 50) As WIN32_FIND_DATAW
+        Loop While FindNextFileW(hFind, @fData(i)) <> 0
+        FindClose hFind
+    End If
+    
+    ' ====== 2. 物理分析模式：获取底层 MFT 数据 ======
+    Dim fileInfo() As WIN32_FILE_DATAEX2W, listCount As Long
+    If IsPhysicalAnalyze Then
+        listCount = GetDirList(szPath, fileInfo())
+        If listCount < 0 Then
+            Dim emptyRows2() As CuiFlatRow
+            ReDim emptyRows2(-1) As CuiFlatRow
+            CuiPrintFlatData("FILE", emptyRows2(), colNames(), 3)
+            Exit Sub
+        End If
+    End If
+    
+    ' ====== 3. 填充扁平行缓冲区 ======
+    Dim maxRows As Long = IIf(IsPhysicalAnalyze, listCount, i)
+    If maxRows <= 0 Then
+        Dim emptyRows3() As CuiFlatRow
+        ReDim emptyRows3(-1) As CuiFlatRow
+        CuiPrintFlatData("FILE", emptyRows3(), colNames(), 3)
+        Exit Sub
+    End If
+    
+    Dim rows(maxRows - 1) As CuiFlatRow
+    Dim rowIdx As Long = 0
+    
+    ' ---------- 普通模式 ----------
+    If Not IsPhysicalAnalyze Then
+        For j As Integer = 0 To i - 1
+            If (fData(j).cFileName = "." OrElse fData(j).cFileName = "..") Then Continue For
+            
+            Dim isDir As Boolean = (fData(j).dwFileAttributes And fbDirectory) <> 0
+            If isDir AndAlso Not IsEnumFolder Then Continue For
+            If Not isDir AndAlso Not IsEnumFile Then Continue For
+            
+            rows(rowIdx).ColCount = 3
+            rows(rowIdx).Cols(0) = fData(j).cFileName
+            rows(rowIdx).Cols(1) = IIf(isDir, "Directory", "")
+            rows(rowIdx).Cols(2) = IIf(isDir, WStr(""), WStr(fData(j).nFileSizeHigh * (2 ^ 32) + fData(j).nFileSizeLow))
+            rowIdx += 1
+        Next
+        
+    ' ---------- 物理分析模式 ----------
+    Else
+        For j As Integer = 0 To listCount - 1
+            Dim isDir As Boolean = fileInfo(j).bDirectory
+            If isDir AndAlso Not IsEnumFolder Then Continue For
+            If Not isDir AndAlso Not IsEnumFile Then Continue For
+            
+            rows(rowIdx).ColCount = 3
+            rows(rowIdx).Cols(0) = fileInfo(j).cFileName
+            
+            If isDir Then
+                rows(rowIdx).Cols(1) = "Directory"
+                rows(rowIdx).Cols(2) = ""
+            Else
+                Dim fileType As StringW = ""
+                Dim fileSize As StringW = WStr(fileInfo(j).dwFileSizeHigh * (2 ^ 32) + fileInfo(j).dwFileSizeLow)
+                
+                If fileInfo(j).bSuspicious Then
+                    fileType = "Stream"
+                ElseIf IsBeAccess Then
+                    Dim foundInNormal As Boolean = False
+                    For k As Integer = 0 To i - 1
+                        If fData(k).cFileName = fileInfo(j).cFileName Then
+                            foundInNormal = True
+                            Exit For
+                        End If
+                    Next
+                    
+                    If foundInNormal Then
+                        fileType = ""
+                    ElseIf fileInfo(j).mftRecordNumber >= 0 AndAlso fileInfo(j).mftRecordNumber <= 16 Then
+                        fileType = "Metafile"
+                    Else
+                        fileType = "Hidden"
+                    End If
+                Else
+                    If fileInfo(j).mftRecordNumber >= 0 AndAlso fileInfo(j).mftRecordNumber <= 16 Then
+                        fileType = "Metafile"
+                    Else
+                        fileType = "Hidden"
+                    End If
+                End If
+                
+                rows(rowIdx).Cols(1) = fileType
+                rows(rowIdx).Cols(2) = fileSize
+            End If
+            rowIdx += 1
+        Next
+    End If
+    
+    ' ====== 4. 输出 ======
+    If rowIdx > 0 Then
+        ReDim Preserve rows(rowIdx - 1) As CuiFlatRow
+        CuiPrintFlatData("FILE", rows(), colNames(), 3)
+    Else
+        Dim emptyRows() As CuiFlatRow
+        CuiPrintFlatData("FILE", emptyRows(), colNames(), 3)
+    End If
 End Sub
 
 Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
@@ -1155,9 +1300,9 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
                         BackColor = FB_White ' FB_LightGreen
                     Else
                         ' ==============================================
-                        ' 状态2：正常 → 金黄（普通第三方有效签名）
+                        ' 状态2：正常 → 浅蓝（普通第三方有效签名）
                         ' ==============================================
-                        BackColor = FB_GoldenYellow
+                        BackColor = FB_AliceBlue
                     End If
 
                 ' ==============================================

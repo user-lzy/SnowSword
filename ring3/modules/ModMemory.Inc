@@ -324,8 +324,8 @@ Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
                 Dim SuspectIndex As Integer = 0
                 MutexLock(p->hMutex)
                 SuspectIndex = *p->SuspectCount
-                'Print SuspectIndex & " 0x" & WHex(Addr)
-                p->lvwSuspectKernelMemory.AddItemColList,, WStr(SuspectIndex), GetMemoryScanType(result), "0x" & WHex(Addr), GetDriverPathByAddr(Addr)
+                Print SuspectIndex & " 0x" & WHex(Addr)
+                AddItemColListEx p->lvwSuspectKernelMemory,4,,, WStr(SuspectIndex), WStr(GetMemoryScanType(result)), "0x" & WHex(Addr), WStr(GetDriverPathByAddr(Addr))
                 *p->SuspectCount += 1
                 MutexUnlock(p->hMutex)
             End If
@@ -349,7 +349,6 @@ End Sub
 
 ' 主函数中的多线程扫描实现
 Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
-    Exit Sub
     Dim threads(NUM_THREADS - 1) As Any Ptr
     ' 循环内为每个线程单独分配堆内存（核心修复）
     Dim pParam As ScanThreadParam Ptr
@@ -368,6 +367,8 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
         If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
     End If
+    
+    InitListViewData lvwSuspectKernelMemory
     
     ' 计算总页数
     totalPages = ((EndAddr - StartAddr) \ PAGE_SIZE) + 1
@@ -411,7 +412,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
         pParam[i].bFinish = False
         
         ' 创建线程
-        threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
+        Threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
         If threads(i) = 0 Then
             AfxMsg "线程 " & i & " 创建失败"
         End If
@@ -443,7 +444,7 @@ Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
         If currentProgress <> lastProgress Then
             lastProgress = currentProgress
             FrmMain.lblNum.Caption = "进度:" & WStr(currentProgress) & "%"
-            FrmMain.lblNum.Refresh  ' 强制立即刷新
+            'FrmMain.lblNum.Refresh  ' 强制立即刷新
         End If
         
         FF_DoEvents

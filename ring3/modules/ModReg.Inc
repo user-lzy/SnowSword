@@ -99,11 +99,20 @@ Function GetFullPathByNode(Node As HTREEITEM, treKey As Class_TreeView) As Strin
 End Function
 
 Public Sub GetRootList(treKey As Class_TreeView)
-    treKey.AddItem TVI_ROOT, "HKEY_CLASSES_ROOT"
-    treKey.AddItem TVI_ROOT, "HKEY_CURRENT_USER"
-    treKey.AddItem TVI_ROOT, "HKEY_LOCAL_MACHINE"
-    treKey.AddItem TVI_ROOT, "HKEY_USERS"
-    treKey.AddItem TVI_ROOT, "HKEY_CURRENT_CONFIG"
+    If g_CuiMode Then
+        SafeStdOut("主键" & vbCrlfW)
+        SafeStdOut("HKEY_CLASSES_ROOT" & vbCrlfW)
+        SafeStdOut("HKEY_CURRENT_USER" & vbCrlfW)
+        SafeStdOut("HKEY_LOCAL_MACHINE" & vbCrlfW)
+        SafeStdOut("HKEY_USERS" & vbCrlfW)
+        SafeStdOut("HKEY_CURRENT_CONFIG" & vbCrlfW)
+    Else
+        treKey.AddItem TVI_ROOT, "HKEY_CLASSES_ROOT"
+        treKey.AddItem TVI_ROOT, "HKEY_CURRENT_USER"
+        treKey.AddItem TVI_ROOT, "HKEY_LOCAL_MACHINE"
+        treKey.AddItem TVI_ROOT, "HKEY_USERS"
+        treKey.AddItem TVI_ROOT, "HKEY_CURRENT_CONFIG"
+    End If
 End Sub
 
 ' ########## 注册表值类型转可读名称 ##########
@@ -324,6 +333,144 @@ Function GetRegList1( _
     Return True
 
 End Function
+
+Public Sub GetRegList_CLI(ByVal fullPath As StringW)
+    Dim colNames(2) As StringW = {"名称", "类型", "数据"}
+    
+    ' 解析根键和子路径
+    Dim hKeyRoot As HKEY = 0
+    Dim lpSubKey As StringW = ""
+    
+    Dim pos1 As Integer = InStrW(fullPath, "\")
+    If pos1 = 0 Then pos1 = InStrW(fullPath, "/")
+    
+    Dim rootName As StringW
+    If pos1 > 0 Then
+        rootName = LeftW(fullPath, pos1 - 1)
+        lpSubKey = MidW(fullPath, pos1 + 1)
+    Else
+        rootName = fullPath
+    End If
+    
+    ' 根键映射
+    Select Case UCase(rootName)
+    Case "HKEY_CLASSES_ROOT", "HKCR"
+        hKeyRoot = HKEY_CLASSES_ROOT
+    Case "HKEY_CURRENT_USER", "HKCU"
+        hKeyRoot = HKEY_CURRENT_USER
+    Case "HKEY_LOCAL_MACHINE", "HKLM"
+        hKeyRoot = HKEY_LOCAL_MACHINE
+    Case "HKEY_USERS", "HKU"
+        hKeyRoot = HKEY_USERS
+    Case "HKEY_CURRENT_CONFIG", "HKCC"
+        hKeyRoot = HKEY_CURRENT_CONFIG
+    Case Else
+        Print "[GetRegList_CLI]Unknown root key: " & rootName
+        Dim emptyRows() As CuiFlatRow
+        CuiPrintFlatData("REGISTRY", emptyRows(), colNames(), 3)
+        Exit Sub
+    End Select
+    
+    ' 打开注册表
+    Dim KeyHandle As HKEY = 0
+    If RegOpenKeyExW(hKeyRoot, lpSubKey, 0, KEY_READ Or KEY_WOW64_64KEY, @KeyHandle) <> ERROR_SUCCESS Then
+        Dim emptyRows2() As CuiFlatRow
+        ReDim emptyRows2(-1) As CuiFlatRow
+        CuiPrintFlatData("REGISTRY", emptyRows2(), colNames(), 3)
+        Exit Sub
+    End If
+    
+    ' ====== 1. 枚举子键 ======
+    Dim subKeys() As StringW
+    Dim idx As DWORD = 0
+    Dim keyName As WString * MAX_PATH
+    
+    Do
+        If RegEnumKeyW(KeyHandle, idx, @keyName, MAX_PATH) <> ERROR_SUCCESS Then Exit Do
+        ReDim Preserve subKeys(idx)
+        subKeys(idx) = keyName
+        idx += 1
+    Loop
+    
+    ' ====== 2. 枚举值 ======
+    Dim values() As REG_VALUE_ITEM
+    idx = 0
+    Dim valName As WString * MAX_PATH
+    Dim valLen As DWORD, dataType As DWORD, dataSize As DWORD
+    
+    Do
+        valLen = MAX_PATH
+        dataType = 0
+        dataSize = 0
+        
+        If RegEnumValueW(KeyHandle, idx, @valName, @valLen, 0, @dataType, NULL, @dataSize) <> ERROR_SUCCESS Then Exit Do
+        
+        Dim buf() As Byte
+        If dataSize > 0 Then
+            ReDim buf(0 To dataSize - 1)
+            RegQueryValueExW(KeyHandle, valName, 0, @dataType, @buf(0), @dataSize)
+        End If
+        
+        ReDim Preserve values(idx)
+        values(idx).ValueName = valName
+        values(idx).ValueType = dataType
+        values(idx).ValueData = ProcessValueData(dataType, buf(), dataSize)
+        idx += 1
+    Loop
+    
+    ' ====== 3. 填充扁平行缓冲区 ======
+    Dim subKeyCount As Long = 0
+    Dim valueCount As Long = 0
+    
+    If UBound(subKeys) >= LBound(subKeys) Then subKeyCount = UBound(subKeys) - LBound(subKeys) + 1
+    If UBound(values) >= LBound(values) Then valueCount = UBound(values) - LBound(values) + 1
+    
+    Dim totalRows As Long = subKeyCount + valueCount
+    If totalRows <= 0 Then
+        Dim emptyRows2() As CuiFlatRow
+        ReDim emptyRows2(-1) As CuiFlatRow
+        CuiPrintFlatData("REGISTRY", emptyRows2(), colNames(), 3)
+        RegCloseKey(KeyHandle)
+        Exit Sub
+    End If
+    
+    Dim rows(totalRows - 1) As CuiFlatRow
+    Dim rowIdx As Long = 0
+    
+    ' 子键行（类型标记为 Key）
+    If UBound(subKeys) >= LBound(subKeys) Then
+        For i As Integer = LBound(subKeys) To UBound(subKeys)
+            rows(rowIdx).ColCount = 3
+            rows(rowIdx).Cols(0) = subKeys(i)
+            rows(rowIdx).Cols(1) = "Key"
+            rows(rowIdx).Cols(2) = ""
+            rowIdx += 1
+        Next
+    End If
+    
+    ' 值行（类型为注册表数据类型名称）
+    If UBound(values) >= LBound(values) Then
+        For i As Integer = LBound(values) To UBound(values)
+            rows(rowIdx).ColCount = 3
+            rows(rowIdx).Cols(0) = values(i).ValueName
+            rows(rowIdx).Cols(1) = GetRegTypeName(values(i).ValueType)
+            rows(rowIdx).Cols(2) = values(i).ValueData
+            rowIdx += 1
+        Next
+    End If
+    
+    ' ====== 4. 输出 ======
+    If rowIdx > 0 Then
+        ReDim Preserve rows(rowIdx - 1) As CuiFlatRow
+        CuiPrintFlatData("REGISTRY", rows(), colNames(), 3)
+    Else
+        Dim emptyRows3() As CuiFlatRow
+        ReDim emptyRows3(-1) As CuiFlatRow
+        CuiPrintFlatData("REGISTRY", emptyRows3(), colNames(), 3)
+    End If
+    
+    RegCloseKey(KeyHandle)
+End Sub
 
 ' ########## 辅助函数：路径标准化（核心修复4：大小写不敏感 + 移除末尾反斜杠） ##########
 Function PathToUpper(path As String) As String
@@ -805,6 +952,107 @@ DetectRootHiddenItems:
     ' ===== Step4: 统一UI渲染 =====
     ' ==================================================
 RenderFinalUI:
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(2) As StringW = {"名称", "类型", "数据"}
+        
+        ' 统计各类数据量（沿用原代码的 UBound >= LBound 判空逻辑）
+        Dim subKeyCount As Long = 0
+        Dim hiddenSubKeyCount As Long = 0
+        Dim valueCount As Long = 0
+        Dim hiddenValueCount As Long = 0
+        
+        If UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
+            subKeyCount = UBound(apiKeyItem.SubKeys) - LBound(apiKeyItem.SubKeys) + 1
+        End If
+        If UBound(hiddenSubKeys) >= LBound(hiddenSubKeys) Then
+            hiddenSubKeyCount = UBound(hiddenSubKeys) - LBound(hiddenSubKeys) + 1
+        End If
+        If UBound(apiKeyItem.Values) >= LBound(apiKeyItem.Values) Then
+            valueCount = UBound(apiKeyItem.Values) - LBound(apiKeyItem.Values) + 1
+        End If
+        If UBound(hiddenValues) >= LBound(hiddenValues) Then
+            hiddenValueCount = UBound(hiddenValues) - LBound(hiddenValues) + 1
+        End If
+        
+        Dim totalRows As Long = subKeyCount + hiddenSubKeyCount + valueCount + hiddenValueCount
+        If totalRows <= 0 Then
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("REGISTRY", emptyRows(), colNames(), 3)
+            Exit Sub  ' 根据实际函数签名，可改为 Exit Function / Return
+        End If
+        
+        Dim rows(totalRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+        
+        ' ---------- 正常子键（类型栏标记为 Key） ----------
+        If UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
+            For i As Integer = LBound(apiKeyItem.SubKeys) To UBound(apiKeyItem.SubKeys)
+                rows(rowIdx).IndentLevel = 0
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 3
+                rows(rowIdx).Cols(0) = apiKeyItem.SubKeys(i)
+                rows(rowIdx).Cols(1) = "Key"
+                rows(rowIdx).Cols(2) = ""
+                rowIdx += 1
+            Next
+        End If
+        
+        ' ---------- 隐藏子键（类型栏标记为 Hidden Key） ----------
+        If UBound(hiddenSubKeys) >= LBound(hiddenSubKeys) Then
+            For i As Integer = LBound(hiddenSubKeys) To UBound(hiddenSubKeys)
+                rows(rowIdx).IndentLevel = 0
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 3
+                rows(rowIdx).Cols(0) = hiddenSubKeys(i)
+                rows(rowIdx).Cols(1) = "Hidden Key"
+                rows(rowIdx).Cols(2) = ""
+                rowIdx += 1
+            Next
+        End If
+        
+        ' ---------- 正常键值 ----------
+        If UBound(apiKeyItem.Values) >= LBound(apiKeyItem.Values) Then
+            For j As Integer = LBound(apiKeyItem.Values) To UBound(apiKeyItem.Values)
+                rows(rowIdx).IndentLevel = 0
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 3
+                rows(rowIdx).Cols(0) = apiKeyItem.Values(j).ValueName
+                rows(rowIdx).Cols(1) = GetRegTypeName(apiKeyItem.Values(j).ValueType)
+                rows(rowIdx).Cols(2) = apiKeyItem.Values(j).ValueData
+                rowIdx += 1
+            Next
+        End If
+        
+        ' ---------- 隐藏键值（与 GUI 风格保持一致） ----------
+        If UBound(hiddenValues) >= LBound(hiddenValues) Then
+            For j As Integer = LBound(hiddenValues) To UBound(hiddenValues)
+                rows(rowIdx).IndentLevel = 0
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 3
+                rows(rowIdx).Cols(0) = hiddenValues(j).ValueName & " [隐藏]"
+                rows(rowIdx).Cols(1) = GetRegTypeName(hiddenValues(j).ValueType)
+                rows(rowIdx).Cols(2) = "[隐藏数据]"
+                rowIdx += 1
+            Next
+        End If
+        
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("REGISTRY", rows(), colNames(), 3)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("REGISTRY", emptyRows(), colNames(), 3)
+        End If
+        
+        Exit Sub  ' 如当前在 Function 中，请改为 Exit Function 或 Return
+    End If
+    
+    ' ==================================================
+    ' ===== Step4: 统一UI渲染 =====
+    ' ==================================================
     'treKey.Redraw = False
     Dim hChild As HTREEITEM = treKey.GetChild(Node)
     While hChild <> NULL

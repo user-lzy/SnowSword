@@ -540,9 +540,6 @@ End Function
 
 Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
     Dim st As NTSTATUS
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
     
     InitListViewData ListView
     
@@ -653,10 +650,26 @@ Private Function GetThreadIdOfThreadHandle(ByVal dwProcessId As DWORD, ByVal dwH
     Return True
 End Function
 
-Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+Function HandleFlagsToString(ByVal dwHandleFlags As DWORD) As StringW
+    Dim As StringW strResult  ' 宽字符串存储结果
+    
+    ' 检查 可继承 标志
+    If (dwHandleFlags And HANDLE_FLAG_INHERIT) <> 0 Then
+        strResult = "INHERIT"
     End If
+    
+    ' 检查 禁止关闭 标志，使用 | 分隔
+    If (dwHandleFlags And HANDLE_FLAG_PROTECT_FROM_CLOSE) <> 0 Then
+        If strResult <> "" Then 
+            strResult += "|"  ' 用竖线分隔多个标志
+        End If
+        strResult += "PROTECT"
+    End If
+    
+    Function = strResult
+End Function
+
+Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
     Dim st As NTSTATUS
     
     InitListViewData lvwHandle
@@ -720,8 +733,8 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
             End If
         End If
         'If FilePath <> "" AndAlso InStr(strHandleName, FilePath) <= 0 Then Goto ContinueDo
-        AddItemColListEx lvwHandle, 5,,, MyHandleInfo.strType, strHandleName, "0x" & WHex(pHandleEntry->Handles(i).HandleValue), _
-        "0x" & WHex(pHandleEntry->Handles(i).GrantedAccess), "0x" & WHex(pHandleEntry->Handles(i).pObject)
+        AddItemColListEx lvwHandle, 6,,, MyHandleInfo.strType, strHandleName, "0x" & WHex(pHandleEntry->Handles(i).HandleValue), _
+        "0x" & WHex(pHandleEntry->Handles(i).GrantedAccess), WStr(HandleFlagsToString(pHandleEntry->Handles(i).HandleFlag)), "0x" & WHex(pHandleEntry->Handles(i).pObject)
         j += 1
         ContinueDo : 
         FF_DoEvents

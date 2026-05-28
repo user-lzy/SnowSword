@@ -675,7 +675,7 @@ Tag=
 Name=mnuKernelThread
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuKernelThread_mnuRefresh0-10-FrmMain_mnuKernelThread_mnuStep10-10结束线程FrmMain_mnuKernelThread_mnuKillThread0-10挂起线程FrmMain_mnuKernelThread_mnuSuspendThread0-10恢复线程FrmMain_mnuKernelThread_mnuResumeThread0-10
+Menu=刷新FrmMain_mnuKernelThread_mnuRefresh0-10-FrmMain_mnuKernelThread_mnuStep10-10结束线程FrmMain_mnuKernelThread_mnuKillThread0-10挂起线程FrmMain_mnuKernelThread_mnuSuspendThread0-10恢复线程FrmMain_mnuKernelThread_mnuResumeThread0-10-FrmMain_mnuKernelThread_mnuStep20-10查看线程栈FrmMain_mnuKernelThread_mnuViewThreadStack0-10
 Left=540
 Top=220
 Tag=
@@ -1233,6 +1233,7 @@ Private Sub DrawTreeView()
     treMain.AddItem treKernelCallbacks, "过滤驱动"
     treMain.AddItem treKernelCallbacks, "WfpCallout"
     treMain.AddItem treKernelCallbacks, "WfpFilter"
+    treMain.AddItem treKernelCallbacks, "Ndis"
     treHardDisk = treMain.AddItem(NULL, "硬盘")
     treMain.AddItem treHardDisk, "文件"
     treMain.AddItem NULL, "注册表"
@@ -1248,6 +1249,32 @@ Private Sub DrawTreeView()
 End Sub
 
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
+    ' ========== 1. 解析参数 ==========
+    'SetConsoleOutputCP(CP_UTF8)
+    ProceedCommandLine Command(1)
+    
+    ' ========== 2. 如果是 CLI 模式，隐藏窗口并进入 REPL ==========
+    If g_CuiMode Then
+        ShowWindow(FrmMain.hWnd, SW_HIDE) ' 隐藏主窗口，但控件依然存在可当数据池
+        
+        ' 必须保留的核心初始化
+        AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
+        AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
+        AdjustPrivilege GetCurrentProcessId, SE_SHUTDOWN_NAME, True
+        
+        ' 初始化必要的控件底层结构
+        ListView_SetExtendedListViewStyleEx(ListView1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
+        InitNtUserFunction
+        InitAllModuleCache
+        InitThreadPool
+        InitLog
+        
+        
+        SymEngine_Init
+        ' 启动 REPL 阻塞循环
+        RunAgentRepl()
+        Exit Sub ' 保险，正常情况 End 在 REPL 内部执行
+    End If
     'ChangeWindowMessageFilter(0x0049, MSGFLT_ADD)'允许拖放文件
     AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
     AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
@@ -1322,7 +1349,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
     prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WNDPROC))
     InitCustomTooltip hWndForm
-    Dim bytData() As Byte
+    'Dim bytData() As Byte
     'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
     InitLog
     
@@ -1332,17 +1359,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     
     SymEngine_Init
     
-    Dim names() As String
-    Dim sizes() As ULongLong
-    /'Dim cnt As Long = EnumerateFileStreams("F:\Deep Code\settings.json", names(), sizes())
-    If cnt > 0 Then
-        For i As Long = 0 To cnt - 1
-            Print "Stream: '" & names(i) & "', Size: " & sizes(i)
-        Next
-    Else
-        Print "枚举失败或文件无流"
-    End If'/
-    'AfxMsg SizeOf(VOLUME_SECTOR_IO)
+    'Print SizeOf(NDIS_MINIPORT_ENUM_ENTRY)
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1415,390 +1432,6 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
     End Select
 End Sub
 
-'[FrmMain.treMain]事件 : 双击鼠标左键
-'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
-'MouseFlags  MK_CONTROL   MK_LBUTTON     MK_MBUTTON     MK_RBUTTON    MK_SHIFT     MK_XBUTTON1       MK_XBUTTON2 
-''           CTRL键按下   鼠标左键按下   鼠标中键按下   鼠标右键按下  SHIFT键按下  第一个X按钮按下   第二个X按钮按下
-'检查什么键按下用  If (MouseFlags And MK_CONTROL)<>0 Then CTRL键按下 
-'xPos yPos   当前鼠标位置，相对于控件。就是在控件里的坐标。
-'Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, MouseFlags As Long, xPos As Long, yPos As Long)
-'    Dim treSelect As HTREEITEM = treMain.HitTest(xPos, yPos)
-'    If treMain.GetChild(treSelect) <> NULL Then Exit Sub ' 父节点直接滚，不碰任何逻辑
-'    
-'    Dim SelectText As String = treMain.Text(treSelect)
-'    txtFilePath.Text = ""
-'    
-'    ' ===================== 核心：切换前保存当前【纯ListView】模块状态 =====================
-'    ' 🔥 唯一修改：删除错误的新节点判断，只保留旧模块有效判断
-'    If CurrentInformation.intType >= 0 Then
-'        'Print "缓存Interface=" & CurrentInformation.intType & "的状态"
-'        SaveCurrentListViewState ListView1, CurrentInformation.intType
-'    End If
-'    
-'    If SelectText = "前台进程" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = ForegroundProcess
-'        InitializeListView ForegroundProcess, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetVisibleProcessList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "进程" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = Process
-'        InitializeListView Process, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            'Print "从Interface=" & CurrentInformation.intType & "的缓存恢复状态"
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            ' 主程序：计时
-'            Dim As Double start, finish
-'
-'            ' 开始计时
-'            start = Timer
-'            GetProcessList ListView1, GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
-'            ' 结束计时
-'            finish = Timer
-'
-'            ' 输出耗时（秒）
-'            Print "函数执行耗时："; finish - start; " 秒"
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "内核模块" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = KernelModule
-'        InitializeListView KernelModule, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            'Print "从Interface=" & CurrentInformation.intType & "的缓存恢复状态"
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetKernelModuleList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "内核线程" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = KernelThread
-'        InitializeListView KernelThread, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetKernelThreadList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "SSDT" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = SSDT
-'        InitializeListView SSDT, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetSSDT(ListView1)
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Shadow SSDT" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = ShadowSSDT
-'        InitializeListView ShadowSSDT, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetSSSDT(ListView1)
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "GDT" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_TREELIST
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = GDT
-'        InitializeTreeList GDT, mCtrlTreeList1
-'        lblNum.Caption = "正在获取..."
-'        lblNum.Caption = "数量:" & WStr(GetGDT(mCtrlTreeList1))
-'    ElseIf SelectText = "IDT" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_TREELIST
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = IDT
-'        InitializeTreeList IDT, mCtrlTreeList1
-'        lblNum.Caption = "正在获取..."
-'        lblNum.Caption = "数量:" & WStr(GetIDT(mCtrlTreeList1))
-'    ElseIf SelectText = "HalDispatch" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = HalDispatch
-'        InitializeListView HalDispatch, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetHalDispatchTable(ListView1)
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "HalPrivateDispatch" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = HalPrivateDispatch
-'        InitializeListView HalPrivateDispatch, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetHalPrivateDispatchTable(ListView1)
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Object Hook" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = ObjectHook
-'        InitializeListView ObjectHook, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetObjectInfo ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Callbacks" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = Callbacks
-'        InitializeListView Callbacks, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetCallbackList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "KernelTimer" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = KernelTimer
-'        InitializeListView KernelTimer, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetKernelTimerList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "WorkItemThread" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = WorkItemThread
-'        InitializeListView WorkItemThread, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetWorkItemThreadList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Minifilter" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_TREELIST
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = Minifilter
-'        InitializeTreeList Minifilter, mCtrlTreeList1
-'        lblNum.Caption = "正在获取..."
-'        lblNum.Caption = "数量:" & WStr(EnumMinifilter(mCtrlTreeList1))
-'    ElseIf SelectText = "过滤驱动" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_TREELIST
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = FilterDriver
-'        InitializeTreeList FilterDriver, mCtrlTreeList1
-'        lblNum.Caption = "正在获取..."
-'        lblNum.Caption = "数量:" & WStr(EnumAttachDevices(mCtrlTreeList1))
-'    ElseIf SelectText = "WfpCallout" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = WfpCallout
-'        InitializeListView WfpCallout, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetWfpCalloutList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "WfpFilter" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = WfpFilter
-'        InitializeListView WfpFilter, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetWfpFilterList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "文件" Then
-'        gLayoutMode = LAYOUT_LIST_TREE
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = File
-'        InitializeListView File, ListView1
-'        InitializeTreeView TreeView
-'        lblNum.Caption = "正在获取..."
-'        GetDriveList TreeView
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "注册表" Then
-'        gLayoutMode = LAYOUT_LIST_TREE
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = Registry
-'        InitializeListView Registry, ListView1
-'        InitializeTreeView TreeView
-'        lblNum.Caption = "正在获取..."
-'        GetRootList TreeView
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "服务" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = Service
-'        InitializeListView Service, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetServiceList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Etw Provider" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = EtwProvider
-'        InitializeListView EtwProvider, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetETWProviderList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "Winsock SPI" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = WinsockSPI
-'        InitializeListView WinsockSPI, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetWinsockSPIList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "任务计划" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = TaskScheduler
-'        InitializeListView TaskScheduler, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            GetTaskSchedulerList ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "暴力检测" Then
-'        gLayoutMode = LAYOUT_LIST_ONLY
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        
-'        CurrentInformation.intType = ViolentCheck
-'        InitializeListView ViolentCheck, ListView1
-'        lblNum.Caption = "正在获取..."
-'        ' 纯ListView：缓存判断
-'        If g_ViewCache(CurrentInformation.intType).IsCached Then
-'            RestoreListViewFromCache ListView1, CurrentInformation.intType
-'        Else
-'            ScanKernelMemoryMultiThread ListView1
-'        End If
-'        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-'    ElseIf SelectText = "设置" Then
-'        gLayoutMode = LAYOUT_NONE
-'        gMainView = VIEW_LISTVIEW
-'        UpdateLayout
-'        Exit Sub
-'    End If
-'End Sub
-
 ' ==============================================
 ' 改写完成：TreeView双击切换模块（自动分类型保存/恢复缓存）
 ' ==============================================
@@ -1808,7 +1441,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
     
     Dim SelectText As String = treMain.Text(treSelect)
     txtFilePath.Text = ""
-    Print "进入FrmMain_treMain_WM_LButtonDblclk"
+    'Print "进入FrmMain_treMain_WM_LButtonDblclk"
     ' ===================== 核心：切换前 → 保存【当前模块】状态（自动识别控件类型） =====================
     If CurrentInformation.intType >= 0 Then
         Select Case gLayoutMode
@@ -1826,7 +1459,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         End Select
     End If
     ' ====================================================================================
-    Print "开始切换功能模块"
+    'Print "开始切换功能模块"
     ' ===================== 模块切换逻辑（完全保留你的原有代码，仅补全缓存恢复） =====================
     If SelectText = "前台进程" Then
         gLayoutMode = LAYOUT_LIST_ONLY
@@ -1880,7 +1513,6 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
             GetKernelModuleList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
-Print "成功切换到内核模块"
     ElseIf SelectText = "内核线程" Then
         gLayoutMode = LAYOUT_LIST_ONLY
         gMainView = VIEW_LISTVIEW
@@ -1909,6 +1541,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetSSDT(ListView1)
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -1925,6 +1564,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetSSSDT(ListView1)
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -1942,6 +1588,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             lblNum.Caption = "数量:" & WStr(GetGDT(mCtrlTreeList1))
         End If
 
@@ -1957,6 +1610,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             lblNum.Caption = "数量:" & WStr(GetIDT(mCtrlTreeList1))
         End If
 
@@ -1972,6 +1632,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetHalDispatchTable(ListView1)
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -1988,6 +1655,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetHalPrivateDispatchTable(ListView1)
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2004,6 +1678,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetObjectInfo ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2020,6 +1701,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetCallbackList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2036,6 +1724,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetKernelTimerList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2052,6 +1747,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             GetWorkItemThreadList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2068,6 +1770,13 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             lblNum.Caption = "数量:" & WStr(EnumMinifilter(mCtrlTreeList1))
         End If
 
@@ -2083,7 +1792,36 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             lblNum.Caption = "数量:" & WStr(EnumAttachDevices(mCtrlTreeList1))
+        End If
+        
+    ElseIf SelectText = "Ndis" Then
+        gLayoutMode = LAYOUT_LIST_ONLY
+        gMainView = VIEW_TREELIST
+        UpdateLayout
+        
+        CurrentInformation.intType = Ndis
+        InitializeTreeList Ndis, mCtrlTreeList1
+        lblNum.Caption = "正在获取..."
+        
+        If g_ViewCache(CurrentInformation.intType).IsCached Then
+            RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
+        Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
+            lblNum.Caption = "数量:" & WStr(EnumNdisMiniport(mCtrlTreeList1))
         End If
 
     ElseIf SelectText = "WfpCallout" Then
@@ -2098,6 +1836,14 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
+            If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
             GetWfpCalloutList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2114,6 +1860,14 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
+            If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
             GetWfpFilterList ListView1
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
@@ -2222,7 +1976,7 @@ Print "成功切换到内核模块"
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 
     ElseIf SelectText = "暴力检测" Then
-        /'gLayoutMode = LAYOUT_LIST_ONLY
+        gLayoutMode = LAYOUT_LIST_ONLY
         gMainView = VIEW_LISTVIEW
         UpdateLayout
         
@@ -2233,9 +1987,16 @@ Print "成功切换到内核模块"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
             ScanKernelMemoryMultiThread ListView1
         End If
-        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)'/
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 
     ElseIf SelectText = "设置" Then
         gLayoutMode = LAYOUT_NONE
@@ -2335,8 +2096,12 @@ End Function
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+    If Not IsDriverLoaded Then
+        If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+        Else
+            Return
+        End If
     End If
     Dim isStatus As BOOLEAN = Check3.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyCreateProcess, @isStatus, SizeOf(BOOLEAN)
@@ -2384,7 +2149,9 @@ End Sub
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check5_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+    Else
+        Return
     End If
     Dim isStatus As BOOLEAN = Check5.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyAccessRegistry, @isStatus, SizeOf(BOOLEAN)
@@ -2394,8 +2161,12 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check7_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+    If Not IsDriverLoaded Then 
+        If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+        Else
+            Return
+        End If
     End If
     Dim isStatus As BOOLEAN = Check7.Value, ret As Long, lpRet As DWORD
     IoControl hDrv, IOCTL_DenyLoadDriver, @isStatus, SizeOf(BOOLEAN)
@@ -2412,8 +2183,12 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check8_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+    If Not IsDriverLoaded Then 
+        If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+        Else
+            Return
+        End If
     End If
     Dim dwProcessId As DWORD = GetCurrentProcessId, ret As Long, bStatus As BOOLEAN = Check8.Value
     If (Check8.Value) Then
@@ -2544,12 +2319,14 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
         If Nmhdr->hwndFrom = ListView1.hWnd Then ' 这里可以添加对多个控件的处理?
             Select Case Nmhdr->code
             Case LVN_GETDISPINFO
+                If g_CuiMode Then Return 0
                 Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
                 Dim ctx As ListViewContext Ptr = _
                     Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
                 ' ========== 新增：全套安全校验（修复崩溃） ==========
                 If ctx = NULL Then Return 0 ' 上下文为空
                 If ctx->Snap = NULL Then Return 0 ' 快照为空
+                If UBound(ctx->VisibleIndex) = -1 Then Return 0 ' ✅ 崩溃根源：缺失这行！
                 If p->item.iItem < 0 Or p->item.iItem >= ctx->VisibleCount Then Return 0 ' 项索引越界
                 If ctx->VisibleCount <= 0 Then Return 0 ' 无可见项
                 ' ======================================================
@@ -2573,8 +2350,16 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
             Case NM_CUSTOMDRAW
                 Dim cd As NMLVCUSTOMDRAW Ptr = Cast(NMLVCUSTOMDRAW Ptr, lParam)
                 Dim ctx As ListViewContext Ptr = _
-                    Cast(ListViewContext Ptr, GetWindowLongPtr(cd->nmcd.hdr.hwndFrom, GWLP_USERDATA))
-
+                Cast(ListViewContext Ptr, GetWindowLongPtr(cd->nmcd.hdr.hwndFrom, GWLP_USERDATA))
+                
+                ' ====================== 【崩溃修复】新增全套校验 ======================
+                If ctx = NULL Then Return CDRF_DODEFAULT
+                If ctx->Snap = NULL Then Return CDRF_DODEFAULT
+                If UBound(ctx->VisibleIndex) = -1 Then Return CDRF_DODEFAULT
+                If cd->nmcd.dwItemSpec < 0 Or cd->nmcd.dwItemSpec >= ctx->VisibleCount Then Return CDRF_DODEFAULT
+                If ctx->VisibleCount <= 0 Then Return CDRF_DODEFAULT
+                ' ====================================================================
+                
                 Select Case cd->nmcd.dwDrawStage
 
                 Case CDDS_PREPAINT
@@ -2776,8 +2561,12 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMain_Check4_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+    If Not IsDriverLoaded Then 
+        If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+        Else
+            Return
+        End If
     End If
     Dim bStatus As BOOLEAN = Check4.Value
     IoControl hDrv, IOCTL_DenyRemoteThread, @bStatus, SizeOf(BOOLEAN)
@@ -3477,8 +3266,12 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             CommitListViewView ListView1
         Case FrmMain_mnuProcess_mnuViolentTerminateProcess '暴力结束进程
             Dim dwProcessId As HANDLE = Cast(HANDLE, ValULng(ListView1.GetItemText(ListView1.SelectedItem, 0)))
-            If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
             End If
             IoControl hDrv, IOCTL_MemKillProcess, @dwProcessId, SizeOf(DWORD) ' 容易导致线程在KeSynchronizeExecution+0x4891处死锁,杀不死
             'IoControl hDrv, IOCTL_ForceKillProcess, @dwProcessId, SizeOf(HANDLE)
@@ -3499,16 +3292,24 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                 End If
             Next
         Case FrmMain_mnuProcess_mnuProtectProcess
-            If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
+            If Not IsDriverLoaded Then 
+                If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+                Else
+                    Return
+                End If
             End If
             Dim dwProcessId As DWORD = ValULng(ListView1.GetItemText(ListView1.SelectedItem, 0)), ret As Long, lpRet As DWORD
             IoControl hDrv, IOCTL_AddProtectedProcess, @dwProcessId, SizeOf(DWORD)
         Case FrmMain_mnuProcess_mnuCheckHideProcess '检测隐藏进程
-            If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+            If (Not GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)) AndAlso (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
                 If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
             End If
             SetMenuCheckState mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess, Not GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
+            lblNum.Caption = "正在刷新..."
+            GetProcessList ListView1, GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
+            'SaveCurrentListViewState ListView1, CurrentInformation.intType
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
         Case FrmMain_mnuProcess_mnuCheckSign ' 校验数字签名
             For i As Integer = 0 To ListView1.ItemCount - 1
                 If Not IsListViewItemSelected(ListView1, i) Then Continue For
@@ -3560,7 +3361,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
         Case FrmMain_mnuProcess_mnuInjectDll ' 注入DLL
             Dim szFile As StringW = FF_OpenFileDialog(,,,,"DLL files (*.dll)|*.dll|" & "All Files (*.*)|*.*|")
-            If szFile <> "" Then If RemoteInjectDll(CurrentInformation.ProcessId, szFile) Then AfxMsg "注入成功!" Else AfxMsg "注入失败!"
+            If szFile <> "" Then If RemoteInjectDll(CurrentInfo->ProcessId, szFile) Then AfxMsg "注入成功!" Else AfxMsg "注入失败!"
         Case FrmMain_mnuProcess_mnuViewModule ' 查看模块
             CurrentInfo->intType = Module
             FrmListView.Show,, Cast(Integer, CurrentInfo)
@@ -3793,6 +3594,11 @@ Sub FrmMain_mnuListView_WM_Command(hWndForm As hWnd,wID As ULong)
     Select Case wID
         Case FrmMain_mnuListView_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
+            /'If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+            Else
+                Return
+            End If'/
             Select Case CurrentInformation.intType
                 'Case ForegroundProcess
                 '    GetVisibleProcessList ListView1
@@ -3807,6 +3613,7 @@ Sub FrmMain_mnuListView_WM_Command(hWndForm As hWnd,wID As ULong)
                 Case ObjectHook
                     GetObjectInfo ListView1
                 Case WfpCallout
+                    'If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
                     GetWfpCalloutList ListView1
                 Case WfpFilter
                     GetWfpFilterList ListView1
@@ -3876,6 +3683,12 @@ Sub FrmMain_mnuKernelThread_WM_Command(hWndForm As hWnd, wID As ULong)
             Else
                 AfxMsg "恢复线程失败!"
             End If
+        Case FrmMain_mnuKernelThread_mnuViewThreadStack ' 查看线程栈
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo_New->ProcessId = 4
+            CurrentInfo_New->ThreadId = ValUInt(ListView1.GetItemText(ListView1.SelectedItem, 0))
+            CurrentInfo_New->intType = ThreadCallStack
+            FrmListView.Show,, Cast(Integer, CurrentInfo_New)
     End Select
 End Sub
 

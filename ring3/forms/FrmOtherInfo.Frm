@@ -97,7 +97,7 @@ Sub FrmOtherInfo_Shown(hWndForm As hWnd, UserData As Integer)
     Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, UserData)
     CurrentInfo->hListView = Me.hWnd
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
-    'CurrentTID = CurrentInformation.ThreadId
+    Dim CurrentTID As DWORD = CurrentInfo->ThreadId
     Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentPID))
     'lblNum.Caption = "正在获取..."
     

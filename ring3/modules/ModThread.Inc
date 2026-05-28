@@ -406,7 +406,7 @@ Function RemoteInjectDll(ByVal ProcessId As DWORD, ByVal wszInjectDllPathName As
             Goto Cleanup
         End If
         
-        If WriteProcessMemory(hProcess, lpShellcode, @shellcode(0), Ubound(shellcode)+1, NULL) = 0 Then
+        If WriteProcessMemory(hProcess, lpShellcode, @shellcode(0), UBound(shellcode)+1, NULL) = 0 Then
             MyLog.PrintWin32Error "RemoteInjectDll", "WriteProcessMemory", "Shellcode写入失败"
             VirtualFreeEx(hProcess, lpShellcode, 0, MEM_RELEASE)
             Goto Cleanup
@@ -1032,9 +1032,6 @@ Function ForceKillThread(ByVal dwThreadId As HANDLE) As Boolean
 End Function
 
 Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
         AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
@@ -1249,7 +1246,7 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
             Goto cleanup
         End If
         hThread = OpenThread(THREAD_GET_CONTEXT Or THREAD_SUSPEND_RESUME Or THREAD_QUERY_INFORMATION, 0, TID)
-        If hProcess = NULL Then
+        If hThread = NULL Then
             MyLog.PrintWin32Error "GetCallStack", "OpenThread", "TID=" & PID
             Goto cleanup
         End If
@@ -1269,7 +1266,8 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     bNeedResume = True
     
     If GetThreadContext(hThread, ctx) = 0 Then
-        MyLog.PrintWin32Error "GetCallStack", "GetThreadContext"
+        MyLog.PrintWin32Error "GetCallStack", "GetThreadContext", "hThread=0x" & WHex(hThread)
+        AfxMsg "1"
         Goto cleanup
     End If
     

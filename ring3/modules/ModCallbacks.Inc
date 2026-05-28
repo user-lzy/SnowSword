@@ -107,6 +107,39 @@ Enum INSTANCE_INFORMATION_CLASS
     InstanceAggregateStandardInformation
 End Enum
 
+#define NDIS_ENUM_MAX_STRING_LEN  128
+#define NDIS_ENUM_MAX_FILTERS_PER_MINIPORT  8
+#define NDIS_ENUM_MAX_OPENS_PER_MINIPORT    16
+
+' ============================================================================
+' 结构体定义（需与驱动完全一致，packed 对齐）
+' ============================================================================
+Type NDIS_ENUM_FILTER_ENTRY Field = 1
+    FilterBlock     As ULONG64
+    DriverObject    As ULONG64
+    InstanceName    As Wstring * NDIS_ENUM_MAX_STRING_LEN
+    FriendlyName    As Wstring * NDIS_ENUM_MAX_STRING_LEN
+    DriverImageName As Wstring * NDIS_ENUM_MAX_STRING_LEN
+End Type
+
+Type NDIS_ENUM_OPEN_ENTRY Field = 1
+    OpenBlock          As ULONG64
+    ProtocolBlock      As ULONG64
+    ProtocolName       As Wstring * NDIS_ENUM_MAX_STRING_LEN
+    ProtocolImageName  As Wstring * NDIS_ENUM_MAX_STRING_LEN
+End Type
+
+Type NDIS_MINIPORT_ENUM_ENTRY Field = 1
+    MiniportBlock            As ULONG64
+    DriverPath               As WString * 260
+    pAdapterInstanceName     As Wstring * NDIS_ENUM_MAX_STRING_LEN
+    BaseName                 As Wstring * NDIS_ENUM_MAX_STRING_LEN
+    FilterCount              As ULONG
+    Filters(NDIS_ENUM_MAX_FILTERS_PER_MINIPORT - 1) As NDIS_ENUM_FILTER_ENTRY
+    OpenCount                As ULONG
+    Opens(NDIS_ENUM_MAX_OPENS_PER_MINIPORT - 1)     As NDIS_ENUM_OPEN_ENTRY
+End Type
+
 ' 与 R0 保持一致的设备节点结构
 Type ATTACHED_DEVICE_NODE Field = 8
     IsOriginalDevice As Boolean
@@ -161,9 +194,6 @@ Dim Shared CallbackArray(Any) As CallbackInfo
 Dim Shared g_FilteredDevObjs() As ULong64
 
 Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
         AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
@@ -208,9 +238,6 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
 End Sub
 
 Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
     Dim SystemTimers(63) As SYSTEM_TIMER
     Dim ret As Long, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
@@ -255,12 +282,6 @@ Private Function GuidToString(g As GUID) As String
 End Function
 
 Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
-    If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
-        
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
     Dim ret As Long, lpRet As DWORD = 0
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -269,8 +290,6 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
     ' 🔥 关键：第一次调用（获取大小），强制忽略 ERROR_INSUFFICIENT_BUFFER (122)
     ' ########################################################################
     IoControl hDrv, IOCTL_EnumWfpCallouts, NULL, 0, NULL, 0, @lpRet
-    Print "lpRet:" & lpRet
-    lpRet = lpRet ' 确保读取到内核返回的长度
     
     ' 只要拿到长度 > 0，就继续，无视这个错误
     If lpRet = 0 Then
@@ -320,12 +339,6 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
 End Sub
 
 Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
-    If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
-
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -381,13 +394,6 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
     Dim i As Long, j As Long
 
     ' ----------------------------------
-    ' 确保驱动已加载
-    ' ----------------------------------
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
-
-    ' ----------------------------------
     ' 修复：第一次 IOCTL → 标准查询大小（传NULL+0长度）
     ' ----------------------------------
     SetLastError 0
@@ -414,7 +420,82 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
         Print "[EnumMinifilter] 第二次 IOCTL 失败:" & WinErrorMsg(GetLastError) & GetLastError
         Return 0
     End If
-
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(4) As StringW = { _
+            "名称", "回调函数地址", "所属模块", "PFLT_FILTER", "Altitude" _
+        }
+        
+        Dim maxRows As Long = filterCount * (1 + 11 + 56)
+        Dim rows(maxRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+        
+        For i As Long = 0 To UBound(MinifilterArray)
+            ' --- 根行：过滤器本身 (indent=0) ---
+            rows(rowIdx).IndentLevel = 0
+            rows(rowIdx).IsGroup = True
+            rows(rowIdx).GroupLabel = MinifilterArray(i).wName
+            rows(rowIdx).ColCount = 5
+            rows(rowIdx).Cols(0) = MinifilterArray(i).wName
+            rows(rowIdx).Cols(1) = ""
+            rows(rowIdx).Cols(2) = GetCorrectPath(MinifilterArray(i).wPath)
+            rows(rowIdx).Cols(3) = "0x" & WHex(MinifilterArray(i).hFilter)
+            rows(rowIdx).Cols(4) = MinifilterArray(i).Altitude
+            rowIdx += 1
+            
+            ' --- 一级子行：FilterFunc 回调 (indent=1) ---
+            For j As Long = 0 To 10
+                If MinifilterArray(i).FilterFunc(j) = NULL Then Continue For
+                
+                rows(rowIdx).IndentLevel = 1
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 5
+                rows(rowIdx).Cols(0) = FilterFuncName(j)
+                rows(rowIdx).Cols(1) = "0x" & WHex(MinifilterArray(i).FilterFunc(j))
+                rows(rowIdx).Cols(2) = GetDriverPathByAddr(MinifilterArray(i).FilterFunc(j))
+                rowIdx += 1
+            Next
+            
+            ' --- 一级子行：MajorFunction (indent=1) ---
+            If MinifilterArray(i).bMajorFunction Then
+                For j As Long = 0 To UBound(MinifilterArray(i).MajorFunction)
+                    Dim hasPre As Boolean = (MinifilterArray(i).MajorFunction(j).PreOperation <> NULL)
+                    Dim hasPost As Boolean = (MinifilterArray(i).MajorFunction(j).PostOperation <> NULL)
+                    If Not hasPre AndAlso Not hasPost Then Continue For
+                    
+                    If hasPre Then
+                        rows(rowIdx).IndentLevel = 1
+                        rows(rowIdx).IsGroup = False
+                        rows(rowIdx).ColCount = 5
+                        rows(rowIdx).Cols(0) = IRP_MJ_ToString(j) & "(Pre)"
+                        rows(rowIdx).Cols(1) = "0x" & WHex(MinifilterArray(i).MajorFunction(j).PreOperation)
+                        rows(rowIdx).Cols(2) = GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PreOperation)
+                        rowIdx += 1
+                    End If
+                    
+                    If hasPost Then
+                        rows(rowIdx).IndentLevel = 1
+                        rows(rowIdx).IsGroup = False
+                        rows(rowIdx).ColCount = 5
+                        rows(rowIdx).Cols(0) = IRP_MJ_ToString(j) & "(Post)"
+                        rows(rowIdx).Cols(1) = "0x" & WHex(MinifilterArray(i).MajorFunction(j).PostOperation)
+                        rows(rowIdx).Cols(2) = GetDriverPathByAddr(MinifilterArray(i).MajorFunction(j).PostOperation)
+                        rowIdx += 1
+                    End If
+                Next
+            End If
+        Next
+        
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("MINIFILTER", rows(), colNames(), 5)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("MINIFILTER", emptyRows(), colNames(), 5)
+        End If
+        Return filterCount
+    End If
     ' ----------------------------------
     ' 清空 TreeList
     ' ----------------------------------
@@ -701,6 +782,156 @@ Function UnloadFilter(ByVal pFilterName As WString Ptr) As Boolean
     Return (hr = S_OK)
 End Function
 
+Function EnumNdisMiniport(lvwNdisMiniport As Class_mCtrlTreeList) As ULong
+    Dim MiniportArray() As NDIS_MINIPORT_ENUM_ENTRY
+    Dim lpRet As DWORD
+    Dim i As Long, j As Long, k As Long
+
+    ' ----------------------------------
+    ' 第一次 IOCTL → 获取所需缓冲区大小
+    ' ----------------------------------
+    SetLastError 0
+    IoControl hDrv, IOCTL_EnumNdisMiniport, NULL, 0, NULL, 0, @lpRet
+    If GetLastError <> 0 Then
+        Print "[EnumNdisMiniport] 第一次 IOCTL 失败: " & WinErrorMsg(GetLastError) & " (" & GetLastError & ")"
+        Return 0
+    End If
+    
+    Print "lpRet:" & lpRet
+    Dim entryCount As Long
+    entryCount = lpRet \ SizeOf(NDIS_MINIPORT_ENUM_ENTRY)
+    Print "entryCount:" & entryCount
+    If entryCount <= 0 Then Return 0
+
+    ' ----------------------------------
+    ' 分配数组并获取实际数据
+    ' ----------------------------------
+    ReDim MiniportArray(entryCount - 1) As NDIS_MINIPORT_ENUM_ENTRY
+
+    SetLastError 0
+    IoControl hDrv, IOCTL_EnumNdisMiniport, NULL, 0, @MiniportArray(0), lpRet, @lpRet
+    If GetLastError <> 0 Then
+        Print "[EnumNdisMiniport] 第二次 IOCTL 失败: " & WinErrorMsg(GetLastError) & " (" & GetLastError & ")"
+        Return 0
+    End If
+
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(4) As StringW = { _
+            "名称", "类型", "标识信息", "驱动/映像", "地址" _
+        }
+        Dim maxRows As Long = 0
+        For i = 0 To entryCount - 1
+            maxRows += 1                                 ' 根行
+            maxRows += MiniportArray(i).FilterCount      ' Filter 子行
+            maxRows += MiniportArray(i).OpenCount        ' Open 子行
+        Next
+        Dim rows(maxRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+
+        For i = 0 To entryCount - 1
+            Dim entry As NDIS_MINIPORT_ENUM_ENTRY = MiniportArray(i)
+
+            ' --- 根行：Miniport ---
+            rows(rowIdx).IndentLevel = 0
+            rows(rowIdx).IsGroup = True
+            rows(rowIdx).GroupLabel = entry.pAdapterInstanceName
+            rows(rowIdx).ColCount = 5
+            rows(rowIdx).Cols(0) = entry.pAdapterInstanceName
+            rows(rowIdx).Cols(1) = "Miniport"
+            rows(rowIdx).Cols(2) = entry.BaseName
+            rows(rowIdx).Cols(3) = GetCorrectPath(entry.DriverPath)
+            rows(rowIdx).Cols(4) = "0x" & WHex(entry.MiniportBlock)
+            rowIdx += 1
+
+            ' --- Filter 子行 ---
+            For j = 0 To entry.FilterCount - 1
+                Dim f As NDIS_ENUM_FILTER_ENTRY = entry.Filters(j)
+                If f.FilterBlock = NULL Then Continue For
+
+                rows(rowIdx).IndentLevel = 1
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 5
+                rows(rowIdx).Cols(0) = f.FriendlyName
+                rows(rowIdx).Cols(1) = "Filter"
+                rows(rowIdx).Cols(2) = f.InstanceName
+                rows(rowIdx).Cols(3) = GetCorrectPath(f.DriverImageName)
+                rows(rowIdx).Cols(4) = "0x" & WHex(f.FilterBlock)
+                rowIdx += 1
+            Next
+
+            ' --- Open 子行 ---
+            For k = 0 To entry.OpenCount - 1
+                Dim o As NDIS_ENUM_OPEN_ENTRY = entry.Opens(k)
+                If o.OpenBlock = NULL Then Continue For
+
+                rows(rowIdx).IndentLevel = 1
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 5
+                rows(rowIdx).Cols(0) = o.ProtocolName
+                rows(rowIdx).Cols(1) = "Open"
+                rows(rowIdx).Cols(2) = o.ProtocolImageName
+                rows(rowIdx).Cols(3) = GetCorrectPath(o.ProtocolImageName)
+                rows(rowIdx).Cols(4) = "0x" & WHex(o.OpenBlock)
+                rowIdx += 1
+            Next
+        Next
+
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("NDIS Miniport", rows(), colNames(), 5)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("NDIS Miniport", emptyRows(), colNames(), 5)
+        End If
+        Return entryCount
+    End If
+
+    ' ----------------------------------
+    ' GUI TreeList 输出（含类型列）
+    ' ----------------------------------
+    lvwNdisMiniport.DeleteItem MC_TLI_ROOT
+
+    Dim hGroup As MC_HTREELISTITEM, hItem As MC_HTREELISTITEM
+    For i = 0 To entryCount - 1
+        Dim entry As NDIS_MINIPORT_ENUM_ENTRY = MiniportArray(i)
+
+        ' 根节点：Miniport
+        hGroup = lvwNdisMiniport.AddItem(MC_TLI_ROOT, entry.pAdapterInstanceName)
+        lvwNdisMiniport.SetItemText hGroup, 1, WStr("Miniport")
+        lvwNdisMiniport.SetItemText hGroup, 2, entry.BaseName
+        lvwNdisMiniport.SetItemText hGroup, 3, GetCorrectPath(entry.DriverPath)
+        lvwNdisMiniport.SetItemText hGroup, 4, "0x" & WHex(entry.MiniportBlock)
+
+        ' Filter 子项
+        For j = 0 To entry.FilterCount - 1
+            Dim f As NDIS_ENUM_FILTER_ENTRY = entry.Filters(j)
+            If f.FilterBlock = NULL Then Continue For
+
+            hItem = lvwNdisMiniport.AddItem(hGroup, f.FriendlyName)
+            lvwNdisMiniport.SetItemText hItem, 1, WStr("Filter")
+            lvwNdisMiniport.SetItemText hItem, 2, f.InstanceName
+            lvwNdisMiniport.SetItemText hItem, 3, GetCorrectPath(f.DriverImageName)
+            lvwNdisMiniport.SetItemText hItem, 4, "0x" & WHex(f.FilterBlock)
+        Next
+
+        ' Open 子项
+        For k = 0 To entry.OpenCount - 1
+            Dim o As NDIS_ENUM_OPEN_ENTRY = entry.Opens(k)
+            If o.OpenBlock = NULL Then Continue For
+
+            hItem = lvwNdisMiniport.AddItem(hGroup, o.ProtocolName)
+            lvwNdisMiniport.SetItemText hItem, 1, WStr("Open")
+            lvwNdisMiniport.SetItemText hItem, 2, o.ProtocolImageName
+            lvwNdisMiniport.SetItemText hItem, 3, GetCorrectPath(o.ProtocolImageName)
+            lvwNdisMiniport.SetItemText hItem, 4, "0x" & WHex(o.OpenBlock)
+        Next
+    Next
+
+    Return entryCount
+End Function
+
 ' 功能：过滤乱码字符，仅保留可打印Unicode字符，确保驱动名称显示正常
 Private Function CleanDriverName(ByVal rawName As String) As String
     Dim cleanStr As String = ""
@@ -880,6 +1111,49 @@ Private Sub AddNodesByParent(ByVal lvw As Class_mCtrlTreeList, ByVal parentItem 
     Next
 End Sub
 
+' ===================== 辅助：递归构建 FilterDriver CUI 行 =====================
+Private Sub CuiBuildAttachTree( _
+    nodes() As NODE_INFO, _
+    ByVal nodeCount As ULong, _
+    ByVal parentObj As ULONG64, _
+    ByVal depth As Long, _
+    rows() As CuiExportRow, _
+    ByRef rowIdx As Long, _
+    marked() As MARKED_DEVICE, _
+    ByVal markedCount As ULong, _
+    ByVal ShowAllDevices As Boolean, _
+    ByVal ShowBusDevices As Boolean _
+)
+    For i As Long = 0 To nodeCount - 1
+        Dim nd As ATTACHED_DEVICE_NODE = nodes(i).node
+        If nd.ParentDeviceObject <> parentObj Then Continue For
+        If IsDeviceMarked(nd.DeviceObject, marked(), markedCount) Then Continue For
+        
+        ' 根节点过滤（仅 depth=0 时生效）
+        If depth = 0 Then
+            If ShowAllDevices = False Then
+                If ShowBusDevices = False AndAlso IsBusDevice(nd.DriverName) Then Continue For
+                If HasValidChildren(nd.DeviceObject, nodes(), nodeCount, marked(), markedCount) = False Then Continue For
+            End If
+        End If
+        
+        ' 添加当前节点（5 列）
+        rows(rowIdx).IndentLevel = depth
+        rows(rowIdx).IsGroup = HasValidChildren(nd.DeviceObject, nodes(), nodeCount, marked(), markedCount)
+        rows(rowIdx).ColCount = 5
+        rows(rowIdx).Cols(0) = CleanDriverName(nd.DriverName)
+        rows(rowIdx).Cols(1) = "0x" & WHex(nd.DriverObject)
+        rows(rowIdx).Cols(2) = GetCorrectPathW(CleanDriverName(nd.DriverPath))
+        rows(rowIdx).Cols(3) = CleanDriverName(nd.DeviceName)
+        rows(rowIdx).Cols(4) = "0x" & WHex(nd.DeviceObject)
+        rowIdx += 1
+        
+        ' 递归子节点
+        CuiBuildAttachTree nodes(), nodeCount, nd.DeviceObject, depth + 1, _
+            rows(), rowIdx, marked(), markedCount, ShowAllDevices, ShowBusDevices
+    Next
+End Sub
+
 ' ============================================================================
 ' 重写：主函数 EnumAttachDevices
 ' ============================================================================
@@ -934,7 +1208,34 @@ Function EnumAttachDevices(ByVal lvwAttachDevice As Class_mCtrlTreeList, _
     Dim markedCount As ULong = 0
     ReDim marked(nodeCount)
     MarkFilteredDeviceChain nodes(), nodeCount, marked(), markedCount
-    Print "Marked " & markedCount & " devices for filtering"
+    'Print "Marked " & markedCount & " devices for filtering"
+    
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(4) As StringW = { _
+            "驱动名称", "驱动对象地址", "路径", "设备名称", "设备对象地址" _
+        }
+        
+        Dim maxRows As Long = nodeCount
+        Dim rows(maxRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+        
+        ' 从根节点（Parent=0）开始递归构建
+        CuiBuildAttachTree nodes(), nodeCount, 0, 0, rows(), rowIdx, _
+            marked(), markedCount, ShowAllDevices, ShowBusDevices
+        
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("FILTERDRIVER", rows(), colNames(), 5)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("FILTERDRIVER", emptyRows(), colNames(), 5)
+        End If
+        
+        Deallocate pBuffer
+        Return rowIdx
+    End If
     
     ' 4. 遍历并构建树（关键修复：仅遍历真正的根设备 Parent=0）
     Dim totalAdded As ULong = 0

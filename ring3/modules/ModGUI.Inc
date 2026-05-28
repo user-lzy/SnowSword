@@ -143,15 +143,12 @@ End Function
 
 ' 消息钩子枚举 - 改造版（PID列动态显示/隐藏）
 Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
 
     ' 第一次IOCTL：获取缓冲区大小
+    SetLastError 0
     IoControl hDrv, IOCTL_EnumMsgHook, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetMsgHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
@@ -267,15 +264,12 @@ End Sub
 
 ' 事件钩子枚举 - 改造版（PID列动态显示/隐藏）
 Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
 
     ' 第一次IOCTL：获取缓冲区大小
+    SetLastError 0
     IoControl hDrv, IOCTL_EnumEventHook, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetEventHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
@@ -386,15 +380,12 @@ End Sub
 
 ' 热键枚举 - 改造版（PID列动态显示/隐藏）
 Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
 
     ' 第一次IOCTL：获取缓冲区大小
+    SetLastError 0
     IoControl hDrv, IOCTL_EnumHotkey, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetHotkeyList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)

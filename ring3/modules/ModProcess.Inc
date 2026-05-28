@@ -591,7 +591,7 @@ Private Sub GetPIDList1(PIDs() As DWORD)
         'ReDim buffer(bufferSize - 1) As Byte
         buffer = Reallocate(buffer, bufferSize)
         st = ZwQuerySystemInformation(16, buffer, bufferSize, NULL)
-        Print bufferSize & " " & Hex(st)
+        'Print bufferSize & " " & Hex(st)
     Loop While st = STATUS_INFO_LENGTH_MISMATCH
     
     Dim pHandleEntry As SYSTEM_HANDLE_INFORMATION Ptr = CPtr(SYSTEM_HANDLE_INFORMATION Ptr, buffer)
@@ -1259,7 +1259,20 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
             If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
             strPath = ProcessPath(i + 1)
-            If InStr(strPath, ":") = 0 Then strPath = GetProcessPath(dwPID)
+            strPath1 = GetProcessPath(dwPID)
+            If InStr(strPath, ":") = 0 Then
+                If InStr(strPath1, ":") = 0 Then
+                    strName = ProcessPath(i + 1)
+                Else
+                    strPath = strPath1
+                End If
+            Else
+                If strPath1 <> "" AndAlso strPath <> strPath1 Then
+                    'strPath = strPath1
+                    ForeColor = FB_LightRed
+                End If
+            End If
+            Print dwPID & ":" & strPath
             strName = GetNameByPath(strPath)
             strCompany = GetFileCompany(strPath)
             Dim dwSessionId As DWORD = 0
@@ -1480,10 +1493,6 @@ Private Sub DeleteAllMenu(ByVal mnuMenu As Class_Menu)
 End Sub
 
 Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_ListView)
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-
     ' ############################## 核心修复2：变量定义 ##############################
     Dim lpRet As DWORD                    ' IOCTL返回字节数
     Dim ProcessTimer() As PROCESS_TIMER ' 定时器数组

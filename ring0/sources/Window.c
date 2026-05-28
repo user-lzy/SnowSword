@@ -324,6 +324,7 @@ PVOID FindaatomSysLoaded() {
         return (PVOID)addr;
     }
     DbgPrint("Symbol failed, fallback to pattern scan\n");
+    return NULL;
     // -------------------------------------------
     // ====================== 保留：特征码3 → 匹配 lea r8, aatomSysLoaded ======================
     // 你的汇编：lea r8, ?aatomSysLoaded@@3PAGA + test eax,eax

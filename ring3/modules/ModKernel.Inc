@@ -564,9 +564,6 @@ End Function
 
 Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
     Dim GDTArray() As GDT_INFO
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
@@ -579,10 +576,83 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
         Print "[GetGDT]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
         Return 0
     End If
-    lvwGDT.DeleteItem MC_TLI_ROOT
+    
     ReDim GDTArray(lpRet / SizeOf(GDT_INFO) - 1) As GDT_INFO
     IoControl hDrv, IOCTL_GetGDT, NULL, 0, @GDTArray(0), (UBound(GDTArray) + 1) * SizeOf(GDT_INFO), @lpRet
-    
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(9) As StringW = { _
+            "CPU", "GDT Entry/Base", "Limit", "SEL", "SEL Base", _
+            "SEL Limit", "DPL", "Present", "Granularity", "Description" _
+        }
+        
+        Dim maxRows As Long = (UBound(GDTArray) + 1) * (1 + 11)
+        Dim rows(maxRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+        
+        For i As Integer = 0 To UBound(GDTArray)
+            ' --- 根行：CPU #N (indent=0) ---
+            rows(rowIdx).IndentLevel = 0
+            rows(rowIdx).IsGroup = True
+            rows(rowIdx).GroupLabel = "CPU #" & i
+            rows(rowIdx).ColCount = 10
+            rows(rowIdx).Cols(0) = "CPU #" & i
+            rows(rowIdx).Cols(1) = "0x" & WHex(GDTArray(i).dwBase)
+            rows(rowIdx).Cols(2) = "0x" & WHex(GDTArray(i).Limit)
+            ' Cols(3)~Cols(9) 自动为空字符串
+            rowIdx += 1
+            
+            ' --- 子行：GDT 条目 (indent=1) ---
+            For j As Integer = 0 To 10
+                Dim item As GDT_ITEM Ptr = @GDTArray(i).Item(j)
+                If item->Limit = 0 AndAlso item->SEL_Base = 0 Then Continue For
+                
+                Dim Description As StringW
+                Dim SystemTypes(15) As StringW = { _
+                    "Reserved", "16-bit TSS (Available)", "LDT", "16-bit TSS (Busy)", _
+                    "16-bit Call Gate", "Task Gate", "16-bit Interrupt Gate", "16-bit Trap Gate", _
+                    "Reserved", "32-bit TSS (Available)", "Reserved", "32-bit TSS (Busy)", _
+                    "32-bit Call Gate", "Reserved", "32-bit Interrupt Gate", "32-bit Trap Gate" _
+                }
+                If item->S = 0 Then
+                    Description = "System segment(" & SystemTypes(item->uType) & ")"
+                Else
+                    If item->uType And &H8 Then
+                        Description = "Code Segment"
+                    Else
+                        Description = "Data Segment"
+                    End If
+                End If
+                
+                rows(rowIdx).IndentLevel = 1
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 10
+                rows(rowIdx).Cols(0) = "Selector 0x" & WHex(j * 8)
+                rows(rowIdx).Cols(1) = "0x" & WHex(GDTArray(i).dwBase + j * 8)
+                rows(rowIdx).Cols(2) = "0x" & WHex(item->Limit)
+                rows(rowIdx).Cols(3) = "0x" & WHex(j * 8)
+                rows(rowIdx).Cols(4) = "0x" & WHex(item->SEL_Base)
+                rows(rowIdx).Cols(5) = "0x" & WHex(item->SEL_Limit)
+                rows(rowIdx).Cols(6) = WStr(item->DPL)
+                rows(rowIdx).Cols(7) = WStr(item->Present)
+                rows(rowIdx).Cols(8) = IIf(item->Granularity = 1, "Page", "Byte")
+                rows(rowIdx).Cols(9) = Description
+                rowIdx += 1
+            Next
+        Next
+        
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("GDT", rows(), colNames(), 10)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("GDT", emptyRows(), colNames(), 10)
+        End If
+        Return 0
+    End If
+    ' ==========================
+    lvwGDT.DeleteItem MC_TLI_ROOT
     Dim hGroup As MC_HTREELISTITEM, hItem As MC_HTREELISTITEM
     For i As Integer = 0 To UBound(GDTArray)
         hGroup = lvwGDT.AddItem(MC_TLI_ROOT, "CPU #" & i)
@@ -624,7 +694,7 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
                     DBGPRINT("\n")'/
                 End If
             End If
-            lvwGDT.SetItemText hItem, 8, Description
+            lvwGDT.SetItemText hItem, 9, Description
         Next
     Next
     'CommitListViewView lvwGDT
@@ -677,9 +747,6 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
     idtHandlerNames(47) = "KiDpcInterrupt"
     
     Dim IDTArray() As IDT_INFO
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     Dim ret As Long, lpRet As DWORD, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
         AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
@@ -692,10 +759,55 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
         Return 0
     End If
     
-    lvwIDT.DeleteItem MC_TLI_ROOT
     ReDim IDTArray(lpRet / SizeOf(IDT_INFO) - 1) As IDT_INFO
     IoControl hDrv, IOCTL_GetIDT, NULL, 0, @IDTArray(0), (UBound(IDTArray) + 1) * SizeOf(IDT_INFO), @lpRet
+    ' ====== CLI 旁路输出 ======
+    If g_CuiMode Then
+        Dim colNames(6) As StringW = { _
+            "CPU", "ID", "函数名称", "当前函数地址", "SEL", "DPL", "所属模块" _
+        }
+        
+        Dim maxRows As Long = (UBound(IDTArray) + 1) * (1 + 256)
+        Dim rows(maxRows - 1) As CuiExportRow
+        Dim rowIdx As Long = 0
+        
+        For i As Integer = 0 To UBound(IDTArray)
+            ' --- 根行：CPU #N (indent=0) ---
+            rows(rowIdx).IndentLevel = 0
+            rows(rowIdx).IsGroup = True
+            rows(rowIdx).GroupLabel = "CPU #" & i
+            rows(rowIdx).ColCount = 7
+            rows(rowIdx).Cols(0) = "CPU #" & i
+            rowIdx += 1
+            
+            ' --- 子行：IDT 向量 (indent=1) ---
+            For j As Integer = 0 To 255
+                rows(rowIdx).IndentLevel = 1
+                rows(rowIdx).IsGroup = False
+                rows(rowIdx).ColCount = 7
+                rows(rowIdx).Cols(0) = "Vector 0x" & WHex(j, 2)
+                rows(rowIdx).Cols(1) = "0x" & WHex(j)
+                rows(rowIdx).Cols(2) = idtHandlerNames(j)
+                rows(rowIdx).Cols(3) = "0x" & WHex(IDTArray(i).IdtEntries(j).HandlerFunc)
+                rows(rowIdx).Cols(4) = "0x" & WHex(IDTArray(i).IdtEntries(j).Selector)
+                rows(rowIdx).Cols(5) = WStr(IDTArray(i).IdtEntries(j).Attributes)
+                rows(rowIdx).Cols(6) = GetDriverPathByAddr(IDTArray(i).IdtEntries(j).HandlerFunc)
+                rowIdx += 1
+            Next
+        Next
+        
+        If rowIdx > 0 Then
+            ReDim Preserve rows(rowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData("IDT", rows(), colNames(), 7)
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData("IDT", emptyRows(), colNames(), 7)
+        End If
+        Return 0
+    End If
     
+    lvwIDT.DeleteItem MC_TLI_ROOT
     Dim hGroup As MC_HTREELISTITEM, hItem As MC_HTREELISTITEM
     For i As Integer = 0 To UBound(IDTArray)
         hGroup = lvwIDT.AddItem(MC_TLI_ROOT, "CPU #" & i)
@@ -715,9 +827,6 @@ End Function
 
 Function GetSSDT(lvwSSDT As Class_ListView) As ULong
     Dim Count As DWORD = 0
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     
     InitListViewData lvwSSDT
     
@@ -744,15 +853,12 @@ End Function
 
 Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
     Dim Count As DWORD = 0, Index As DWORD = 0
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     
     InitListViewData lvwSSSDT
     
-    Dim ntBase As UInteger, ntSize As ULong
-    ntBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("ntoskrnl.exe"), ntSize))
-    Dim ntEnd As UInteger = ntBase + ntSize
+    Dim win32kBase As UInteger, win32kSize As ULong
+    win32kBase = Cast(UInteger, GetKernelModuleBase(StrPtrW("win32k.sys"), win32kSize))
+    Dim win32kEnd As UInteger = win32kBase + win32kSize
     Do While True
         Dim SSSDTFuncAddr As ULONG64
         If IoControl(hDrv, IOCTL_GetSSSDTFuncByIndex, @Index, SizeOf(DWORD), @SSSDTFuncAddr, SizeOf(ULONG64)) = 0 Then
@@ -761,7 +867,7 @@ Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
             'Print FindFunctionNameBySyscallIndex("win32u.dll", Index)
             Dim ItemIndex As Long = AddItemColListEx(lvwSSSDT, 5,,, WStr(Count), WHex(Index + &H1000), WStr(FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000)), _
             "0x" & WHex(SSSDTFuncAddr), WStr(GetDriverPathByAddr(SSSDTFuncAddr)))
-            If SSSDTFuncAddr < ntBase OrElse SSSDTFuncAddr > ntEnd Then ' 被hook
+            If SSSDTFuncAddr < win32kBase OrElse SSSDTFuncAddr > win32kEnd Then ' 被hook
                 SetItemColor lvwSSSDT, ItemIndex, FB_Red, FB_White
             End If
             Count += 1
@@ -774,9 +880,6 @@ End Function
 
 Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
     Dim Count As DWORD = 0
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     
     InitListViewData lvwHalDistapch
     
@@ -818,9 +921,6 @@ End Function
 
 Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As ULong
     Dim Count As DWORD = 0
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return 0
-    End If
     
     InitListViewData lvwHalPrivateDistapch
     

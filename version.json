@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1.3920",
-  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.6/SnowSword.exe",
-  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.6/SnowSword.sys",
-  "update_log": "优化界面显示",
+  "version": "1.0.1.4454",
+  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.7/SnowSword.exe",
+  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.7/SnowSword.sys",
+  "update_log": "修复bug,添加部分CLI功能",
   "mandatory": false
 }

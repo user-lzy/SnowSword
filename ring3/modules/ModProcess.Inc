@@ -853,97 +853,70 @@ Function GetProcessCommandLine(ByVal dwProcessId As DWORD) As String
     Dim cmdLine As String = ""
     Dim bytesRead As SIZE_T = 0
     Dim ntStatus As LONG = 0
-    Dim cmdBuffer As WString * 4096
-    
-    ' 架构判断变量
+
+    Const MAX_WCHARS As SIZE_T = 4096
+    Const MAX_BYTES As SIZE_T = MAX_WCHARS * SizeOf(WString)
+
+    Dim pCmdBuffer As WString Ptr = CAllocate(MAX_BYTES + SizeOf(WString))
+    If pCmdBuffer = NULL Then Return ""
+
+    MemSet(pCmdBuffer, 0, MAX_BYTES + SizeOf(WString))
+
     Dim IsTargetWow64 As Boolean = FALSE
 
-    ' 1. 打开进程（最小权限，兼容性最强）
-    hProcess = OpenProcess( _
-        PROCESS_QUERY_LIMITED_INFORMATION Or PROCESS_VM_READ, _
-        FALSE, dwProcessId _
-    )
+    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION Or PROCESS_VM_READ, FALSE, dwProcessId)
     If hProcess = NULL Then Goto Cleanup
 
-    ' 2. 判断目标进程架构：64位原生 / WOW64(32位)
     IsTargetWow64 = IsProcessWow64_Ex(hProcess)
 
-    ' ==============================================
-    ' 分支1：读取 原生64位 进程
-    ' ==============================================
     If Not IsTargetWow64 Then
         Dim pbi64 As PROCESS_BASIC_INFORMATION
         Dim peb64 As PEB64
         Dim rtl64 As RTL_USER_PROCESS_PARAMETERS
+        Dim cbToRead As SIZE_T = 0
 
-        ' 获取64位PEB地址
-        ntStatus = ZwQueryInformationProcess( _
-            hProcess, ProcessBasicInformation, _
-            @pbi64, SizeOf(pbi64), NULL _
-        )
+        ntStatus = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, @pbi64, SizeOf(pbi64), NULL)
         If Not NT_SUCCESS(ntStatus) Then Goto Cleanup
 
-        ' 读取64位PEB
-        ReadProcessMemory(hProcess, pbi64.PebBaseAddress, _
-            @PEB64, SizeOf(PEB64), @bytesRead)
+        If ReadProcessMemory(hProcess, pbi64.PebBaseAddress, @peb64, SizeOf(peb64), @bytesRead) = False Then Goto Cleanup
+        If ReadProcessMemory(hProcess, peb64.ProcessParameters, @rtl64, SizeOf(rtl64), @bytesRead) = False Then Goto Cleanup
 
-        ' 读取64位进程参数
-        ReadProcessMemory(hProcess, peb64.ProcessParameters, _
-            @rtl64, SizeOf(rtl64), @bytesRead)
-
-        ' 读取命令行Unicode字符串
         If rtl64.CommandLine.Length > 0 Then
-            ReadProcessMemory(hProcess, rtl64.CommandLine.Buffer, _
-                @cmdBuffer, rtl64.CommandLine.Length, @bytesRead)
+            cbToRead = rtl64.CommandLine.Length
+            If cbToRead > MAX_BYTES Then cbToRead = MAX_BYTES
+            If ReadProcessMemory(hProcess, rtl64.CommandLine.Buffer, pCmdBuffer, cbToRead, @bytesRead) = False Then Goto Cleanup
+            pCmdBuffer[bytesRead \ SizeOf(WString)] = 0
         End If
 
-    ' ==============================================
-    ' 分支2：读取 WOW64(32位) 进程
-    ' ==============================================
     Else
         Dim pbi64 As PROCESS_BASIC_INFORMATION
         Dim peb As PEB32
         Dim rtl32 As RTL_USER_PROCESS_PARAMETERS32
         Dim pPeb32 As PVOID = NULL
-        Dim memCheck(63) As Byte ' 用于偏移检验的内存缓冲区
+        Dim cbToRead As SIZE_T = 0
 
-        ' 1. 获取64位PBI（拿到PEB64）
         ntStatus = ZwQueryInformationProcess(hProcess, ProcessBasicInformation, @pbi64, SizeOf(pbi64), NULL)
-        If Not NT_SUCCESS(ntStatus) Then
-            MyLog.PrintNtError "GetProcessCommandLine", "ZwQueryInformationProcess", ntStatus
-            Goto Cleanup
-        End If
-        
-        ' ✅ 核心修正：你实测有效的固定偏移（永久稳定）
+        If Not NT_SUCCESS(ntStatus) Then Goto Cleanup
+
         pPeb32 = pbi64.PebBaseAddress + &H1000
 
-        ' 2. 读取32位PEB（原代码不变）
-        If ReadProcessMemory(hProcess, pPeb32, @peb, SizeOf(peb), @bytesRead) = False Then
-            MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程PEB32 失败"
-            Goto Cleanup
-        End If
+        If ReadProcessMemory(hProcess, pPeb32, @peb, SizeOf(peb), @bytesRead) = False Then Goto Cleanup
+        If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, peb.ProcessParameters)), @rtl32, SizeOf(rtl32), @bytesRead) = False Then Goto Cleanup
 
-        ' 【偏移检验】打印RTL32内存前64字节（原代码不变）
-        ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, peb.ProcessParameters)), @memCheck(0), 64, @bytesRead)
-
-        ' 3. 读取32位进程参数（原代码不变）
-        If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, peb.ProcessParameters)), @rtl32, SizeOf(rtl32), @bytesRead) = False Then
-            MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程RTL32 失败"
-            Goto Cleanup
-        End If
-
-        ' 4. 读取命令行Unicode（原代码不变）
-        If rtl32.CommandLine.Length > 0 AndAlso rtl32.CommandLine.Length < 4096 Then
-            If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, rtl32.CommandLine.Buffer)), @cmdBuffer, rtl32.CommandLine.Length, @bytesRead) = False Then
-                MyLog.PrintWin32Error "GetProcessCommandLine", "ReadProcessMemory", "读取WOW64进程命令行缓冲区失败,字节数: " & Str(bytesRead)
-            End If
+        If rtl32.CommandLine.Length > 0 Then
+            cbToRead = rtl32.CommandLine.Length
+            If cbToRead > MAX_BYTES Then cbToRead = MAX_BYTES
+            If ReadProcessMemory(hProcess, Cast(PVOID, Cast(ULONG_PTR, rtl32.CommandLine.Buffer)), pCmdBuffer, cbToRead, @bytesRead) = False Then Goto Cleanup
+            pCmdBuffer[bytesRead \ SizeOf(WString)] = 0
         End If
     End If
 
+    cmdLine = TrimW(*pCmdBuffer)
+
 Cleanup:
-    ' 释放资源
     If hProcess <> NULL Then CloseHandle(hProcess)
-    Return TrimW(cmdBuffer)
+    If pCmdBuffer <> NULL Then Deallocate pCmdBuffer
+    Return cmdLine
 End Function
 
 ' 读取会话ID函数
@@ -1345,6 +1318,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)) ' 可以在第一次调用GetProcessList时直接AddItemColList
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
+            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndex(strPath, False)
             'InvalidateRect lvwProcess.hWnd, NULL, True
             ProcessCount += 1
             'FF_DoEvents
@@ -1485,18 +1459,17 @@ Public Function KillProcess(ByVal dwProcessId As DWORD) As Boolean
     Return ForceKillProcess(dwProcessId)
 End Function
 
-Private Sub DeleteAllMenu(ByVal mnuMenu As Class_Menu)
+Sub DeleteAllMenu(ByVal mnuMenu As Class_Menu)
     Dim i As Integer
     Do While (mnuMenu.DeleteItem(i) = True)
         i += 1
     Loop
 End Sub
 
-Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_ListView)
+Sub GetProcessTimerList(ByVal bGlobal As Boolean, ByVal dwProcessId As DWORD, lvwWindowTimer As Class_ListView)
     ' ############################## 核心修复2：变量定义 ##############################
     Dim lpRet As DWORD                    ' IOCTL返回字节数
     Dim ProcessTimer() As PROCESS_TIMER ' 定时器数组
-    Dim bGlobal As Boolean
 
     ' ############################## 核心修复3：第一次IOCTL - 获取数据长度 ##############################
     ' 输入：NULL | 输出：NULL，获取需要的总字节数
@@ -1522,12 +1495,10 @@ Sub GetProcessTimerList(ByVal dwProcessId As DWORD, lvwWindowTimer As Class_List
     ' ############################## 填充列表框 ##############################
     InitListViewData lvwWindowTimer
     
-    If dwProcessId = Cast(DWORD, -1) Then
+    If Not bGlobal Then
         If lvwWindowTimer.ColumnCount = 6 Then lvwWindowTimer.InsertColumn 6, "所属PID"
-        bGlobal = True
     Else
         If lvwWindowTimer.ColumnCount = 7 Then lvwWindowTimer.DeleteColumn 6
-        bGlobal = False
     End If
     
     For i As DWORD = 0 To UBound(ProcessTimer)

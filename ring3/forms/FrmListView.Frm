@@ -769,7 +769,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetProcessTimerList CurrentPID, ListView
+            GetProcessTimerList False, CurrentPID, ListView
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 定时器列表"
         Case Handles
             If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
@@ -807,7 +807,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetMsgHookList CurrentPID, ListView
+            GetMsgHookList False, CurrentPID, ListView
             If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
         Case EventHook
@@ -818,7 +818,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetEventHookList CurrentPID, ListView
+            GetEventHookList False, CurrentPID, ListView
             If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
         Case Hotkey
@@ -829,7 +829,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetHotkeyList CurrentPID, ListView
+            GetHotkeyList False, CurrentPID, ListView
             If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
         Case UnlockTheFile
@@ -1315,6 +1315,7 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
     Me.ListView.hWndForm = hWndForm
     Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentPID))
     Select Case wID
         Case FrmListView_mnuMsgHook_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
@@ -1325,11 +1326,7 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
-                GetMsgHookList -1, ListView
-            Else
-                GetMsgHookList CurrentPID, ListView
-            End If
+            GetMsgHookList GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuMsgHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
@@ -1349,13 +1346,14 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll) Then
-                GetMsgHookList CurrentPID, ListView
-                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, False
+            Dim bGlobal As Boolean = GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll)
+            If bGlobal Then
+                Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
             Else
-                GetMsgHookList -1, ListView
-                SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, True
+                Me.Caption = "消息钩子列表"
             End If
+            GetMsgHookList Not bGlobal, CurrentPID, ListView
+            SetMenuCheckState mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 Then Exit Sub
@@ -1386,11 +1384,7 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
-                GetEventHookList -1, ListView
-            Else
-                GetEventHookList CurrentPID, ListView
-            End If
+            GetEventHookList GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuEventHook_mnuRemove ' 移除
             Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
@@ -1410,15 +1404,14 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll) Then
+            Dim bGlobal As Boolean = GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll)
+            If bGlobal Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
-                GetEventHookList CurrentPID, ListView
-                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, False
             Else
                 Me.Caption = "事件钩子列表"
-                GetEventHookList -1, ListView
-                SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, True
             End If
+            GetEventHookList Not bGlobal, CurrentPID, ListView
+            SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 Then Exit Sub
@@ -1447,11 +1440,7 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
-                GetHotkeyList -1, ListView
-            Else
-                GetHotkeyList CurrentPID, ListView
-            End If
+            GetHotkeyList GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuRemove ' 移除
             Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
@@ -1472,15 +1461,14 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll) Then
+            Dim bGlobal As Boolean = GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll)
+            If bGlobal Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
-                GetHotkeyList CurrentPID, ListView
-                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, False
             Else
                 Me.Caption = "热键列表"
-                GetHotkeyList -1, ListView
-                SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, True
             End If
+            GetHotkeyList Not bGlobal, CurrentPID, ListView
+            SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
@@ -1508,11 +1496,7 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
-                GetProcessTimerList -1, ListView
-            Else
-                GetProcessTimerList CurrentPID, ListView
-            End If
+            GetProcessTimerList GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
             Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
@@ -1532,15 +1516,14 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
                     Return
                 End If
             End If
-            If GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll) Then
+            Dim bGlobal As Boolean = GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll)
+            If bGlobal Then
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 进程定时器列表"
-                GetProcessTimerList CurrentPID, ListView
-                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, False
             Else
                 Me.Caption = "进程定时器列表"
-                GetProcessTimerList -1, ListView
-                SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, True
             End If
+            GetProcessTimerList Not bGlobal, CurrentPID, ListView
+            SetMenuCheckState mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
     End Select
 End Sub

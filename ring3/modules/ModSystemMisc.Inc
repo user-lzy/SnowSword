@@ -504,7 +504,9 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                         execPath = FF_Replace(execPath, "%windir%", Environ("windir"))
                         execPath = FF_Replace(execPath, "%localappdata%", Environ("localappdata"))
                         ' 打印任务完整信息
-                        AddItemColListEx lvwTaskScheduler, 12,,, WStr(index), WStr(taskPath), WStr(isEnabled), WStr(taskState), WStr(lastRunTime), WStr(nextRunTime), WStr(lastResult), WStr(execPath), WStr(description), WStr(""), WStr(""), WStr("")
+                        Dim ItemIndex As Long = AddItemColListEx(lvwTaskScheduler, 12,,, WStr(index), WStr(taskPath), WStr(isEnabled), _
+                        WStr(taskState), WStr(lastRunTime), WStr(nextRunTime), WStr(lastResult), WStr(execPath), WStr(description), WStr(""), WStr(""), WStr(""))
+                        'VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
                         /'Print "  索引:            "; index
                         Print "  任务名称："; taskName
                         Print "  启用状态："; isEnabled

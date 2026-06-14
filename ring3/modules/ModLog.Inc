@@ -19,7 +19,7 @@ End Enum
 ' 日志队列节点（内存存储，极快）
 '-------------------------------------------------------------------------------
 Type LogNode
-    As String  text
+    As StringW  text
     As LogNode Ptr next
 End Type
 
@@ -32,7 +32,7 @@ Private:
     As Boolean      m_enable
     As Boolean      m_toConsole
     As Boolean      m_toFile
-    As String       m_filePath
+    As StringW       m_filePath
     As Boolean      m_append
     As Boolean      m_useUTF8
     As LogLevel     m_filterLevel
@@ -63,31 +63,31 @@ Public:
     ' 配置接口
     Declare Sub SetTextBox(TextBox As Class_TextBox)
     Declare Sub SetOutput(console As Boolean, file As Boolean)
-    Declare Sub SetLogPath(path As String)
+    Declare Sub SetLogPath(path As StringW)
     Declare Sub SetAppend(isAppend As Boolean)
     Declare Sub SetEncoding(useUTF8 As Boolean)
     Declare Sub SetFilterLevel(level As LogLevel)
     Declare Sub Toggle(enable As Boolean)
 
     ' 日志打印（0阻塞，仅入队）
-    Declare Sub PrintLog(level As LogLevel, func As String = "", apiName As String = "", MSG As String = "")
+    Declare Sub PrintLog(level As LogLevel, func As StringW = "", apiName As StringW = "", MSG As StringW = "")
     
-    Declare Sub PrintWin32Error(funcName As String, apiName As String, MSG As String = "")
-    Declare Sub PrintNtError(funcName As String, apiName As String, ByVal Status As NTSTATUS, MSG As String = "")
+    Declare Sub PrintWin32Error(funcName As StringW, apiName As StringW, MSG As StringW = "")
+    Declare Sub PrintNtError(funcName As StringW, apiName As StringW, ByVal Status As NTSTATUS, MSG As StringW = "")
 
 Private:
     ' 工具方法
-    Declare Function GetTimeStamp() As String
-    Declare Function GetDailyLogName() As String
-    Declare Function LevelToStr(level As LogLevel) As String
+    Declare Function GetTimeStamp() As StringW
+    Declare Function GetDailyLogName() As StringW
+    Declare Function LevelToStr(level As LogLevel) As StringW
     
     ' 异步核心
-    Declare Sub EnqueueLog(text As String)
-    Declare Function DequeueLog() As String
+    Declare Sub EnqueueLog(text As StringW)
+    Declare Function DequeueLog() As StringW
     Declare Sub OpenLogFile()
     Declare Sub CloseLogFile()
-    Declare Sub OutputToUI(text As String)
-    Declare Sub OutputToFile(text As String)
+    Declare Sub OutputToUI(text As StringW)
+    Declare Sub OutputToFile(text As StringW)
     Declare Sub WorkerThread(ByVal param As Any Ptr)  ' 后台工作线程
 End Type
 
@@ -163,7 +163,7 @@ End Sub'/
 ' 后台工作线程（唯一执行IO/UI的线程，完全不阻塞调用者）
 '-------------------------------------------------------------------------------
 Sub Logger.WorkerThread(ByVal param As Any Ptr)
-    Dim As String logText
+    Dim As StringW logText
     Dim As Integer waitRet
     
     While m_threadRun
@@ -193,7 +193,7 @@ End Sub
 '-------------------------------------------------------------------------------
 ' 日志入队（调用者仅执行这一步，速度=内存赋值，零阻塞）
 '-------------------------------------------------------------------------------
-Sub Logger.EnqueueLog(text As String)
+Sub Logger.EnqueueLog(text As StringW)
     If Not m_enable Or text = "" Then Exit Sub
     
     ' 极短时间加锁（仅操作链表指针）
@@ -220,8 +220,8 @@ End Sub
 '-------------------------------------------------------------------------------
 ' 日志出队（后台线程使用）
 '-------------------------------------------------------------------------------
-Function Logger.DequeueLog() As String
-    Dim As String res = ""
+Function Logger.DequeueLog() As StringW
+    Dim As StringW res = ""
     
     If m_queueMutex Then WaitForSingleObject(m_queueMutex, INFINITE)
     
@@ -241,7 +241,7 @@ End Function
 '-------------------------------------------------------------------------------
 ' UI输出（批量刷新，不卡顿）
 '-------------------------------------------------------------------------------
-Sub Logger.OutputToUI(text As String)
+Sub Logger.OutputToUI(text As StringW)
     ' 安全UI更新（仅追加文本，避免全量替换）
     strLog = strLog & text & Chr(13,10)
 End Sub
@@ -252,7 +252,7 @@ End Sub
 Sub Logger.OpenLogFile()
     If m_fileOpened Then Exit Sub
     
-    Dim As String fullPath = m_filePath & "\" & GetDailyLogName()
+    Dim As StringW fullPath = m_filePath & "\" & GetDailyLogName()
     m_fileNum = FreeFile
     
     If m_useUTF8 Then
@@ -281,7 +281,7 @@ Sub Logger.CloseLogFile()
     End If
 End Sub
 
-Sub Logger.OutputToFile(text As String)
+Sub Logger.OutputToFile(text As StringW)
     If Not m_toFile Then Exit Sub
     OpenLogFile()
     Print #m_fileNum, text
@@ -290,7 +290,7 @@ End Sub
 '-------------------------------------------------------------------------------
 ' 工具函数
 '-------------------------------------------------------------------------------
-Function Logger.GetTimeStamp() As String
+Function Logger.GetTimeStamp() As StringW
     Dim As Double curr = Now
     Return _
         Right("0000"& Year(curr),4) &"-"& _
@@ -301,7 +301,7 @@ Function Logger.GetTimeStamp() As String
         Right("00"& Second(curr),2)
 End Function
 
-Function Logger.GetDailyLogName() As String
+Function Logger.GetDailyLogName() As StringW
     Dim As Double curr = Now
     Return _
         Right("0000"&Year(curr),4)& _
@@ -309,7 +309,7 @@ Function Logger.GetDailyLogName() As String
         Right("00"&Day(curr),2)&".log"
 End Function
 
-Function Logger.LevelToStr(level As LogLevel) As String
+Function Logger.LevelToStr(level As LogLevel) As StringW
     Select Case level
         Case LOG_DEBUG:Return "DEBUG"
         Case LOG_INFO:Return "INFO"
@@ -332,7 +332,7 @@ Sub Logger.SetOutput(console As Boolean, file As Boolean)
     m_toFile = file
 End Sub
 
-Sub Logger.SetLogPath(path As String)
+Sub Logger.SetLogPath(path As StringW)
     If Dir(path,16)="" Then MkDir path
     m_filePath = path
 End Sub
@@ -356,11 +356,11 @@ End Sub
 '-------------------------------------------------------------------------------
 ' 日志打印（对外核心接口，0耗时）
 '-------------------------------------------------------------------------------
-'Sub Logger.PrintLog(level As LogLevel, module As String = "", func As String = "", apiName As String = "", MSG As String = "")
-Sub Logger.PrintLog(level As LogLevel, func As String = "", apiName As String = "", MSG As String = "")
+'Sub Logger.PrintLog(level As LogLevel, module As StringW = "", func As StringW = "", apiName As StringW = "", MSG As StringW = "")
+Sub Logger.PrintLog(level As LogLevel, func As StringW = "", apiName As StringW = "", MSG As StringW = "")
     If Not m_enable Or level < m_filterLevel Then Exit Sub
     
-    Dim As String logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(level) & "]"
+    Dim As StringW logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(level) & "]"
     'If module <> "" Then logStr = logStr & " [模块:" & module & "]"
     If func <> "" Then logStr = logStr & " [函数:" & func & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
@@ -370,11 +370,11 @@ Sub Logger.PrintLog(level As LogLevel, func As String = "", apiName As String = 
     EnqueueLog(logStr)
 End Sub
 
-Sub Logger.PrintWin32Error(funcName As String, apiName As String, msg As String)
+Sub Logger.PrintWin32Error(funcName As StringW, apiName As StringW, msg As StringW)
     If Not m_enable Then Exit Sub
     
     Dim nError As DWORD = GetLastError
-    Dim As String logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(LOG_ERROR) & "]"
+    Dim As StringW logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(LOG_ERROR) & "]"
     logStr = logStr & " [函数:" & funcName & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & "调用失败,错误码:" & nError & "(" & WinErrorMsg(nError) & ")"
@@ -384,10 +384,10 @@ Sub Logger.PrintWin32Error(funcName As String, apiName As String, msg As String)
     EnqueueLog(logStr)
 End Sub
 
-Sub Logger.PrintNtError(funcName As String, apiName As String, ByVal status As NTSTATUS, msg As String)
+Sub Logger.PrintNtError(funcName As StringW, apiName As StringW, ByVal status As NTSTATUS, msg As StringW)
     If Not m_enable Then Exit Sub
     
-    Dim As String logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(LOG_ERROR) & "]"
+    Dim As StringW logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(LOG_ERROR) & "]"
     logStr = logStr & " [函数:" & funcName & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & "调用失败,错误码:0x" & WHex(status)

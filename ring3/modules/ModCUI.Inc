@@ -1,6 +1,9 @@
 ﻿' ===================== CUI Mode Module =====================
 Dim Shared g_CuiMode As Boolean = False
 Dim Shared g_OutputJson As Boolean = False
+Dim Shared g_AgentPipeName As WString * 128
+Dim Shared g_hAgentPipe As HANDLE = INVALID_HANDLE_VALUE
+Dim Shared g_InAgentMode As Boolean = False
 #define vbCrlfW WChr(13, 10)
 #define CUI_MAX_COLUMNS 32
 
@@ -12,30 +15,124 @@ Sub ProceedCommandLine(CommandLine As String)
     For i As Integer = 1 To 10
         If Command(i) = "" Then Exit For
         If UCase(Command(i)) = "--CLI" Then g_CuiMode = True
-        If UCase(Command(i)) = "--FORMAT" AndAlso UCase(Command(i+1)) = "JSON" Then g_OutputJson = True
+        If UCase(Command(i)) = "--FORMAT" AndAlso UCase(Command(i + 1)) = "JSON" Then g_OutputJson = True
+        If UCase(Command(i)) = "--AGENT-PIPE" AndAlso (i + 1) <= 10 Then
+            g_InAgentMode = True
+            g_AgentPipeName = Command(i + 1)
+            i += 1
+        End If
     Next
 End Sub
 
 ' ============================================
-' 原有版本完全不变，常量字符串继续走这里
+' 全局输出路由：Agent 管道模式 → PipeWrite，控制台模式 → WriteConsoleW
 ' ============================================
-Sub SafeStdOut Overload(ByVal szText As StringW)
-    Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
-    If hOut = INVALID_HANDLE_VALUE Then Exit Sub
+Private Function _PipeWriteRaw(ByVal pwText As WString Ptr) As Boolean
+    If g_hAgentPipe = INVALID_HANDLE_VALUE OrElse pwText = NULL Then Return False
     Dim written As DWORD
-    WriteConsoleW(hOut, StrPtrW(szText), LenW(szText), @written, NULL)
+    Dim cbNeeded As Integer = WideCharToMultiByte(CP_UTF8, 0, _
+        pwText, lstrlenW(pwText), NULL, 0, NULL, NULL)
+    If cbNeeded <= 0 Then Return True  ' 空内容视为成功
+    Dim utf8Buf As ZString Ptr = Allocate(cbNeeded + 1)
+    If utf8Buf = NULL Then Return False
+    WideCharToMultiByte(CP_UTF8, 0, pwText, lstrlenW(pwText), _
+        utf8Buf, cbNeeded, NULL, NULL)
+    Dim bOk As Boolean = WriteFile(g_hAgentPipe, utf8Buf, cbNeeded, @written, NULL)
+    If bOk = 0 Then
+        Dim dwErr As DWORD = GetLastError()
+        ' 109=ERROR_BROKEN_PIPE, 232=ERROR_NO_DATA, 233=ERROR_PIPE_NOT_CONNECTED
+        If dwErr = 109 OrElse dwErr = 232 OrElse dwErr = 233 Then
+            CloseHandle(g_hAgentPipe)
+            g_hAgentPipe = INVALID_HANDLE_VALUE
+        End If
+    End If
+    Deallocate(utf8Buf)
+    Return bOk
+End Function
+
+' ---------- 重载1：接受 StringW ----------
+Sub SafeStdOut Overload(ByVal szText As StringW)
+    If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
+        If Not _PipeWriteRaw(StrPtrW(szText)) Then
+            OutputDebugStringW(StrPtrW("PipeWrite failed, err=" & GetLastError()))
+        End If
+    ElseIf g_InAgentMode Then
+        ' Agent模式但管道尚未就绪（如初始化阶段），回退到调试输出
+        OutputDebugStringW(StrPtrW(szText))
+    Else
+        Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
+        If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
+            OutputDebugStringW(StrPtrW(szText))
+            Exit Sub
+        End If
+        Dim written As DWORD
+        ' 先尝试控制台输出，失败则尝试标准文件写入（兼容无窗口模式）
+        If WriteConsoleW(hOut, StrPtrW(szText), LenW(szText), @written, NULL) = 0 Then
+            WriteFile(hOut, StrPtrW(szText), LenW(szText) * 2, @written, NULL)
+        End If
+    End If
+End Sub
+
+' ---------- 重载2：接受 WString Ptr ----------
+Sub SafeStdOut Overload(ByVal pwText As WString Ptr)
+    If pwText = NULL Then Exit Sub
+    If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
+        If Not _PipeWriteRaw(pwText) Then
+            OutputDebugStringW(StrPtrW("PipeWrite failed, err=" & GetLastError()))
+        End If
+    ElseIf g_InAgentMode Then
+        OutputDebugStringW(pwText)
+    Else
+        Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
+        If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
+            OutputDebugStringW(pwText)
+            Exit Sub
+        End If
+        Dim written As DWORD
+        If WriteConsoleW(hOut, pwText, lstrlenW(pwText), @written, NULL) = 0 Then
+            WriteFile(hOut, pwText, lstrlenW(pwText) * 2, @written, NULL)
+        End If
+    End If
 End Sub
 
 ' ============================================
-' 新增：直接接受 WString Ptr，无需任何转换
+' 管道输入读取：UTF-8 字节流 → WString
 ' ============================================
-Sub SafeStdOut Overload(ByVal pwText As WString Ptr)
-    If pwText = NULL Then Exit Sub
-    Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
-    If hOut = INVALID_HANDLE_VALUE Then Exit Sub
-    Dim written As DWORD
-    WriteConsoleW(hOut, pwText, lstrlenW(pwText), @written, NULL)
-End Sub
+Function PipeReadLine(ByVal outLine As WString Ptr, ByVal maxChars As Integer) As Boolean
+    If g_hAgentPipe = INVALID_HANDLE_VALUE OrElse outLine = NULL OrElse maxChars <= 0 Then Return False
+    
+    Dim buf As ZString * INPUT_BUF_SIZE
+    Dim totalRead As DWORD = 0
+    Dim ch As Byte, br As DWORD
+    
+    Do
+        Dim rfOk As Boolean = ReadFile(g_hAgentPipe, @ch, 1, @br, NULL)
+        If rfOk = 0 OrElse br = 0 Then
+            ' 客户端断开或管道错误（109, 232, 233）
+            Return False
+        End If
+        If ch = 10 Then Exit Do          ' LF：行结束
+        If ch <> 13 Then                 ' 忽略 CR
+            buf[totalRead] = ch
+            totalRead += 1
+            If totalRead >= INPUT_BUF_SIZE - 2 Then Exit Do
+        End If
+    Loop
+    
+    buf[totalRead] = 0
+    If totalRead = 0 Then
+        ' 空行：返回空字符串（非失败）
+        outLine[0] = 0
+        Return True
+    End If
+    
+    Dim cwNeeded As Integer = MultiByteToWideChar(CP_UTF8, 0, @buf, totalRead, NULL, 0)
+    If cwNeeded <= 0 OrElse cwNeeded >= maxChars Then Return False
+    
+    MultiByteToWideChar(CP_UTF8, 0, @buf, totalRead, outLine, maxChars)
+    outLine[cwNeeded] = 0
+    Return True
+End Function
 
 ' ===================== CLI 扁平数据导出器 =====================
 ' 适用场景：ListView、注册表值列表、进程列表等无层级数据
@@ -152,11 +249,14 @@ Sub CuiPrintListViewData()
             If r = NULL Then Continue For
             SafeStdOut("  {")
             For c As Long = 0 To r->ColCount - 1
-                'Dim colName As StringW = W2S(FrmMain.ListView1.ColumnText(c)) ' 需确保取到列名
                 Dim colName As StringW = FrmMain.ListView1.ColumnText(c)
-                'SafeStdOut("""" & colName & """:""" & W2S(r->Cols[c]) & """")
-                SafeStdOut("""" & colName & """:""" & r->Cols[c] & """")
-                If c < r->ColCount - 1 Then SafeStdOut(",")
+                If c > 0 Then SafeStdOut(",")
+                ' 【修复】NULL 指针保护，防止访问冲突崩溃
+                If r->Cols[c] <> NULL Then
+                    SafeStdOut("""" & CuiEscapeJson(colName) & """:""" &  CuiEscapeJson(*r->Cols[c]) & """")
+                Else
+                    SafeStdOut("""" &  CuiEscapeJson(colName) & """:""""")
+                End If
             Next
             SafeStdOut("}" & vbCrlfW)
             If i < rowCount - 1 Then SafeStdOut(",")
@@ -180,8 +280,12 @@ Sub CuiPrintListViewData()
             If r = NULL Then Continue For
             For c As Long = 0 To r->ColCount - 1
                 If c > 0 Then SafeStdOut("|")
-                'SafeStdOut(W2S(r->Cols[c]))
-                SafeStdOut(r->Cols[c])
+                ' 【修复】NULL 指针保护
+                If r->Cols[c] <> NULL Then
+                    SafeStdOut(r->Cols[c])
+                Else
+                    SafeStdOut("")
+                End If
             Next
             SafeStdOut(vbCrlfW)
         Next
@@ -191,9 +295,9 @@ Sub CuiPrintListViewData()
     SafeStdOut("===SNOWSWORD_CUI_END===" & vbCrlfW)
     
     ' 输出完毕后，清空隐藏的ListView，为下一次查询腾出空间
-    ' 注意：不能 DestroyWindow，只能清空数据
     DeleteAllItemsEx FrmMain.ListView1
-    If ctx->snap Then Deallocate(ctx->snap) : ctx->snap = NULL
+    ' 【修复】防止 DeleteAllItemsEx 内部已释放 snap 导致的双重释放/堆损坏
+    'If ctx <> NULL Then ctx->Snap = NULL
 End Sub
 
 ' ===================== CLI 统一导出引擎 v2 =====================
@@ -394,17 +498,33 @@ End Function
 Const INPUT_BUF_SIZE    = 4096   ' 【修复P7】原1024，深层路径/长命令易截断
 Const MAX_REG_ENTRIES   = 128
 
+Type CmdHelpExtender
+    header  As WString * 64      ' 区块标题，如 "Memory Write Specifics:"
+    lines(7) As WString * 256    ' 最多8行详细说明
+    lineCount As Integer
+    example1 As WString * 128    ' 示例1
+    example2 As WString * 128    ' 示例2
+End Type
+
+Enum ParamMode
+    PM_NONE      = 0   ' 不支持/不需要
+    PM_OPTIONAL  = 1   ' 支持，省略时查全部
+    PM_REQUIRED  = 2   ' 必须提供，否则报错
+End Enum
+
 Type CmdEntry
     category      As WString * 64
     action        As WString * 32
     aliases       As WString * 128   ' 逗号分隔中文别名，如 "进程,程序"
     needsDriver   As Boolean
-    needsPid      As Boolean
-    needsTid      As Boolean
-    needsPath     As Boolean
-    needsAddr     As Boolean         ' 内存操作专用
+    pidMode       As ParamMode    ' ← 替换 needsPid + pidOptional
+    tidMode       As ParamMode    ' ← 同理，tid/path/addr 统一
+    pathMode      As ParamMode
+    addrMode      As ParamMode
     isDestructive As Boolean         ' 【安全】是否需要确认
-    helpText      As WString * 512
+    helpText      As Wstring * 512
+    hasExtHelp    As Boolean         ' ← 新增：是否有扩展帮助
+    extHelp       As CmdHelpExtender ' ← 新增：扩展帮助内容
 End Type
 
 Type ParsedCmd
@@ -414,9 +534,10 @@ Type ParsedCmd
     tid        As DWORD
     path       As WString * MAX_PATH
     addr       As ULONG64
-    size       As DWORD
-    data       As WString * 256
-    regName    As WString * 256
+    SIZE As DWORD
+    hexData    As Wstring * 1024   ' ← 新增：接收原始十六进制字符串
+    bytdata       As Byte Ptr
+    regName    As Wstring * 256
     regType    As WString * 32
     force      As Boolean
     dryRun     As Boolean
@@ -424,6 +545,12 @@ Type ParsedCmd
     hasError   As Boolean
     errorMsg   As WString * 256
     unknownArg As WString * 64
+    
+    ' 【新增】显式参数提供标志，避免 PID=0/TID=0/Path="" 被误判为未提供
+    hasPid     As Boolean
+    hasTid     As Boolean
+    hasPath    As Boolean
+    hasAddr    As Boolean
 End Type
 
 Dim Shared g_registry(MAX_REG_ENTRIES) As CmdEntry
@@ -431,19 +558,20 @@ Dim Shared g_regCount As Integer = 0
 
 ' --------------- 注册表辅助 ---------------
 Sub RegisterCmd(ByVal cat As StringW, ByVal act As StringW, ByVal ali As StringW, _
-                ByVal drv As Boolean, ByVal pid As Boolean, ByVal tid As Boolean, _
-                ByVal pth As Boolean, ByVal adr As Boolean, ByVal dest As Boolean, _
-                ByVal hlp As StringW)
+                ByVal drv As Boolean, _
+                ByVal pidMd As ParamMode, ByVal tidMd As ParamMode, _
+                ByVal pathMd As ParamMode, ByVal addrMd As ParamMode, _
+                ByVal dest As Boolean, ByVal hlp As StringW)
     If g_regCount >= MAX_REG_ENTRIES Then Exit Sub
     With g_registry(g_regCount)
         .category = cat
         .action = act
         .aliases = ali
         .needsDriver = drv
-        .needsPid = pid
-        .needsTid = tid
-        .needsPath = pth
-        .needsAddr = adr
+        .pidMode = pidMd
+        .tidMode = tidMd
+        .pathMode = pathMd
+        .addrMode = addrMd
         .isDestructive = dest
         .helpText = hlp
     End With
@@ -508,21 +636,102 @@ Sub InitCommandRegistry()
     
     ' ===== 文件/注册表查询（需要 --path）=====
     RegisterCmd "file",     "list", "文件",   False, False, False, True, False, False, "List files (empty path = drives)"
-    RegisterCmd "registry", "read", "注册表", False, False, False, True, False, False, "Read registry (empty path = roots)"
+    RegisterCmd "registry", "list", "注册表", False, False, False, True, False, False, "List registry (empty path = roots)"
+    
+    RegisterCmd "kernel-memory", "read", "内核内存", True, False, False, False, True, False, "Read kernel memory (physical/virtual address)"
+    With g_registry(g_regCount - 1)
+        .hasExtHelp = True
+        With .extHelp
+            .header = "Kernel Memory Read Specifics:"
+            .lines(0) = "--addr <Address>  Kernel virtual address (supports 0x prefix)"
+            .lines(1) = "--size <Bytes>    Number of bytes to read (default: 256, max: 16MB)"
+            .lines(2) = "Output format: hex dump with ASCII sidebar"
+            .lineCount = 3
+            .example1 = "kernel-memory read --addr 0xFFFFF80300000000 --size 64"
+            .example2 = "kernel-memory read --addr 0x140000000"
+        End With
+    End With
+
+    RegisterCmd "kernel-memory", "write", "内核内存", True, False, False, False, True, True, "Write hex data to kernel memory"
+    With g_registry(g_regCount - 1)
+        .hasExtHelp = True
+        With .extHelp
+            .header = "Kernel Memory Write Specifics:"
+            .lines(0) = "--addr <Address>  Kernel virtual address (supports 0x prefix)"
+            .lines(1) = "--data <HexStr>   Hex data to write (REQUIRED unless using --size for zero-fill)"
+            .lines(2) = "--size <Bytes>    Number of zero bytes to write (only if --data omitted)"
+            .lines(3) = ""
+            .lines(4) = "Data format rules:"
+            .lines(5) = "- Compact: --data 48656C6C6F6F20776F726C64"
+            .lines(6) = "- Spaced:  --data ""48 65 6C 6C 6F 20 77 6F 72 6C 64"""
+            .lines(7) = "- Length must be even (2 hex chars = 1 byte)"
+            .lines(8) = "- Max 16MB of data"
+            .lineCount = 9
+            .example1 = "kernel-memory write --addr 0xFFFFF80300000000 --data 9090"
+            .example2 = "kernel-memory write --addr 0x140000000 --size 16"
+        End With
+    End With
     
     ' ===== 二级查询（需要 --pid）=====
     RegisterCmd "thread",       "list", "线程",     False, True, False, False, False, False, "List threads of a process"
     RegisterCmd "module",       "list", "模块",     False, True, False, False, False, False, "List modules of a process"
     RegisterCmd "windows",      "list", "窗口",     False, True, False, False, False, False, "List windows of a process"
     RegisterCmd "handles",      "list", "句柄",     True,  True, False, False, False, False, "List handles of a process"
-    RegisterCmd "memory",       "read", "内存",     False, True, False, False, True,  False, "Read process memory block"
-    RegisterCmd "processtimer", "list", "进程定时器", True, True, False, False, False, False, "List timers of a process"
-    RegisterCmd "webconnect",   "list", "网络连接", False, True, False, False, False, False, "List network connections"
+    RegisterCmd "memory", "list", "内存", False, True, False, False, False, False, "List process memory block"
+    With g_registry(g_regCount - 1)
+        .hasExtHelp = True
+        With .extHelp
+            .header = "Memory List Specifics:"
+            .lines(0) = "Lists all memory blocks (regions) of the target process"
+            .lines(1) = "Output includes: BaseAddress, Size, Protect, State, Type, AllocationBase, ModuleName(If it has)"
+            .lineCount = 2
+            .example1 = "memory list --pid 1234"
+            .example2 = ""
+        End With
+    End With
+    RegisterCmd "memory", "read", "内存", False, True, False, False, True, False, "Read process memory (hex dump output)"
+    ' 找到刚注册的条目，填充扩展帮助
+    With g_registry(g_regCount - 1)
+        .hasExtHelp = True
+        With .extHelp
+            .header = "Memory Read Specifics:"
+            .lines(0) = "--size <Bytes>  Number of bytes to read (default: 256, max: 16MB)"
+            .lines(1) = "Output format: hex dump with ASCII sidebar"
+            .lineCount = 2
+            .example1 = "memory read --pid 1234 --addr 0x7FFE0000 --size 64"
+            .example2 = "memory read --pid 5678 --addr 0x1000"
+        End With
+    End With
+    RegisterCmd "memory", "write", "内存", False, True, False, False, True, True, "Write hex data to process memory. Data format: --data 48656C6C6F (no spaces) or --data ""48 65 6C 6C 6F"" (with spaces)"
+    With g_registry(g_regCount - 1)
+        .hasExtHelp = True
+        With .extHelp
+            .header = "Memory Write Specifics:"
+            .lines(0) = "--data <HexStr>  Hex data to write (REQUIRED unless using --size for zero-fill)"
+            .lines(1) = "--size <Bytes>   Number of zero bytes to write (only if --data omitted)"
+            .lines(2) = ""
+            .lines(3) = "Data format rules:"
+            .lines(4) = "- Compact: --data 48656C6C6F6F20776F726C64"
+            .lines(5) = "- Spaced:  --data ""48 65 6C 6C 6F 20 77 6F 72 6C 64"""
+            .lines(6) = "- Length must be even (2 hex chars = 1 byte)"
+            .lines(7) = "- Max 16MB of data"
+            .lineCount = 8
+            .example1 = "memory write --pid 1234 --addr 0x1000 --data 9090"
+            .example2 = "memory write --pid 1234 --addr 0x2000 --size 16"
+        End With
+    End With
+    RegisterCmd "processtimer", "list", "进程定时器", True, PM_OPTIONAL, PM_NONE, PM_NONE, PM_NONE, False, _
+            "List timers of a process (list all if --pid omitted)"
+    RegisterCmd "webconnect", "list", "网络连接", False, PM_OPTIONAL, PM_NONE, PM_NONE, PM_NONE, False, _
+            "List network connections (list all if --pid omitted)"
     RegisterCmd "privilege",    "list", "特权",     False, True, False, False, False, False, "List process privileges"
     RegisterCmd "hook",         "list", "钩子",     False, True, False, False, False, False, "List process hooks"
-    RegisterCmd "msghook",      "list", "消息钩子", False, True, False, False, False, False, "List message hooks"
-    RegisterCmd "eventhook",    "list", "事件钩子", False, True, False, False, False, False, "List event hooks"
-    RegisterCmd "hotkey",       "list", "热键",     False, True, False, False, False, False, "List registered hotkeys"
+    RegisterCmd "msghook", "list", "消息钩子", False, PM_OPTIONAL, PM_NONE, PM_NONE, PM_NONE, False, _
+            "List message hooks (list all if --pid omitted)(if failed, try again)"
+    RegisterCmd "eventhook", "list", "事件钩子", False, PM_OPTIONAL, PM_NONE, PM_NONE, PM_NONE, False, _
+            "List event hooks (list all if --pid omitted)(if failed, try again)"
+    RegisterCmd "hotkey", "list", "热键", False, PM_OPTIONAL, PM_NONE, PM_NONE, PM_NONE, False, _
+            "List registered hotkeys (list all if --pid omitted)(if failed, try again)"
     
     ' ===== 三级查询（需要 --pid + --tid）=====
     RegisterCmd "thread", "callstack", "调用栈", False, True, True, False, False, False, "Show thread call stack"
@@ -542,10 +751,13 @@ Sub InitCommandRegistry()
 End Sub
 
 Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outResult As ParsedCmd Ptr) As Boolean
-    outResult->pid = 0 : outResult->tid = 0 : outResult->addr = 0 : outResult->SIZE = 0
+    ' 初始化默认值 + 显式清除标志
+    outResult->pid = 0 : outResult->tid = 0 : outResult->addr = 0 : outResult->size = 0
     outResult->force = False : outResult->dryRun = False : outResult->showHelp = False
-    outResult->hasError = False : outResult->path = "" : outResult->Data = ""
+    outResult->hasError = False : outResult->path = "" : outResult->hexData = ""
     outResult->regName = "" : outResult->regType = "REG_SZ"
+    outResult->hasPid = False : outResult->hasTid = False
+    outResult->hasPath = False : outResult->hasAddr = False
     
     If numParts < 2 Then
         outResult->hasError = True
@@ -560,24 +772,31 @@ Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outR
     Do While i < numParts
         Dim arg As StringW = LCaseW(parts(i))
         
-        ' 【修复P13】任意位置的内联 --help
         If arg = "--help" OrElse arg = "-h" OrElse arg = "/?" Then
             outResult->showHelp = True
             i += 1 : Continue Do
         End If
         
         If arg = "--pid" AndAlso (i + 1 < numParts) Then
-            outResult->pid = ValULng(parts(i + 1)) : i += 2
+            outResult->pid = ValULng(parts(i + 1))
+            outResult->hasPid = True          ' ← 置位
+            i += 2
         ElseIf arg = "--tid" AndAlso (i + 1 < numParts) Then
-            outResult->tid = ValULng(parts(i + 1)) : i += 2
+            outResult->tid = ValULng(parts(i + 1))
+            outResult->hasTid = True          ' ← 置位
+            i += 2
         ElseIf arg = "--path" AndAlso (i + 1 < numParts) Then
-            outResult->path = parts(i + 1) : i += 2
+            outResult->path = parts(i + 1)
+            outResult->hasPath = True         ' ← 置位
+            i += 2
         ElseIf arg = "--addr" AndAlso (i + 1 < numParts) Then
-            outResult->addr = ParseUInt64(parts(i + 1)) : i += 2
+            outResult->addr = ParseUInt64(parts(i + 1))
+            outResult->hasAddr = True         ' ← 置位
+            i += 2
         ElseIf arg = "--size" AndAlso (i + 1 < numParts) Then
             outResult->size = ValULng(parts(i + 1)) : i += 2
         ElseIf arg = "--data" AndAlso (i + 1 < numParts) Then
-            outResult->data = parts(i + 1) : i += 2
+            outResult->hexData = parts(i + 1) : i += 2
         ElseIf arg = "--name" AndAlso (i + 1 < numParts) Then
             outResult->regName = parts(i + 1) : i += 2
         ElseIf arg = "--type" AndAlso (i + 1 < numParts) Then
@@ -587,13 +806,11 @@ Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outR
         ElseIf arg = "--dry-run" OrElse arg = "-d" Then
             outResult->dryRun = True : i += 1
         ElseIf LeftW(arg, 1) = "-" Then
-            ' 【修复P6/P10】未知参数立即报错，不再静默忽略
             outResult->hasError = True
             outResult->unknownArg = parts(i)
             outResult->errorMsg = "ERROR: Unknown argument '" & parts(i) & "'. Use '<category> <action> --help' for usage."
             Return False
         Else
-            ' 【修复P6】风格B不允许裸位置参数
             outResult->hasError = True
             outResult->errorMsg = "ERROR: Unexpected positional argument '" & parts(i) & "'. All arguments must use --key value format."
             Return False
@@ -609,7 +826,7 @@ Sub PrintGlobalHelp()
     
     SafeStdOut("[System]  (no --pid needed)" & vbCrlfW)
     For i As Integer = 0 To g_regCount - 1
-        If g_registry(i).needsPid = False AndAlso g_registry(i).needsPath = False Then
+        If g_registry(i).pidMode = PM_NONE AndAlso g_registry(i).pathMode = PM_NONE Then
             Dim strLine As WString * 512
             strLine = "  " & g_registry(i).category & " " & g_registry(i).action
             If g_registry(i).aliases <> "" Then strLine = strLine & "  |  " & g_registry(i).aliases
@@ -619,7 +836,7 @@ Sub PrintGlobalHelp()
     
     SafeStdOut(vbCrlfW & "[Process] (require --pid)" & vbCrlfW)
     For i As Integer = 0 To g_regCount - 1
-        If g_registry(i).needsPid AndAlso g_registry(i).needsTid = False Then
+        If g_registry(i).pidMode = PM_REQUIRED AndAlso g_registry(i).tidMode = PM_NONE Then
             Dim strLine As WString * 512
             strLine = "  " & g_registry(i).category & " " & g_registry(i).action
             If g_registry(i).aliases <> "" Then strLine = strLine & "  |  " & g_registry(i).aliases
@@ -627,9 +844,19 @@ Sub PrintGlobalHelp()
         End If
     Next
     
+    SafeStdOut(vbCrlfW & "[Process] (optional --pid)" & vbCrlfW)
+    For i As Integer = 0 To g_regCount - 1
+        If g_registry(i).pidMode = PM_OPTIONAL Then
+            Dim strLine As WString * 512
+            strLine = "  " & g_registry(i).category & " " & g_registry(i).action
+            If g_registry(i).aliases <> "" Then strLine = strLine & "  |  " & g_registry(i).aliases
+            SafeStdOut(strLine & "  (list all if --pid omitted)" & vbCrlfW)
+        End If
+    Next
+    
     SafeStdOut(vbCrlfW & "[Thread]  (require --pid --tid)" & vbCrlfW)
     For i As Integer = 0 To g_regCount - 1
-        If g_registry(i).needsTid Then
+        If g_registry(i).tidMode = PM_REQUIRED Then
             SafeStdOut("  " & g_registry(i).category & " " & g_registry(i).action & vbCrlfW)
         End If
     Next
@@ -674,15 +901,44 @@ Sub PrintActionHelp(ByVal def As CmdEntry Ptr)
     End If
     SafeStdOut("Description: " & def->helpText & vbCrlfW & vbCrlfW)
     
-    SafeStdOut("Required:" & vbCrlfW)
-    If def->needsPid  Then SafeStdOut("  --pid <ProcessID>" & vbCrlfW)
-    If def->needsTid  Then SafeStdOut("  --tid <ThreadID>" & vbCrlfW)
-    If def->needsPath Then SafeStdOut("  --path <Path>" & vbCrlfW)
-    If def->needsAddr Then SafeStdOut("  --addr <Address>  (supports 0x prefix)" & vbCrlfW)
+    SafeStdOut("Parameters:" & vbCrlfW)
+    Select Case def->pidMode
+    Case PM_REQUIRED: SafeStdOut("  --pid <ProcessID>  (required)" & vbCrlfW)
+    Case PM_OPTIONAL: SafeStdOut("  --pid <ProcessID>  (optional, omit to list all)" & vbCrlfW)
+    End Select
+    Select Case def->tidMode
+    Case PM_REQUIRED: SafeStdOut("  --tid <ThreadID>   (required)" & vbCrlfW)
+    Case PM_OPTIONAL: SafeStdOut("  --tid <ThreadID>   (optional)" & vbCrlfW)
+    End Select
+    Select Case def->pathMode
+    Case PM_REQUIRED: SafeStdOut("  --path <Path>  (required)" & vbCrlfW)
+    Case PM_OPTIONAL: SafeStdOut("  --path <Path>  (optional, omit to list all)" & vbCrlfW)
+    End Select
+    Select Case def->addrMode
+    Case PM_REQUIRED: SafeStdOut("  --addr <Address>  (supports 0x prefix)   (required)" & vbCrlfW)
+    Case PM_OPTIONAL: SafeStdOut("  --addr <Address>  (supports 0x prefix)   (optional)" & vbCrlfW)
+    End Select
+    
     SafeStdOut(vbCrlfW & "Optional:" & vbCrlfW)
     SafeStdOut("  --force         Skip confirmation" & vbCrlfW)
     SafeStdOut("  --dry-run       Preview only" & vbCrlfW)
     SafeStdOut("  --help          Show this help" & vbCrlfW)
+    ' 【方案B核心】渲染扩展帮助（纯数据驱动，无硬编码命令名）
+    If def->hasExtHelp Then
+        SafeStdOut(vbCrlfW & def->extHelp.header & vbCrlfW)
+        For i As Integer = 0 To def->extHelp.lineCount - 1
+            If def->extHelp.lines(i) <> "" Then
+                SafeStdOut("  " & def->extHelp.lines(i) & vbCrlfW)
+            Else
+                SafeStdOut(vbCrlfW)  ' 空行
+            End If
+        Next
+        SafeStdOut(vbCrlfW & "Examples:" & vbCrlfW)
+        SafeStdOut("  " & def->extHelp.example1 & vbCrlfW)
+        If def->extHelp.example2 <> "" Then
+            SafeStdOut("  " & def->extHelp.example2 & vbCrlfW)
+        End If
+    End If
 End Sub
 
 Function ConfirmDestructive(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) As Boolean
@@ -695,7 +951,7 @@ Function ConfirmDestructive(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr
         If pc->path <> ""  Then SafeStdOut("  Path     : " & pc->path & vbCrlfW)
         If pc->addr <> 0   Then SafeStdOut("  Address  : 0x" & Hex(pc->addr) & vbCrlfW)
         If pc->size <> 0   Then SafeStdOut("  Size     : " & pc->size & vbCrlfW)
-        If pc->data <> ""  Then SafeStdOut("  Data     : " & pc->data & vbCrlfW)
+        If LenW(pc->hexData) > 0 Then SafeStdOut("  Data(hex): " & pc->hexData & vbCrlfW)
         If pc->regName <> "" Then SafeStdOut("  RegName  : " & pc->regName & vbCrlfW)
         SafeStdOut("No changes made (dry-run)." & vbCrlfW)
         Return False  ' dry-run 不进入真实执行
@@ -703,7 +959,7 @@ Function ConfirmDestructive(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr
     
     If def->isDestructive = False Then Return True
     
-    ' 内核级破坏性操作：强制 --force，禁止交互
+    ' 内核级破坏性操作：强制 --force，禁止交互（管道/控制台一致）
     If def->needsDriver AndAlso pc->force = False Then
         SafeStdOut("ERROR: Kernel destructive operations require --force. Interactive confirm is disabled for safety." & vbCrlfW)
         Return False
@@ -711,7 +967,7 @@ Function ConfirmDestructive(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr
     
     If pc->force Then Return True  ' 用户已显式承担风险
     
-    ' 用户层交互确认
+    ' ===== 用户层交互确认 =====
     Dim msg As WString * 512
     msg = "WARNING: Destructive operation '" & pc->category & " " & pc->action & "'."
     If pc->pid <> 0 Then msg = msg & " PID=" & pc->pid
@@ -719,6 +975,25 @@ Function ConfirmDestructive(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr
     msg = msg & vbCrlfW & "Confirm? [y/N]: "
     SafeStdOut(msg)
     
+    ' 【新增】确保提示符已完全送达客户端，再进入读取
+    /'If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
+        FlushFileBuffers(g_hAgentPipe)   ' ← 关键：强制刷新写缓冲区
+    End If'/
+    
+    ' ---------- 管道模式：从命名管道读取 ----------
+    If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
+        Dim confirm As WString * 8 = ""
+        If Not PipeReadLine(@confirm, 8) Then
+            SafeStdOut("Cancelled (pipe disconnected)." & vbCrlfW)
+            Return False
+        End If
+        
+        If LCaseW(LeftW(confirm, 1)) = "y" Then Return True
+        SafeStdOut("Cancelled." & vbCrlfW)
+        Return False
+    End If
+    
+    ' ---------- 控制台模式：从 STD_INPUT 读取 ----------
     Dim hIn As HANDLE = GetStdHandle(STD_INPUT_HANDLE)
     Dim confirmBuf As WString * 8
     Dim br As DWORD
@@ -758,10 +1033,482 @@ Function Exec_Thread_List(ByVal pc As ParsedCmd Ptr) As Boolean
 End Function
 
 Function Exec_Memory_Read(ByVal pc As ParsedCmd Ptr) As Boolean
-    CurrentInformation.intType = Memory : CurrentInformation.ProcessId = pc->pid
-    InitializeListView Memory, FrmMain.ListView1
-    GetMemoryBlockList pc->pid, FrmMain.ListView1
-    CuiPrintListViewData()
+    Dim hProcess As HANDLE = NULL
+    Dim hTarget As HANDLE = NULL
+    Dim buf() As Byte
+    Dim bytesRead As SIZE_T = 0
+    Dim i As Integer
+    Dim hexLine As WString * 80
+    Dim hexPart As WString * 50
+    Dim asciiPart As WString * 20
+    Dim b As Byte
+    
+    ' ── 参数校验 ─────────────────────────────────────────
+    If pc->hasPid = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --pid required for memory read"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    If pc->hasAddr = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --addr required for memory read"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    If pc->size = 0 Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --size must be > 0"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    If pc->size > &H1000000 Then  ' 16MB 上限，防止恶意请求
+        pc->hasError = True
+        pc->errorMsg = "Error: --size exceeds 16MB limit"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 打开目标进程 ──────────────────────────────────────
+    If IsDriverLoaded Then
+        hTarget = SnowSword_OpenProcess(pc->pid)
+        If hTarget = NULL Then
+            pc->hasError = True
+            pc->errorMsg = "Error: SnowSword_OpenProcess failed for PID=" & pc->pid
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        hProcess = hTarget
+    Else
+        hProcess = OpenProcess(PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, False, pc->pid)
+        If hProcess = NULL Then
+            pc->hasError = True
+            pc->errorMsg = "Error: OpenProcess failed for PID=" & pc->pid & " (err=" & GetLastError() & "),try to load driver"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+    End If
+    
+    ' ── 分配缓冲区 ─────────────────────────────────────────
+    ReDim buf(pc->size - 1)
+    
+    ' ── 执行读取 ───────────────────────────────────────────
+    If ReadProcessMemory(hProcess, Cast(LPCVOID, pc->addr), @buf(0), pc->size, @bytesRead) = 0 Then
+        pc->hasError = True
+        pc->errorMsg = "Error: ReadProcessMemory failed at 0x" & Hex(pc->addr) & " (err=" & GetLastError() & "),try to load driver"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        If IsDriverLoaded = False Then CloseHandle(hProcess)
+        Return False
+    End If
+    
+    ' ── 输出结果 ───────────────────────────────────────────
+    SafeStdOut("Read " & bytesRead & " bytes from PID=" & pc->pid & " at 0x" & Hex(pc->addr) & vbCrLfW)
+    
+    ' 十六进制 + ASCII 双栏输出
+    For i = 0 To bytesRead - 1
+        If (i Mod 16) = 0 Then
+            If i > 0 Then
+                SafeStdOut("  " & asciiPart & vbCrLfW)
+            End If
+            hexLine = Hex(pc->addr + i, 8) & "  "
+            hexPart = ""
+            asciiPart = ""
+        End If
+        
+        b = buf(i)
+        hexPart = hexPart & Hex(b, 2) & " "
+        
+        If b >= 32 And b <= 126 Then
+            asciiPart = asciiPart & WChr(b)
+        Else
+            asciiPart = asciiPart & "."
+        End If
+    Next i
+    
+    ' 补齐最后一行
+    If bytesRead > 0 Then
+        Dim padCount As Integer = (16 - (bytesRead Mod 16)) Mod 16
+        For i = 1 To padCount
+            hexPart = hexPart & "   "
+        Next i
+        SafeStdOut(hexLine & hexPart & "  " & asciiPart & vbCrLfW)
+    End If
+    
+    ' ── 清理 ───────────────────────────────────────────────
+    If IsDriverLoaded = False Then
+        CloseHandle(hProcess)
+    End If
+    
+    Return True
+End Function
+
+Function Exec_Memory_Write(ByVal pc As ParsedCmd Ptr) As Boolean
+    Dim hProcess As HANDLE = NULL
+    Dim hTarget As HANDLE = NULL
+    Dim bytesWritten As SIZE_T = 0
+    Dim oldProtect As DWORD = 0
+    Dim writeBuf() As Byte
+    Dim i As Integer
+    Dim dataLen As Integer
+    
+    ' ── 参数校验 ─────────────────────────────────────────
+    If pc->hasPid = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --pid required for memory write"
+        SafeStdOut(pc->errorMsg & vbCrlfW)
+        Return False
+    End If
+    
+    If pc->hasAddr = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --addr required for memory write"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 新增：如果提供了 hexData，解析为字节数组 ──
+    If LenW(pc->hexData) > 0 Then
+        Dim hexClean As StringW = MyTrimW(pc->hexData, " ")
+        Dim hexLen As Integer = LenW(hexClean)
+        
+        ' 支持 "48 65 6C" 和 "48656C" 两种格式
+        If InStrW(hexClean, " ") > 0 Then
+            ' 空格分隔：先去掉所有空格
+            Dim tmp As StringW = ""
+            For i As Integer = 0 To hexLen - 1
+                If hexClean[i] <> 32 Then tmp = tmp & WChr(hexClean[i])
+            Next
+            hexClean = tmp
+            hexLen = LenW(hexClean)
+        End If
+        
+        ' 长度必须是偶数
+        If (hexLen Mod 2) <> 0 OrElse hexLen = 0 Then
+            pc->hasError = True
+            pc->errorMsg = "Error: --data must be valid hex string (even length)"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        
+        Dim byteCount As Integer = hexLen \ 2
+        If byteCount > &H1000000 Then
+            pc->hasError = True
+            pc->errorMsg = "Error: --data exceeds 16MB"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        
+        pc->bytdata = Allocate(byteCount)
+        If pc->bytdata = NULL Then
+            pc->hasError = True
+            pc->errorMsg = "Error: memory allocation failed"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        
+        For i As Integer = 0 To byteCount - 1
+            Dim hexByte As StringW = MidW(hexClean, i * 2 + 1, 2)
+            pc->bytdata[i] = CByte(ValULng("&H" & hexByte))
+        Next
+        
+        pc->size = byteCount   ' ← 从数据长度自动推导
+    End If
+    
+    If pc->size = 0 And pc->bytdata = NULL Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --size or --data required for memory write"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 准备写入数据 ───────────────────────────────────────
+    ' 优先使用 bytdata（显式字节数据），否则用 size 写零
+    If pc->bytdata <> NULL Then
+        ' 计算 bytdata 长度（假设以 null 结尾或外部已知长度）
+        ' 这里简化处理：如果 size > 0 且 bytdata 有效，使用 size 作为长度
+        dataLen = pc->size
+        If dataLen = 0 Then
+            pc->hasError = True
+            pc->errorMsg = "Error: bytdata provided but size=0"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        ReDim writeBuf(dataLen - 1)
+        CopyMemory(@writeBuf(0), pc->bytdata, dataLen)
+    Else
+        ' 无显式数据，按 size 写零
+        dataLen = pc->size
+        If dataLen > &H1000000 Then
+            pc->hasError = True
+            pc->errorMsg = "Error: --size exceeds 16MB limit"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        ReDim writeBuf(dataLen - 1)
+        ' 数组已自动初始化为 0
+    End If
+    
+    ' ── Dry Run 模式 ───────────────────────────────────────
+    If pc->dryRun Then
+        SafeStdOut("[DRY RUN] Would write " & dataLen & " bytes to PID=" & pc->pid & " at 0x" & Hex(pc->addr) & vbCrLfW)
+        Return True
+    End If
+    
+    ' ── 打开目标进程 ──────────────────────────────────────
+    If IsDriverLoaded Then
+        hTarget = SnowSword_OpenProcess(pc->pid)
+        If hTarget = NULL Then
+            pc->hasError = True
+            pc->errorMsg = "Error: SnowSword_OpenProcess failed for PID=" & pc->pid
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        hProcess = hTarget
+    Else
+        ' 写内存需要 VM_WRITE + VM_OPERATION（用于 VirtualProtectEx）
+        hProcess = OpenProcess(PROCESS_VM_WRITE Or PROCESS_VM_OPERATION Or PROCESS_QUERY_INFORMATION, False, pc->pid)
+        If hProcess = NULL Then
+            pc->hasError = True
+            pc->errorMsg = "Error: OpenProcess failed for PID=" & pc->pid & " (err=" & GetLastError() & "),try to load driver"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+    End If
+    
+    ' ── 修改内存保护属性（非驱动模式下可能需要）────────────
+    If IsDriverLoaded = False Then
+        If VirtualProtectEx(hProcess, Cast(LPVOID, pc->addr), dataLen, PAGE_EXECUTE_READWRITE, @oldProtect) = 0 Then
+            ' 尝试只读/读写
+            If VirtualProtectEx(hProcess, Cast(LPVOID, pc->addr), dataLen, PAGE_READWRITE, @oldProtect) = 0 Then
+                SafeStdOut("Warning: VirtualProtectEx failed (err=" & GetLastError() & "), attempting write anyway..." & vbCrLfW)
+                ' 某些情况下目标页已经是可写的，继续尝试
+            End If
+        End If
+    End If
+    
+    ' ── 执行写入 ───────────────────────────────────────────
+    If WriteProcessMemory(hProcess, Cast(LPVOID, pc->addr), @writeBuf(0), dataLen, @bytesWritten) = 0 Then
+        pc->hasError = True
+        pc->errorMsg = "Error: WriteProcessMemory failed at 0x" & Hex(pc->addr) & " (err=" & GetLastError() & "),try to load driver"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        
+        ' 恢复保护属性
+        If IsDriverLoaded = False And oldProtect <> 0 Then
+            VirtualProtectEx(hProcess, Cast(LPVOID, pc->addr), dataLen, oldProtect, @oldProtect)
+        End If
+        If IsDriverLoaded = False Then CloseHandle(hProcess)
+        Return False
+    End If
+    
+    ' ── 恢复内存保护属性 ───────────────────────────────────
+    If IsDriverLoaded = False And oldProtect <> 0 Then
+        Dim tmp As DWORD
+        VirtualProtectEx(hProcess, Cast(LPVOID, pc->addr), dataLen, oldProtect, @tmp)
+    End If
+    
+    ' ── 输出结果 ───────────────────────────────────────────
+    SafeStdOut("Wrote " & bytesWritten & "/" & dataLen & " bytes to PID=" & pc->pid & " at 0x" & Hex(pc->addr) & vbCrLfW)
+    
+    ' 打印写入内容的摘要（前 32 字节）
+    If dataLen <= 32 Then
+        Dim hexStr As WString * 100 = ""
+        For i = 0 To dataLen - 1
+            hexStr = hexStr & Hex(writeBuf(i), 2) & " "
+        Next i
+        SafeStdOut("Data: " & hexStr & vbCrLfW)
+    Else
+        Dim hexStr As WString * 100 = ""
+        For i = 0 To 15
+            hexStr = hexStr & Hex(writeBuf(i), 2) & " "
+        Next i
+        SafeStdOut("Data: " & hexStr & "... (" & dataLen & " bytes total)" & vbCrLfW)
+    End If
+    
+    ' ── 清理 ───────────────────────────────────────────────
+    If IsDriverLoaded = False Then
+        CloseHandle(hProcess)
+    End If
+    
+    Return True
+End Function
+
+' ===================== 内核内存读写（无需 PID，直接操作物理/内核地址）=====================
+
+Function Exec_KernelMemory_Read(ByVal pc As ParsedCmd Ptr) As Boolean
+    Dim buf() As Byte
+    Dim bytesRead As SIZE_T = 0
+    Dim i As Integer
+    Dim hexLine As WString * 80
+    Dim hexPart As WString * 50
+    Dim asciiPart As WString * 20
+    Dim b As Byte
+    
+    ' ── 参数校验 ─────────────────────────────────────────
+    If pc->hasAddr = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --addr required for kernel memory read"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    If pc->size = 0 Then
+        pc->size = 256   ' 默认读 256 字节
+        SafeStdOut("Notice: --size not specified, defaulting to 256 bytes." & vbCrLfW)
+    End If
+    
+    If pc->size > &H1000000 Then  ' 16MB 上限
+        pc->hasError = True
+        pc->errorMsg = "Error: --size exceeds 16MB limit"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 驱动检查 ─────────────────────────────────────────
+    If Not IsDriverLoaded Then
+        pc->hasError = True
+        pc->errorMsg = "Error: Driver not loaded. Use 'load-driver' first."
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 分配缓冲区 ─────────────────────────────────────────
+    ReDim buf(pc->size - 1)
+    
+    ' ── 执行内核读取 ───────────────────────────────────────
+    If Not ReadKernelMemory(Cast(UINTEGER, pc->addr), pc->size, @buf(0)) Then
+        pc->hasError = True
+        pc->errorMsg = "Error: ReadKernelMemory failed at 0x" & Hex(pc->addr)
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    bytesRead = pc->size  ' 内核读取成功即完整读取
+    
+    ' ── 输出结果 ───────────────────────────────────────────
+    SafeStdOut("Read " & bytesRead & " bytes from kernel address 0x" & Hex(pc->addr) & vbCrLfW)
+    
+    ' 十六进制 + ASCII 双栏输出
+    For i = 0 To bytesRead - 1
+        If (i Mod 16) = 0 Then
+            If i > 0 Then
+                SafeStdOut("  " & asciiPart & vbCrLfW)
+            End If
+            hexLine = Hex(pc->addr + i, 16) & "  "   ' 内核地址用16位宽
+            hexPart = ""
+            asciiPart = ""
+        End If
+        
+        b = buf(i)
+        hexPart = hexPart & Hex(b, 2) & " "
+        
+        If b >= 32 And b <= 126 Then
+            asciiPart = asciiPart & WChr(b)
+        Else
+            asciiPart = asciiPart & "."
+        End If
+    Next i
+    
+    ' 补齐最后一行
+    If bytesRead > 0 Then
+        Dim padCount As Integer = (16 - (bytesRead Mod 16)) Mod 16
+        For i = 1 To padCount
+            hexPart = hexPart & "   "
+        Next i
+        SafeStdOut(hexLine & hexPart & "  " & asciiPart & vbCrLfW)
+    End If
+    
+    Return True
+End Function
+
+Function Exec_KernelMemory_Write(ByVal pc As ParsedCmd Ptr) As Boolean
+    Dim writeBuf() As Byte
+    Dim i As Integer
+    Dim dataLen As Integer
+    
+    ' ── 参数校验 ─────────────────────────────────────────
+    If pc->hasAddr = False Then
+        pc->hasError = True
+        pc->errorMsg = "Error: --addr required for kernel memory write"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 驱动检查 ─────────────────────────────────────────
+    If Not IsDriverLoaded Then
+        pc->hasError = True
+        pc->errorMsg = "Error: Driver not loaded. Use 'load-driver' first."
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 准备写入数据 ───────────────────────────────────────
+    ' 优先使用 hexData 解析后的 bytdata
+    If pc->bytdata <> NULL And pc->size > 0 Then
+        dataLen = pc->size
+        ReDim writeBuf(dataLen - 1)
+        CopyMemory(@writeBuf(0), pc->bytdata, dataLen)
+    ElseIf LenW(pc->hexData) > 0 Then
+        ' 如果 bytdata 未设置但 hexData 有值，尝试解析（兜底）
+        ' 这里简化：直接报错，要求上层先解析
+        pc->hasError = True
+        pc->errorMsg = "Error: hex data not parsed. Internal error."
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    ElseIf pc->size > 0 Then
+        ' 无显式数据，按 size 写零
+        dataLen = pc->size
+        If dataLen > &H1000000 Then
+            pc->hasError = True
+            pc->errorMsg = "Error: --size exceeds 16MB limit"
+            SafeStdOut(pc->errorMsg & vbCrLfW)
+            Return False
+        End If
+        ReDim writeBuf(dataLen - 1)
+        ' 数组已自动初始化为 0
+    Else
+        pc->hasError = True
+        pc->errorMsg = "Error: --data <hex> required for write, or use --size N for zero-fill"
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        SafeStdOut("Usage: kernel-memory write --addr <ADDR> --data <HEX>" & vbCrLfW)
+        SafeStdOut("       kernel-memory write --addr <ADDR> --size <N>  (writes N zero bytes)" & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── Dry Run 模式 ───────────────────────────────────────
+    If pc->dryRun Then
+        SafeStdOut("[DRY RUN] Would write " & dataLen & " bytes to kernel address 0x" & Hex(pc->addr) & vbCrLfW)
+        Return True
+    End If
+    
+    ' ── 执行内核写入 ───────────────────────────────────────
+    If Not WriteKernelMemory(Cast(UINTEGER, pc->addr), dataLen, @writeBuf(0)) Then
+        pc->hasError = True
+        pc->errorMsg = "Error: WriteKernelMemory failed at 0x" & Hex(pc->addr)
+        SafeStdOut(pc->errorMsg & vbCrLfW)
+        Return False
+    End If
+    
+    ' ── 输出结果 ───────────────────────────────────────────
+    SafeStdOut("Wrote " & dataLen & " bytes to kernel address 0x" & Hex(pc->addr) & vbCrLfW)
+    
+    ' 打印写入内容的摘要（前 32 字节）
+    If dataLen <= 32 Then
+        Dim hexStr As WString * 100 = ""
+        For i = 0 To dataLen - 1
+            hexStr = hexStr & Hex(writeBuf(i), 2) & " "
+        Next i
+        SafeStdOut("Data: " & hexStr & vbCrLfW)
+    Else
+        Dim hexStr As WString * 100 = ""
+        For i = 0 To 15
+            hexStr = hexStr & Hex(writeBuf(i), 2) & " "
+        Next i
+        SafeStdOut("Data: " & hexStr & "... (" & dataLen & " bytes total)" & vbCrLfW)
+    End If
+    
     Return True
 End Function
 
@@ -786,7 +1533,7 @@ Function Exec_File_List(ByVal pc As ParsedCmd Ptr) As Boolean
     Return True
 End Function
 
-Function Exec_Registry_Read(ByVal pc As ParsedCmd Ptr) As Boolean
+Function Exec_Registry_List(ByVal pc As ParsedCmd Ptr) As Boolean
     CurrentInformation.intType = Registry
     InitializeListView Registry, FrmMain.ListView1
     InitializeTreeView FrmMain.TreeView
@@ -856,7 +1603,7 @@ End Function
 
 Function Exec_Thread_Resume(ByVal pc As ParsedCmd Ptr) As Boolean
     SafeStdOut("Executing: resume thread " & pc->tid & ",pid=" & pc->pid & vbCrlfW)
-    If MyResumeThread(pc->pid) Then
+    If MyResumeThread(pc->tid) Then
         SafeStdOut("Success!" & vbCrlfW)
         Return True
     Else
@@ -867,7 +1614,7 @@ End Function
 
 Function Exec_Thread_Suspend(ByVal pc As ParsedCmd Ptr) As Boolean
     SafeStdOut("Executing: suspend thread " & pc->tid & ",pid=" & pc->pid & vbCrlfW)
-    If MySuspendThread(pc->pid) Then
+    If MySuspendThread(pc->tid) Then
         SafeStdOut("Success!" & vbCrlfW)
         Return True
     Else
@@ -876,14 +1623,8 @@ Function Exec_Thread_Suspend(ByVal pc As ParsedCmd Ptr) As Boolean
     End If
 End Function
 
-Function Exec_Memory_Write(ByVal pc As ParsedCmd Ptr) As Boolean
-    SafeStdOut("Executing: Write memory PID=" & pc->pid & " Addr=0x" & Hex(pc->addr) & " Size=" & pc->size & vbCrlfW)
-    ' TODO: 调用 WriteProcessMemory 或驱动接口
-    Return True
-End Function
-
 Function Exec_Registry_Write(ByVal pc As ParsedCmd Ptr) As Boolean
-    SafeStdOut("Executing: Write registry " & pc->path & " -> " & pc->regName & " = " & pc->data & " (" & pc->regType & ")" & vbCrlfW)
+    SafeStdOut("Executing: Write registry " & pc->path & " -> " & pc->regName & " = " & pc->hexData & " (" & pc->regType & ")" & vbCrlfW)
     ' TODO: 调用 RegSetValueEx 或驱动接口
     Return True
 End Function
@@ -896,23 +1637,36 @@ End Function
 
 ' --------------- 统一分发器 ---------------
 Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) As Boolean
-    ' 必填参数校验
-    If def->needsPid Then ' AndAlso pc->pid = 0
-        SafeStdOut("ERROR: --pid is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
-        Return False
-    End If
-    If def->needsTid AndAlso pc->tid = 0 Then
-        SafeStdOut("ERROR: --tid is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
-        Return False
-    End If
-    If def->needsPath AndAlso pc->path = "" Then
-        SafeStdOut("ERROR: --path is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
-        Return False
-    End If
-    If def->needsAddr AndAlso pc->addr = 0 Then
-        SafeStdOut("ERROR: --addr is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
-        Return False
-    End If
+    Select Case def->pidMode
+    Case PM_REQUIRED
+        If pc->hasPid = False Then
+            SafeStdOut("ERROR: --pid is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
+            Return False
+        End If
+    Case PM_OPTIONAL
+        ' 什么都不做，hasPid=False 就是查全部
+    End Select
+    Select Case def->tidMode
+    Case PM_REQUIRED
+        If pc->hasTid = False Then
+            SafeStdOut("ERROR: --tid is required..." & vbCrlfW)
+            Return False
+        End If
+    End Select
+    Select Case def->pathMode
+    Case PM_REQUIRED
+        If pc->hasPid = False Then
+            SafeStdOut("ERROR: --path is required for '" & def->category & " " & def->action & "'." & vbCrlfW)
+            Return False
+        End If
+    End Select
+    Select Case def->addrMode
+    Case PM_REQUIRED
+        If pc->hasTid = False Then
+            SafeStdOut("ERROR: --addr is required..." & vbCrlfW)
+            Return False
+        End If
+    End Select
     
     ' 驱动检查
     If def->needsDriver AndAlso Not IsDriverLoaded Then
@@ -928,51 +1682,56 @@ Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) A
     Select Case key
         Case "process|list"       : Return Exec_Process_List(pc)
         Case "kernel-module|list" : Return Exec_KernelModule_List(pc)
-        Case "kernel-thread|list" : CurrentInformation.intType = KernelThread : InitializeListView KernelThread, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("notice: driver hasn't been loaded." & vbCrlfW) : GetKernelThreadList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "ssdt|list"          : CurrentInformation.intType = SSDT : InitializeListView SSDT, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetSSDT FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "sssdt|list"          : CurrentInformation.intType = ShadowSSDT : InitializeListView ShadowSSDT, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetSSSDT FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "kernel-thread|list" : InitializeListView KernelThread, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("notice: driver hasn't been loaded." & vbCrlfW) : GetKernelThreadList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "ssdt|list"          : InitializeListView SSDT, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetSSDT FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "sssdt|list"          : InitializeListView ShadowSSDT, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetSSSDT FrmMain.ListView1 : CuiPrintListViewData() : Return True
             
-        Case "hal-dispatch|read"  : CurrentInformation.intType = HalDispatch : InitializeListView HalDispatch, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHalDispatchTable FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "hal-private-dispatch|read": CurrentInformation.intType = HalPrivateDispatch : InitializeListView HalPrivateDispatch, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHalPrivateDispatchTable FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "object-hook|list"   : CurrentInformation.intType = ObjectHook : InitializeListView ObjectHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetObjectInfo FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "callbacks|list"     : CurrentInformation.intType = Callbacks : InitializeListView Callbacks, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetCallbackList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "kernel-timer|list"  : CurrentInformation.intType = KernelTimer : InitializeListView KernelTimer, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetKernelTimerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "work-item-thread|list": CurrentInformation.intType = WorkItemThread : InitializeListView WorkItemThread, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWorkItemThreadList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "wfp-callout|list"   : CurrentInformation.intType = WfpCallout : InitializeListView WfpCallout, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpCalloutList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "wfp-filter|list"    : CurrentInformation.intType = WfpFilter : InitializeListView WfpFilter, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpFilterList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "service|list"       : CurrentInformation.intType = Service : InitializeListView Service, FrmMain.ListView1 : GetServiceList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "hal-dispatch|read"  : InitializeListView HalDispatch, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHalDispatchTable FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "hal-private-dispatch|read": InitializeListView HalPrivateDispatch, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHalPrivateDispatchTable FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "object-hook|list"   : InitializeListView ObjectHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetObjectInfo FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "callbacks|list"     : InitializeListView Callbacks, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetCallbackList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "kernel-timer|list"  : InitializeListView KernelTimer, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetKernelTimerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "work-item-thread|list": InitializeListView WorkItemThread, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWorkItemThreadList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "wfp-callout|list"   : InitializeListView WfpCallout, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpCalloutList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "wfp-filter|list"    : InitializeListView WfpFilter, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpFilterList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "service|list"       : InitializeListView Service, FrmMain.ListView1 : GetServiceList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         
-        Case "etw-provider|list"  : CurrentInformation.intType = EtwProvider : InitializeListView EtwProvider, FrmMain.ListView1 : GetETWProviderList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "winsock-spi|list"   : CurrentInformation.intType = WinsockSPI : InitializeListView WinsockSPI, FrmMain.ListView1 : GetWinsockSPIList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "task-scheduler|list": CurrentInformation.intType = TaskScheduler : InitializeListView TaskScheduler, FrmMain.ListView1 : GetTaskSchedulerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "violent-check|scan" : CurrentInformation.intType = ViolentCheck : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "etw-provider|list"  : InitializeListView EtwProvider, FrmMain.ListView1 : GetETWProviderList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "winsock-spi|list"   : InitializeListView WinsockSPI, FrmMain.ListView1 : GetWinsockSPIList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "task-scheduler|list": InitializeListView TaskScheduler, FrmMain.ListView1 : GetTaskSchedulerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "violent-check|scan" : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True
         
         ' GDT / IDT / Minifilter / FilterDriver 等 TreeList 模块保持原样
-        Case "gdt|read"           : CurrentInformation.intType = GDT : InitializeTreeList GDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetGDT FrmMain.mCtrlTreeList1 : Return True
-        Case "idt|read"           : CurrentInformation.intType = IDT : InitializeTreeList IDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetIDT FrmMain.mCtrlTreeList1 : Return True
-        Case "minifilter|list"    : CurrentInformation.intType = Minifilter : InitializeTreeList Minifilter, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else EnumMinifilter FrmMain.mCtrlTreeList1 : Return True
-        Case "filterdriver|list"  : CurrentInformation.intType = FilterDriver : InitializeTreeList FilterDriver, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else EnumAttachDevices FrmMain.mCtrlTreeList1 : Return True
-
+        Case "gdt|read"           : InitializeTreeList GDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetGDT FrmMain.mCtrlTreeList1 : Return True
+        Case "idt|read"           : InitializeTreeList IDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetIDT FrmMain.mCtrlTreeList1 : Return True
+        Case "minifilter|list"    : InitializeTreeList Minifilter, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else EnumMinifilter FrmMain.mCtrlTreeList1 : Return True
+        Case "filterdriver|list"  : InitializeTreeList FilterDriver, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else EnumAttachDevices FrmMain.mCtrlTreeList1 : Return True
+            
+        Case "kernel-memory|read"  : Return Exec_KernelMemory_Read(pc)
+        Case "kernel-memory|write" : Return Exec_KernelMemory_Write(pc)
+            
         ' 二级查询
         Case "thread|list"        : Return Exec_Thread_List(pc)
-        Case "module|list"        : CurrentInformation.intType = Module : CurrentInformation.ProcessId = pc->pid : InitializeListView Module, FrmMain.ListView1 : GetModuleList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "windows|list"       : CurrentInformation.intType = Windows : CurrentInformation.ProcessId = pc->pid : InitializeListView Windows, FrmMain.ListView1 : GetWindowList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "handles|list"       : CurrentInformation.intType = Handles : CurrentInformation.ProcessId = pc->pid : InitializeListView Handles, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("notice: driver hasn't been loaded." & vbCrlfW) : GetHandleList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "module|list"        : InitializeListView Module, FrmMain.ListView1 : GetModuleList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "windows|list"       : InitializeListView Windows, FrmMain.ListView1 : GetWindowList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "handles|list"       : InitializeListView Handles, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("notice: driver hasn't been loaded." & vbCrlfW) : GetHandleList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "memory|list"      : InitializeListView Memory, FrmMain.ListView1 : GetMemoryBlockList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "memory|read"        : Return Exec_Memory_Read(pc)
-        Case "processtimer|list"  : CurrentInformation.intType = ProcessTimer : CurrentInformation.ProcessId = pc->pid : InitializeListView ProcessTimer, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetProcessTimerList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "webconnect|list"    : CurrentInformation.intType = WebConnect : CurrentInformation.ProcessId = pc->pid : InitializeListView WebConnect, FrmMain.ListView1 : GetWebConnectList pc->pid, FrmMain.ListView1, True : CuiPrintListViewData() : Return True
-        Case "privilege|list"     : CurrentInformation.intType = Privilege : CurrentInformation.ProcessId = pc->pid : InitializeListView Privilege, FrmMain.ListView1 : GetProcessPrivilegeList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "hook|list"          : CurrentInformation.intType = Hook : CurrentInformation.ProcessId = pc->pid : InitializeListView Hook, FrmMain.ListView1 : GetProcessHookList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "msghook|list"       : CurrentInformation.intType = MsgHook : CurrentInformation.ProcessId = pc->pid : InitializeListView MsgHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetMsgHookList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "eventhook|list"     : CurrentInformation.intType = EventHook : CurrentInformation.ProcessId = pc->pid : InitializeListView EventHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetEventHookList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "hotkey|list"        : CurrentInformation.intType = Hotkey : CurrentInformation.ProcessId = pc->pid : InitializeListView Hotkey, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHotkeyList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "memory|write"        : Return Exec_Memory_Write(pc)
+        Case "processtimer|list"  : InitializeListView ProcessTimer, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetProcessTimerList Not pc->hasPid, pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "webconnect|list"    : InitializeListView WebConnect, FrmMain.ListView1 : GetWebConnectList pc->pid, FrmMain.ListView1, Not pc->hasPid : CuiPrintListViewData() : Return True
+        Case "privilege|list"     : InitializeListView Privilege, FrmMain.ListView1 : GetProcessPrivilegeList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "hook|list"          : InitializeListView Hook, FrmMain.ListView1 : GetProcessHookList pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "msghook|list"       : InitializeListView MsgHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetMsgHookList Not pc->hasPid, pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "eventhook|list"     : InitializeListView EventHook, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetEventHookList Not pc->hasPid, pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "hotkey|list"        : InitializeListView Hotkey, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetHotkeyList Not pc->hasPid, pc->pid, FrmMain.ListView1 : CuiPrintListViewData() : Return True
         
         ' 三级查询
         Case "thread|callstack"   : Return Exec_Thread_CallStack(pc)
         
         ' 文件/注册表查询
         Case "file|list"          : Return Exec_File_List(pc)
-        Case "registry|read"      : Return Exec_Registry_Read(pc)
+        Case "registry|list"      : Return Exec_Registry_List(pc)
         
         ' 编辑/破坏性命令
         Case "process|suspend"   : Return Exec_Process_Suspend(pc)
@@ -1013,8 +1772,8 @@ Sub RunAgentRepl()
         
         If ReadConsoleW(hIn, @inputBuf, INPUT_BUF_SIZE - 1, @bytesRead, NULL) = 0 Then Exit Do
         If bytesRead = 0 Then Exit Do
+        inputBuf[bytesRead] = 0 ' 截断
         
-        inputBuf[bytesRead] = 0
         Dim cmd As StringW = MyTrimW(inputBuf, vbCrlfW & " ")
         If LenW(cmd) = 0 Then Continue Do
         
@@ -1085,4 +1844,136 @@ Sub RunAgentRepl()
     Loop
     
     End
+End Sub
+
+' ===================== Agent 管道 REPL =====================
+Sub RunAgentPipeRepl()
+    ' 从 Command 参数中提取管道名（由 ProceedCommandLine 解析时存入）
+    Dim pipeName As WString * 128 = ""
+    For i As Integer = 1 To 10
+        If UCase(Command(i)) = "--AGENT-PIPE" AndAlso (i + 1) <= 10 Then
+            pipeName = Command(i + 1)
+            Exit For
+        End If
+    Next
+    
+    If pipeName = "" Then
+        SafeStdOut "ERROR: --agent-pipe requires a pipe name" & vbCrlfW
+        Exit Sub
+    End If
+    
+    Dim pipeFullName As WString * 256 = "\\.\pipe\" & pipeName
+    
+    Do
+        ' 创建命名管道实例（阻塞模式，一次处理一个 Agent）
+        g_hAgentPipe = CreateNamedPipeW(@pipeFullName, _
+            PIPE_ACCESS_DUPLEX, _
+            PIPE_TYPE_BYTE Or PIPE_READMODE_BYTE Or PIPE_WAIT, _
+            PIPE_UNLIMITED_INSTANCES, _
+            65536, 65536, 0, NULL)
+            
+            If g_hAgentPipe = INVALID_HANDLE_VALUE Then
+            SafeStdOut "ERROR: Cannot create pipe " & pipeName & " (GLE=" & GetLastError() & ")" & vbCrlfW
+            Exit Sub
+        End If
+        
+        ' 等待 Agent 连接
+        If ConnectNamedPipe(g_hAgentPipe, NULL) = 0 Then
+            Dim gle As DWORD = GetLastError()
+            If gle <> ERROR_PIPE_CONNECTED Then
+                CloseHandle(g_hAgentPipe)
+                g_hAgentPipe = INVALID_HANDLE_VALUE
+                Sleep 100
+                Continue Do
+            End If
+            ' ERROR_PIPE_CONNECTED 表示 Agent 在 CreateNamedPipe 和 ConnectNamedPipe 之间已连接
+        End If
+        
+        ' === Agent 已连接 ===
+        InitCommandRegistry()
+        SafeStdOut("SnowSword Agent v2.0 (Pipe Mode)" & vbCrlfW)
+        SafeStdOut("Pipe: " & pipeName & vbCrlfW)
+        
+        Dim clientAlive As Boolean = True
+        Do While clientAlive
+            SafeStdOut("ANTIROOTKIT> ")
+            
+            Dim strLine As WString * INPUT_BUF_SIZE = ""
+            If Not PipeReadLine(@strLine, INPUT_BUF_SIZE) Then
+                ' 客户端断开或读取失败
+                clientAlive = False
+                Continue Do
+            End If
+            
+            Dim cmd As StringW = MyTrimW(strLine, vbCrlfW & " ")
+            If LenW(cmd) = 0 Then Continue Do
+            
+            Dim cmdParts() As StringW
+            Dim numParts As Long = vbSplitW(cmd, " ", cmdParts())
+            If numParts = 0 Then Continue Do
+            
+            Dim verb As StringW = LCaseW(cmdParts(0))
+            
+            ' ---------------- 全局命令 ----------------
+            If verb = "exit" Then
+                clientAlive = False
+                Continue Do
+                
+            ElseIf verb = "load-driver" Then
+                If InitDriver Then SafeStdOut("SUCCESS: Driver loaded." & vbCrlfW) Else SafeStdOut("ERROR: Driver load failed." & vbCrlfW)
+                Continue Do
+
+            ElseIf verb = "unload-driver" Then
+                UninitDriver
+                SafeStdOut("SUCCESS: Driver unloaded." & vbCrlfW)
+                Continue Do
+                    
+            ElseIf verb = "help" Then
+                If numParts = 1 Then
+                    PrintGlobalHelp()
+                ElseIf numParts >= 2 Then
+                    Dim tmp As ParsedCmd
+                    tmp.category = cmdParts(1)
+                    If numParts >= 3 Then tmp.action = cmdParts(2) Else tmp.action = ""
+                    Dim def As CmdEntry Ptr = FindCmd(tmp.category, tmp.action)
+                    If def <> NULL AndAlso numParts >= 3 Then
+                        PrintActionHelp(def)
+                    Else
+                        PrintCategoryHelp(cmdParts(1))
+                    End If
+                End If
+                Continue Do
+            End If
+            
+            ' ---------------- 子命令解析 ----------------
+            Dim pc As ParsedCmd
+            If Not ParseCommandLine(cmdParts(), numParts, @pc) Then
+                SafeStdOut(pc.errorMsg & vbCrlfW)
+                Continue Do
+            End If
+            
+            If pc.showHelp Then
+                Dim def As CmdEntry Ptr = FindCmd(pc.category, pc.action)
+                If def <> NULL Then PrintActionHelp(def) _
+                Else SafeStdOut("Unknown command. Type 'help' for available commands." & vbCrlfW)
+                Continue Do
+            End If
+            
+            Dim def As CmdEntry Ptr = FindCmd(pc.category, pc.action)
+            If def = NULL Then
+                SafeStdOut("ERROR: Unknown command '" & pc.category & " " & pc.action & "'. Type 'help' for available commands." & vbCrlfW)
+                Continue Do
+            End If
+            
+            DispatchCommand(@pc, def)
+            
+        Loop
+        
+        ' 清理连接
+        FlushFileBuffers(g_hAgentPipe)
+        DisconnectNamedPipe(g_hAgentPipe)
+        CloseHandle(g_hAgentPipe)
+        g_hAgentPipe = INVALID_HANDLE_VALUE
+        
+    Loop
 End Sub

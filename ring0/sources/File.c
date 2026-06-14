@@ -1026,7 +1026,7 @@ NTSTATUS OpenVolumeDevice(
         return status;
 
     *VolumeDevice = IoGetRelatedDeviceObject(fileObject);
-
+    ObReferenceObject(*VolumeDevice);
     ObDereferenceObject(fileObject);
     return STATUS_SUCCESS;
 }
@@ -1082,33 +1082,88 @@ NTSTATUS GetVolumeDiskExtents(
 }
 
 // 打开物理磁盘设备对象（\Device\HarddiskX\DRX）
+//NTSTATUS OpenDiskDevice(
+//    _In_ ULONG DiskNumber,
+//    _Out_ PDEVICE_OBJECT* DiskDevice
+//)
+//{
+//    NTSTATUS status;
+//    WCHAR path[64];
+//    UNICODE_STRING name;
+//    PFILE_OBJECT fileObject;
+//	PDEVICE_OBJECT topDevice;
+//
+//    RtlStringCbPrintfW(path, sizeof(path),
+//        L"\\Device\\Harddisk%d\\DR%d",
+//        DiskNumber, 0);
+//
+//    RtlInitUnicodeString(&name, path);
+//
+//    status = IoGetDeviceObjectPointer(
+//        &name,
+//        FILE_READ_DATA | FILE_WRITE_DATA,
+//        &fileObject,
+//        &topDevice
+//    );
+//
+//    if (!NT_SUCCESS(status))
+//        return status;
+//
+//    // 获取最底层设备对象
+//    PDEVICE_OBJECT physicalDevice = IoGetAttachedDeviceReference(topDevice);
+//    // 释放顶层设备引用（不再需要 fileObject，但注意引用计数）
+//    ObDereferenceObject(fileObject);
+//    // 现在 physicalDevice 就是物理磁盘设备
+//    *DiskDevice = physicalDevice;
+//    return STATUS_SUCCESS;
+//}
 NTSTATUS OpenDiskDevice(
     _In_ ULONG DiskNumber,
     _Out_ PDEVICE_OBJECT* DiskDevice
 )
 {
     NTSTATUS status;
+    UNICODE_STRING us;
     WCHAR path[64];
-    UNICODE_STRING name;
+    HANDLE hFile;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
     PFILE_OBJECT fileObject;
 
-    RtlStringCbPrintfW(path, sizeof(path),
-        L"\\Device\\Harddisk%d\\DR%d",
-        DiskNumber, 0);
+    RtlStringCbPrintfW(path, sizeof(path), L"\\??\\PhysicalDrive%u", DiskNumber);
+    RtlInitUnicodeString(&us, path);
+    InitializeObjectAttributes(&oa, &us, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-    RtlInitUnicodeString(&name, path);
-
-    status = IoGetDeviceObjectPointer(
-        &name,
-        FILE_READ_DATA | FILE_WRITE_DATA,
-        &fileObject,
-        DiskDevice
+    status = ZwCreateFile(
+        &hFile,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        &oa,
+        &iosb,
+        NULL,
+        FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        FILE_OPEN,
+        FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL,
+        0
     );
+    if (!NT_SUCCESS(status)) return status;
 
-    if (!NT_SUCCESS(status))
-        return status;
+    status = ObReferenceObjectByHandle(
+        hFile,
+        0,
+        *IoFileObjectType,
+        KernelMode,
+        (PVOID*)&fileObject,
+        NULL
+    );
+    ZwClose(hFile);
+    if (!NT_SUCCESS(status)) return status;
 
+    *DiskDevice = IoGetRelatedDeviceObject(fileObject);
+    ObReferenceObject(*DiskDevice);
     ObDereferenceObject(fileObject);
+
     return STATUS_SUCCESS;
 }
 
@@ -1140,9 +1195,6 @@ NTSTATUS GetDiskSectorSize(
 
     if (irp == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-
-    // ===================== 绕过fltmgr核心修改 =====================
-    IoSkipCurrentIrpStackLocation(irp);
 
     status = IoCallDriver(DiskDevice, irp);
     if (status == STATUS_PENDING) {
@@ -1190,7 +1242,6 @@ NTSTATUS DiskReadSectors(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    IoSetNextIrpStackLocation(irp);
     irp->MdlAddress = mdl;
     irp->UserEvent = &event;
     irp->UserIosb = &iosb;
@@ -1363,15 +1414,19 @@ NTSTATUS HandleVolumeSectorRead(
         DbgPrint("Failed to open disk device for disk number %u: %X\n", diskNumber, status);
         goto Cleanup;
     }
-
+	DbgPrint("diskDevice:0x%p\n", diskDevice);
     status = GetDiskSectorSize(diskDevice, &bytesPerSector);
     if (!NT_SUCCESS(status)) {
         DbgPrint("Failed to get disk sector size: %X\n", status);
         goto Cleanup;
     }
 
-    AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
+    status = AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
         &alignedByteOffset, &alignedLength);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("AlignRangeToSectors failed: %X\n", status);
+        goto Cleanup;
+    }
 
     userLen = (ULONG)MmGetMdlByteCount(Irp->MdlAddress);
     if (length > userLen) {
@@ -1459,8 +1514,12 @@ NTSTATUS HandleVolumeSectorWrite(
     status = GetDiskSectorSize(diskDevice, &bytesPerSector);
     if (!NT_SUCCESS(status)) goto Cleanup;
 
-    AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
+    status = AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
         &alignedByteOffset, &alignedLength);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("AlignRangeToSectors failed: %X\n", status);
+        goto Cleanup;
+    }
 
     if (length > MmGetMdlByteCount(Irp->MdlAddress)) {
         status = STATUS_BUFFER_TOO_SMALL;

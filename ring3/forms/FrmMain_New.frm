@@ -359,19 +359,6 @@ ToolTip=
 ToolTipBalloon=False
 AcceptFiles=False
 
-[ImageList]
-Name=ImageList1
-Help=
-Index=-1
-Image=
-SizeW=16
-SizeH=16
-DPI=True
-BackColor=SYS,15
-Left=580
-Top=180
-Tag=
-
 [Frame]
 Name=Frame3
 Help=
@@ -697,7 +684,7 @@ Tag=
 Name=mnuColumn
 Help=
 Index=-1
-Menu=
+Menu=选择更多列FrmMain_mnuColumn_mnuSelectMoreColumn0-10
 Left=620
 Top=220
 Tag=
@@ -1282,9 +1269,10 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
         InitThreadPool
         InitLog
         
+        
         SymEngine_Init
         ' 启动 REPL 阻塞循环
-        If g_InAgentMode Then RunAgentPipeRepl Else RunAgentRepl
+        RunAgentRepl()
         Exit Sub ' 保险，正常情况 End 在 REPL 内部执行
     End If
     'ChangeWindowMessageFilter(0x0049, MSGFLT_ADD)'允许拖放文件
@@ -1296,16 +1284,6 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     ListView_SetExtendedListViewStyleEx(ListView1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
     TreeView_SetExtendedStyle(TreeView.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
     TreeView_SetExtendedStyle(mCtrlTreeList1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
-    
-    Dim sfi As SHFILEINFO
-    Dim hSysImageList As HIMAGELIST = Cast(HIMAGELIST, SHGetFileInfo( _
-        App.Path, _                          ' 任意存在的路径
-        0, _                               ' 文件属性
-        @sfi, _                            ' SHFILEINFO 结构
-        SizeOf(SHFILEINFO), _              ' 结构大小
-        SHGFI_SYSICONINDEX Or SHGFI_SMALLICON _  ' 【关键标志】
-    ))
-    ListView_SetImageList(ListView1.hWnd, hSysImageList, LVSIL_SMALL)
     
     gLayoutMode = LAYOUT_LIST_ONLY
     gMainView = VIEW_LISTVIEW
@@ -1376,7 +1354,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     InitLog
     
     InitThreadPool
-    'CheckUpdate
+    CheckUpdate
     bFrmMainShowed = True
     
     SymEngine_Init
@@ -2348,14 +2326,6 @@ End Function
 'lParam      副消息参数，什么作用，由发送消息者定义
 Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lParam As lParam) As LResult
     Select Case wMsg
-    Case WM_COMMAND
-        Dim cmdId As ULong = LOWORD(wParam)
-        Dim notifyCode As ULong = HIWORD(wParam)
-        ' 检查是否是我们的动态菜单范围
-        If cmdId >= IDM_SELECT_COLUMN_BASE And cmdId < IDM_SELECT_COLUMN_BASE + 100 Then
-            ' 手动调用处理函数
-            FrmMain_mnuColumn_WM_Command(hWndForm, cmdId)
-        End If
     Case WM_NOTIFY
         Dim Nmhdr As NMHDR Ptr = Cast(NMHDR Ptr, lParam)
         If Nmhdr->hwndFrom = ListView1.hWnd Then ' 这里可以添加对多个控件的处理?
@@ -2378,12 +2348,7 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
                 If real < 0 Or real >= ctx->Snap->RowCount Then Return 0
                 Dim r As LVRow Ptr = ctx->Snap->Rows[real]
                 If r = NULL Then Return 0 ' 行数据为空
-                
-                ' ========== 新增：返回图标索引 ==========
-                If (p->item.mask And LVIF_IMAGE) <> 0 Then
-                    p->item.iImage = r->iconIndex
-                End If
-                
+
                 If (p->item.mask And LVIF_TEXT) <> 0 Then
                     If p->item.iSubItem < r->ColCount Then
                         p->item.pszText = r->Cols[p->item.iSubItem]
@@ -3029,7 +2994,7 @@ Sub FrmMain_WM_Size(hWndForm As hWnd, fwSizeType As Long, nWidth As Long, nHeigh
     ' ==============================================
     ' 只有【初始化完成后】的 SIZE_RESTORED 才执行（用户手动调整）
     ' ==============================================
-    If fwSizeType = SIZE_RESTORED Or fwSizeType = SIZE_MAXIMIZED Then
+    If fwSizeType = SIZE_RESTORED Then
         'Print "[FrmMain_WM_Size]fwSizeType = " & fwSizeType & " nWidth:" & nWidth & " nHeight:" & nHeight
         'gLayoutMode = LAYOUT_LIST_ONLY
         'gMainView = VIEW_LISTVIEW
@@ -4020,7 +3985,6 @@ End Sub
 'hWndForm 当前窗口的句柄
 'wID      菜单项命令ID = IDM_SELECT_COLUMN_BASE + 列索引
 Sub FrmMain_mnuColumn_WM_Command(hWndForm As hWnd, wID As ULong)
-    Print "wID:" & wID
     Dim colIdx As Long = CLng(wID) - CLng(IDM_SELECT_COLUMN_BASE)
     If colIdx < 0 Then Exit Sub
     
@@ -4033,4 +3997,3 @@ Sub FrmMain_mnuColumn_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim curVisible As Boolean = GetColumnVisible(intType, colIdx)
     SetColumnVisible intType, colIdx, Not curVisible, ListView1.hWnd
 End Sub
-

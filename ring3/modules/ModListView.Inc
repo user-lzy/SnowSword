@@ -89,6 +89,7 @@ Type LVRow
     Cols As Wstring Ptr Ptr   ' 二级指针（不变）
     Fore As COLORREF
     Back As COLORREF
+    iconIndex As Long
 End Type
 
 ' 🔥 移除 (Any) → 改为纯指针
@@ -157,6 +158,14 @@ Type ViewModuleCache
     ItemCount As Long            ' 项数量
 End Type
 
+' ===================== 列配置：列表头右键菜单"选择列"功能 =====================
+Type ColumnConfig
+    Names(Any) As WString Ptr     ' 列名（宽字符串堆分配）
+    Widths(Any) As Long           ' 保存的列宽（隐藏前备份，恢复时使用）
+    Visible(Any) As Boolean       ' 当前可见状态
+    Count As Long                 ' 列数
+End Type
+
 Type ListViewContext
     hLV As HWND
 
@@ -180,6 +189,11 @@ End Type
 
 ' 3. 全局缓存数组：为每个模块分配独立缓存（核心）
 Dim Shared g_ViewCache(MaxInterfaceCount - 1) As ViewModuleCache
+' 列配置全局数组（列表头右键菜单"选择列"功能）
+Dim Shared g_ColumnConfig(MaxInterfaceCount - 1) As ColumnConfig
+
+' 动态列选择菜单的命令 ID 基数（避免与静态 ID 冲突，静态 ID 通常 < 2000）
+Const IDM_SELECT_COLUMN_BASE As ULong = 50000
 
 Const FB_Red As COLORREF = BGR(255, 0, 0)
 Const FB_LightPinkRed As COLORREF = BGR(240, 210, 210)
@@ -195,6 +209,25 @@ Const FB_BoheGreen As COLORREF = BGR(220, 240, 212)
 Dim Shared CurrentInformationArray() As CURRENT_INFORMATION
 Dim Shared pOldWindowProc As PVOID
 
+' ============================================
+' 获取指定文件/文件夹的图标索引
+' ============================================
+Function GetFileIconIndex(ByVal filePath As String, ByVal isDirectory As Boolean = False) As Long
+    Dim sfi As SHFILEINFO
+    Dim dwAttr As DWORD = 0
+    
+    ' 如果是文件夹，设置目录属性标志
+    If isDirectory Then dwAttr = FILE_ATTRIBUTE_DIRECTORY
+    
+    ' 调用 SHGetFileInfo 获取图标索引
+    SHGetFileInfo(filePath, dwAttr, @sfi, SizeOf(SHFILEINFO), _
+        SHGFI_SYSICONINDEX Or SHGFI_SMALLICON Or SHGFI_USEFILEATTRIBUTES)
+    
+    ' 返回图标索引（在系统 ImageList 中的位置）
+    Return sfi.iIcon
+    
+End Function
+
 Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
     ListView.DeleteAllColumn
     ListView.DeleteAllItems ' 此处是否有问题
@@ -205,7 +238,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "内存占用",, 200
                 .AddColumn "状态",, 200
             Case Process
-                .AddColumn "PID",, 100
+                .AddColumn "PID",, 150
                 .AddColumn "PPID",, 100
                 .AddColumn "EPROCESS",, 270
                 .AddColumn "名称",, 200
@@ -385,7 +418,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "FlowDelete",, 300
                 .AddColumn "名称",, 300
             Case File
-                .AddColumn "名称",, 250
+                .AddColumn "名称",, 300
                 .ADdColumn "类型",, 200
                 .AddColumn "大小",, 100
             Case FileStream
@@ -478,6 +511,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "文件描述",, 180
         End Select
     End With
+    InitColumnConfig FuncType, ListView
 End Sub
 
 Sub InitializeTreeView(TreeView As Class_TreeView)
@@ -551,6 +585,105 @@ Private Function DupFromStringW(ByRef s As StringW) As WCHAR Ptr
     memcpy(buf, src, (nLen + 1) * SizeOf(WCHAR))
     Return buf
 End Function
+
+' 初始化列配置：从 ListView 读取列名和宽度，默认全部可见
+' 调用时机：InitializeListView 各分支之后
+Sub InitColumnConfig(ByVal FuncType As Interface, ListView As Class_ListView)
+    Dim cfg As ColumnConfig Ptr = @g_ColumnConfig(FuncType)
+    
+    ' 保存旧的可见性状态（防止重复初始化时丢失用户设置）
+    Dim oldVisible() As Boolean
+    Dim hasOld As Boolean = (cfg->Count > 0)
+    If hasOld Then
+        ReDim oldVisible(cfg->Count - 1)
+        For i As Long = 0 To cfg->Count - 1
+            oldVisible(i) = cfg->Visible(i)
+        Next
+    End If
+    
+    ' 释放旧数据
+    If cfg->Count > 0 Then
+        For i As Long = 0 To cfg->Count - 1
+            If cfg->Names(i) <> 0 Then Deallocate cfg->Names(i)
+        Next
+        Erase cfg->Names
+        Erase cfg->Widths
+        Erase cfg->Visible
+    End If
+    cfg->Count = 0
+    
+    Dim hLV As HWND = ListView.hWnd
+    Dim hdr As HWND = ListView_GetHeader(hLV)
+    If hdr = NULL Then Exit Sub
+    
+    Dim colCount As Long = Header_GetItemCount(hdr)
+    If colCount <= 0 Then Exit Sub
+    
+    cfg->Count = colCount
+    ReDim cfg->Names(colCount - 1)
+    ReDim cfg->Widths(colCount - 1)
+    ReDim cfg->Visible(colCount - 1)
+    
+    Dim buffer As WString * 256
+    Dim hdi As HDITEM
+    
+    For i As Long = 0 To colCount - 1
+        ' 读取列标题文本和宽度
+        buffer = ""
+        hdi.mask = HDI_TEXT Or HDI_WIDTH
+        hdi.pszText = @buffer
+        hdi.cchTextMax = 256
+        SendMessage hdr, HDM_GETITEM, i, Cast(LPARAM, @hdi)
+        
+        cfg->Names(i) = DupWStr(@buffer)
+        cfg->Widths(i) = ListView_GetColumnWidth(hLV, i)
+        
+        ' 恢复可见性：若旧配置中有匹配列，保留用户选择
+        If hasOld AndAlso i <= UBound(oldVisible) Then
+            cfg->Visible(i) = oldVisible(i)
+        Else
+            cfg->Visible(i) = True
+        End If
+    Next
+End Sub
+
+' 设置列可见性：visible=True 恢复保存的宽度，visible=False 将列宽设为 0
+Sub SetColumnVisible(ByVal FuncType As Interface, ByVal colIdx As Long, ByVal visible As Boolean, ByVal hLV As HWND)
+    Dim cfg As ColumnConfig Ptr = @g_ColumnConfig(FuncType)
+    If cfg->Count <= 0 Or colIdx < 0 Or colIdx >= cfg->Count Then Exit Sub
+    
+    If visible Then
+        ' 恢复列宽：若保存宽度为 0，使用默认 100
+        Dim w As Long = cfg->Widths(colIdx)
+        If w <= 0 Then w = 100
+        ListView_SetColumnWidth(hLV, colIdx, w)
+    Else
+        ' 保存当前宽度，然后隐藏
+        cfg->Widths(colIdx) = ListView_GetColumnWidth(hLV, colIdx)
+        ListView_SetColumnWidth(hLV, colIdx, 0)
+    End If
+    cfg->Visible(colIdx) = visible
+End Sub
+
+' 获取列可见性
+Function GetColumnVisible(ByVal FuncType As Interface, ByVal colIdx As Long) As Boolean
+    Dim cfg As ColumnConfig Ptr = @g_ColumnConfig(FuncType)
+    If cfg->Count <= 0 Or colIdx < 0 Or colIdx >= cfg->Count Then Return False
+    Return cfg->Visible(colIdx)
+End Function
+
+' 恢复列可见性：切换回该视图时调用（在 InitializeListView 之后立即调用）
+' 将用户之前隐藏的列重新设为宽度 0
+Sub RestoreColumnVisibility(ByVal FuncType As Interface, ByVal hLV As HWND)
+    Dim cfg As ColumnConfig Ptr = @g_ColumnConfig(FuncType)
+    If cfg->Count <= 0 Then Exit Sub
+    
+    For i As Long = 0 To cfg->Count - 1
+        If Not cfg->Visible(i) Then
+            ListView_SetColumnWidth(hLV, i, 0)
+        End If
+    Next
+End Sub
 
 Sub Cache_AddRow(ByVal moduleType As Interface, ByVal row As LVRow Ptr)
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
@@ -1564,6 +1697,7 @@ Function AddItemEx( _
     row->ColCount = 1
     row->Fore = Fore
     row->Back = Back
+    row->iconIndex = I_IMAGENONE
     row->Cols = CAllocate(1, SizeOf(WCHAR Ptr))
     If row->Cols = NULL Then
         Deallocate(row)
@@ -1595,8 +1729,8 @@ End Function
 Function AddItemColListEx CDecl ( _
     ListView As Class_ListView, _
     colCnt As Long, _
-    Fore   As COLORREF = FB_Black, _
-    Back   As COLORREF = FB_White, _
+    Fore As COLORREF = FB_Black, _
+    Back As COLORREF = FB_White, _
     ... _
 ) As Long
 
@@ -1607,6 +1741,7 @@ Function AddItemColListEx CDecl ( _
     row->ColCount = colCnt
     row->Fore = Fore
     row->Back = Back
+    row->iconIndex = I_IMAGENONE
     row->Cols = Callocate(colCnt, SizeOf(WCHAR Ptr))
 
     Dim ap As Any Ptr
@@ -1672,6 +1807,18 @@ Sub SetItemTextEx(ListView As Class_ListView, Row As Long, Col As Long, Text As 
     
     ' 设置新文本
     r->Cols[Col] = DupWStr(StrPtrW(Text))
+End Sub
+
+Sub SetItemIconEx(ListView As Class_ListView, Row As Long, iconIndex As Long)
+    Dim ctx As ListViewContext Ptr = _
+        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+
+    If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
+    Dim r As LVRow Ptr = ctx->Snap->Rows[Row]
+    If r = NULL Then Exit Sub
+    
+    ' 设置新文本
+    r->iconIndex = iconIndex
 End Sub
 
 Sub SetListViewFilter(ListView As Class_ListView, s As StringW)

@@ -206,6 +206,7 @@ Function GetRemoteVersionJson _
     Dim As DWORD nLen = 0, statusCode = 0
     Dim As Boolean bOK = FALSE
     Dim As HINTERNET hSession = NULL, hConn = NULL, hReq = NULL
+    Dim As WString * 4096 wResponse
     Dim As WString * 256 host = "", path = ""
     Dim As Integer pos1 = 0
     Dim As DWORD bufSize = 8
@@ -252,8 +253,16 @@ Function GetRemoteVersionJson _
 
     ' 读取数据
     InternetReadFile(hReq, buf, 8191, @nLen)
+    ' ==========================================================
+    ' 【关键修复】先把 UTF-8 原始响应转为 WString，再传给日志
+    ' ==========================================================
+    If nLen > 0 Then
+        ' 只转 nLen 长度（避免把 Allocate 的 8192 尾部垃圾也带进来）
+        MultiByteToWideChar(CP_UTF8, 0, Cast(ZString Ptr, buf), nLen, @wResponse, 4095)
+        wResponse[4095] = 0   ' 强制终止，防溢出
+    End If
     DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "【数据长度】：" & nLen
-    DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "【返回内容】：" & *Cast(ZString Ptr, buf)
+    DEBUG_LOG LOG_INFO, "GetRemoteVersionJson",, "【返回内容】：" & wResponse
 
     ' 解析JSON
     If nLen > 0 Then
@@ -318,8 +327,12 @@ Sub ReplaceJsonNewLine(str1 As WString Ptr)
         End If
     Wend
     
+    ' 🔥【核心修复】必须显式添加宽字符 null terminator，否则 wcscpy 会复制栈垃圾
+    temp[idx] = 0
+    
     ' 覆盖原字符串
-    wcscpy(str1, @temp)
+    wcsncpy(str1, @temp, 1023)
+    str1[1023] = 0   ' 确保终止
 End Sub
 
 ' 更新检测主逻辑

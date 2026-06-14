@@ -142,7 +142,7 @@ Function GetVkKeyStr(ByVal vkCode As DWORD) As StringW
 End Function
 
 ' 消息钩子枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
+Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHook As Class_ListView)
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -200,7 +200,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
     InitListViewData lvwMsgHook
     ' ====================== 消息钩子 PID列处理 ======================
     Const MSGHOOK_PID_COL_INDEX = 5
-    If PID <> Cast(DWORD, -1) Then
+    If Not bGlobal Then
         If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) = "PID" Then
             lvwMsgHook.DeleteColumn(MSGHOOK_PID_COL_INDEX)
         End If
@@ -220,7 +220,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
         Dim hookTypeStr As StringW = GetHookTypeName(info.HookType)
         Dim scopeStr As StringW = IIf(info.IsGlobal, "全局钩子", "线程钩子")
         
-        If (PID <> Cast(DWORD, -1)) AndAlso (PID <> info.ProcessId) Then Continue For ' 过滤
+        If (Not bGlobal) AndAlso (PID <> info.ProcessId) Then Continue For ' 过滤
         
         If IsDriverLoaded Then
             hProcess = SnowSword_OpenProcess(info.ProcessId)
@@ -248,8 +248,8 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
             WStr(scopeStr), _
             "0x" & WHex(realVA), _
             finalModulePath, _
-            WStr(info.ProcessId), _
-            WStr(info.ThreadId)
+            WStr(info.ThreadId), _
+            WStr(info.ProcessId)
 
         ' 调试打印
         MyLog.PrintLog LOG_INFO, "GetMsgHook",, "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
@@ -263,7 +263,7 @@ Public Sub GetMsgHookList(ByVal PID As DWORD, lvwMsgHook As Class_ListView)
 End Sub
 
 ' 事件钩子枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
+Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEventHook As Class_ListView)
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -275,24 +275,25 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
         Print "[GetEventHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
         Exit Sub
     End If
-
+    
+    InitListViewData lvwEventHook
+    ' ====================== 事件钩子 PID列处理 ======================
+    ' PID列索引：5 | 列名：PID
+    Const EVENTHOOK_PID_COL_INDEX = 5
+    If Not bGlobal Then
+        If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) = "PID" Then
+            lvwEventHook.DeleteColumn(EVENTHOOK_PID_COL_INDEX)
+        End If
+    Else
+        If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) <> "PID" Then
+            lvwEventHook.InsertColumn(EVENTHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
+        End If
+    End If
+    ' =================================================================
+    
     dataSize = lpRet
     If dataSize = 0 Then
         Print "未发现任何事件钩子"
-        InitListViewData lvwEventHook
-        ' ====================== 事件钩子 PID列处理 ======================
-        ' PID列索引：5 | 列名：PID
-        Const EVENTHOOK_PID_COL_INDEX = 5
-        If PID <> Cast(DWORD, -1) Then
-            If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) = "PID" Then
-                lvwEventHook.DeleteColumn(EVENTHOOK_PID_COL_INDEX)
-            End If
-        Else
-            If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) <> "PID" Then
-                lvwEventHook.InsertColumn(EVENTHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-            End If
-        End If
-        ' =================================================================
         CommitListViewView lvwEventHook
         Exit Sub
     End If
@@ -315,29 +316,14 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
     ' 解析数据
     Dim hookCount As ULong = dataSize / SizeOf(WIN32K_WINEVENT_HOOK_INFO)
     Dim pHook As WIN32K_WINEVENT_HOOK_INFO Ptr = pData
-
-    InitListViewData lvwEventHook
-    ' ====================== 事件钩子 PID列处理 ======================
-    Const EVENTHOOK_PID_COL_INDEX = 5
-    If PID <> Cast(DWORD, -1) Then
-        If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) = "PID" Then
-            lvwEventHook.DeleteColumn(EVENTHOOK_PID_COL_INDEX)
-        End If
-    Else
-        If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) <> "PID" Then
-            lvwEventHook.InsertColumn(EVENTHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-        End If
-    End If
-    ' =================================================================
-    'Print "==================== 事件钩子列表 ===================="
-
+    
     For i As Integer = 0 To hookCount - 1
         Dim info As WIN32K_WINEVENT_HOOK_INFO = pHook[i]
         Dim realVA As ULONG64 = Cast(ULONG64, info.ActualCallback)
         Dim finalModulePath As WString * 260
         Dim hProcess As HANDLE = NULL
         
-        If (PID <> Cast(DWORD, -1)) AndAlso (PID <> info.ProcessId) Then Continue For ' 过滤
+        If (Not bGlobal) AndAlso (PID <> info.ProcessId) Then Continue For ' 过滤
         
         If IsDriverLoaded Then
             hProcess = SnowSword_OpenProcess(info.ProcessId)
@@ -356,16 +342,28 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
         End If
 
         ' 填充ListView
-        AddItemColListEx lvwEventHook, 9,,, _
-            "0x" & WHex(info.HookHandle), _
-            "0x" & WHex(info.EventMin) & "~0x" & WHex(info.EventMax), _
-            WStr(info.dwFlags), _
-            "0x" & WHex(realVA), _
-            WStr(finalModulePath), _
-            WStr(info.ProcessId), _
-            WStr(info.ThreadId), _
-            WStr(info.TargetProcessId), _
-            WStr(info.TargetThreadId)
+        If Not bGlobal Then
+            AddItemColListEx lvwEventHook, 8,,, _
+                "0x" & WHex(info.HookHandle), _
+                "0x" & WHex(info.EventMin) & "~0x" & WHex(info.EventMax), _
+                WStr(info.dwFlags), _
+                "0x" & WHex(realVA), _
+                WStr(finalModulePath), _
+                WStr(info.ThreadId), _
+                WStr(info.TargetProcessId), _
+                WStr(info.TargetThreadId)
+        Else
+            AddItemColListEx lvwEventHook, 9,,, _
+                "0x" & WHex(info.HookHandle), _
+                "0x" & WHex(info.EventMin) & "~0x" & WHex(info.EventMax), _
+                WStr(info.dwFlags), _
+                "0x" & WHex(realVA), _
+                WStr(finalModulePath), _
+                WStr(info.ProcessId), _
+                WStr(info.ThreadId), _
+                WStr(info.TargetProcessId), _
+                WStr(info.TargetThreadId)
+        End If
 
         ' 调试打印
         MyLog.PrintLog LOG_INFO, "GetEventHookList",, "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
@@ -375,11 +373,10 @@ Public Sub GetEventHookList(ByVal PID As DWORD, lvwEventHook As Class_ListView)
 
     CommitListViewView lvwEventHook
     Deallocate pData
-    Print "======================================================"
 End Sub
 
 ' 热键枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
+Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey As Class_ListView)
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -392,24 +389,24 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
         Print "lpRet:" & lpRet
         Exit Sub
     End If
+    
+    InitListViewData lvwHotkey
+    ' ====================== 热键 PID列处理 ======================
+    Const HOTKEY_PID_COL_INDEX = 4
+    If PID <> Cast(DWORD, -1) Then
+        If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) = "PID" Then
+            lvwHotkey.DeleteColumn(HOTKEY_PID_COL_INDEX)
+        End If
+    Else
+        If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) <> "PID" Then
+            lvwHotkey.InsertColumn(HOTKEY_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
+        End If
+    End If
+    ' =================================================================
 
     dataSize = lpRet
     If dataSize = 0 Then
         Print "未发现任何系统热键"
-        InitListViewData lvwHotkey
-        ' ====================== 热键 PID列处理 ======================
-        ' PID列索引：4 | 列名：PID
-        Const HOTKEY_PID_COL_INDEX = 4
-        If PID <> Cast(DWORD, -1) Then
-            If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) = "PID" Then
-                lvwHotkey.DeleteColumn(HOTKEY_PID_COL_INDEX)
-            End If
-        Else
-            If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) <> "PID" Then
-                lvwHotkey.InsertColumn(HOTKEY_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-            End If
-        End If
-        ' =================================================================
         CommitListViewView lvwHotkey
         Exit Sub
     End If
@@ -433,26 +430,11 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
     Dim hotkeyCount As ULong = dataSize / SizeOf(WIN32K_HOTKEY_INFO)
     Dim pHotkey As WIN32K_HOTKEY_INFO Ptr = pData
 
-    InitListViewData lvwHotkey
-    ' ====================== 热键 PID列处理 ======================
-    Const HOTKEY_PID_COL_INDEX = 4
-    If PID <> Cast(DWORD, -1) Then
-        If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) = "PID" Then
-            lvwHotkey.DeleteColumn(HOTKEY_PID_COL_INDEX)
-        End If
-    Else
-        If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) <> "PID" Then
-            lvwHotkey.InsertColumn(HOTKEY_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-        End If
-    End If
-    ' =================================================================
-    Print "==================== 系统热键列表 ===================="
-
     ' 遍历所有热键
     For i As Integer = 0 To hotkeyCount - 1
         Dim info As WIN32K_HOTKEY_INFO = pHotkey[i]
         
-        If (PID <> Cast(DWORD, -1)) AndAlso (PID <> info.ProcessId) Then Continue For
+        If (Not bGlobal) AndAlso (PID <> info.ProcessId) Then Continue For
         
         ' 热键解析
         Dim sMod As StringW = GetHotkeyModStr(info.uMod)
@@ -472,15 +454,24 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
         End If
         
         ' 填充ListView
-        AddItemColListEx lvwHotkey, 7,,, _
-        "0x" & WHex(info.HotkeyHandle), _
-        "0x" & WHex(info.id), _
-        WStr(sHotkey), _
-        "0x" & WHex(info.hWnd), _
-        WStr(info.ProcessId), _
-        WStr(info.ThreadId), _
-        WStr(Note)
-
+        If Not bGlobal Then
+            AddItemColListEx lvwHotkey, 6,,, _
+            "0x" & WHex(info.HotkeyHandle), _
+            "0x" & WHex(info.id), _
+            WStr(sHotkey), _
+            "0x" & WHex(info.hWnd), _
+            WStr(info.ThreadId), _
+            WStr(Note)
+        Else
+            AddItemColListEx lvwHotkey, 7,,, _
+            "0x" & WHex(info.HotkeyHandle), _
+            "0x" & WHex(info.id), _
+            WStr(sHotkey), _
+            "0x" & WHex(info.hWnd), _
+            WStr(info.ProcessId), _
+            WStr(info.ThreadId), _
+            WStr(Note)
+        End If
         ' 调试打印
         /'Print "[" & i & "] 热键: " & sHotkey & " | 句柄:0x" & WHex(info.HotkeyHandle) & _
               " | PID:" & info.ProcessId & " | TID:" & info.ThreadId & _
@@ -489,5 +480,4 @@ Public Sub GetHotkeyList(ByVal PID As DWORD, lvwHotkey As Class_ListView)
 
     CommitListViewView lvwHotkey
     Deallocate pData
-    Print "======================================================"
 End Sub

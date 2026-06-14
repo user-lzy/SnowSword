@@ -98,9 +98,11 @@ Private Function GetServiceModulePath(ByVal hSCM As SC_HANDLE, ByVal strServiceN
                 If pConfig->lpBinaryPathName <> NULL Then
                     ' 直接复制字符串指针（已经在分配的内存块中）
                     ModulePath = *pConfig->lpBinaryPathName
-                    ModulePath = YF_ReplaceW(ModulePath, WStr("\SystemRoot\"), WStr(Environ("SystemRoot")))
+                    ModulePath = YF_ReplaceW(ModulePath, WStr("\SystemRoot"), WStr(Environ("SystemRoot")))
+                    ModulePath = YF_ReplaceW(ModulePath, WStr("\??\"), WStr(""))
                     If LenW(ModulePath) <> 0 AndAlso InStrW(ModulePath, ":") = 0 Then ModulePath = Environ("SystemRoot") & "\" & ModulePath
                     
+                    'ModulePath = GetCorrectPathW(ModulePath)
                 End If
             End If
             Deallocate(pConfig)
@@ -256,8 +258,9 @@ Public Sub GetServiceList(lvwService As Class_ListView)
         strProcessPath = GetProcessPath(ValULng(strPID)) ' 进程路径
         strModulePath = GetServiceModulePath(hSCM, lpServices->lpServiceName) ' 服务模块路径
         
-        AddItemColListEx lvwService, 8,,, lpServiceName, WStr(strState), WStr(strServiceType), WStr(strStartType), WStr(strPID), WStr(strProcessPath), _
-        WStr(strModulePath), WStr(lpDisplayName)
+        Dim ItemIndex As Long = AddItemColListEx(lvwService, 8,,, lpServiceName, WStr(strState), WStr(strServiceType), WStr(strStartType), WStr(strPID), WStr(strProcessPath), _
+        WStr(strModulePath), WStr(lpDisplayName))
+        VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strModulePath
         lpServices += 1
         FF_DoEvents
     Next

@@ -223,7 +223,8 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
             If fData(j).dwFileAttributes And fbDirectory Then
                 If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fData(j).cFileName
             ElseIf IsEnumFile Then
-                AddItemColListEx lvwFile, 3,,, WStr(fData(j).cFileName), WStr(""), WStr(fData(j).nFileSizeHigh * (2 ^ 32) + fData(j).nFileSizeLow)
+                Dim ItemIndex As Long = AddItemColListEx(lvwFile, 3,,, WStr(fData(j).cFileName), WStr(""), WStr(fData(j).nFileSizeHigh * (2 ^ 32) + fData(j).nFileSizeLow))
+                SetItemIconEx lvwFile, ItemIndex, GetFileIconIndex(fData(j).cFileName, False)
             End If
         Next
     Else
@@ -243,6 +244,7 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
                     SetItemTextEx lvwFile, ItemIndex, 1, "Stream"
                     SetItemColor lvwFile, ItemIndex, FB_Black, FB_GoldenYellow
                 End If
+                SetItemIconEx lvwFile, ItemIndex, GetFileIconIndex(fileInfo(j).cFileName, False)
                 If IsBeAccess Then
                     For k As Integer = 0 To i - 1
                         If fData(k).cFileName = fileInfo(j).cFileName Then Continue For, For ' 找到则进入下一次循环

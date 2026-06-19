@@ -640,10 +640,10 @@ Sub FrmListView_ListView_LVN_KeyDown(hWndForm As hWnd, hWndControl As hWnd, pNKD
     ' 判断 Ctrl + C
     If pNKD.wVKey = Asc("C") Then
         If (GetKeyState(VK_CONTROL) And &H8000) <> 0 Then
-            Print "按下Ctrl+C"
+            'Print "按下Ctrl+C"
 
             ' 打印调试
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -948,7 +948,7 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuThread_mnuForceKillThread ' 强制结束线程
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Print "TID:" & Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
+                    'Print "TID:" & Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
                     If ForceKillThread(Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))) Then DeleteItemEx ListView, i, False
                 End If
             Next
@@ -957,7 +957,7 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
                     Dim TID As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
-                    Print "TID:" & TID
+                    'Print "TID:" & TID
                     If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then DeleteItemEx ListView, i, False
                 End If
             Next
@@ -1089,7 +1089,7 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
                 DeleteItemEx ListView, ListView.SelectedItem
             Else
                 AfxMsg "强制关闭句柄失败!", "提示"
-                Print "[FrmListView_mnuUnlock_FIle_mnuForceCloseHandle]" & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintWin32Error "FrmListView_mnuUnlock_FIle_mnuForceCloseHandle", "IOCTL_CloseHandle"
             End If
         Case FrmListView_mnuUnlock_FIle_mnuTerminateProcess ' 结束进程
             KillProcess ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
@@ -1125,9 +1125,9 @@ Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd, wID As ULong)
             For i As Integer = 0 To ListView.ItemCount - 1
                 Addr = ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H"))
                 Size = ValUInt(FF_Replace(ListView.GetItemText(i, 1), "0x", "&H"))
-                Print "Addr:0x" & WHex(Addr) & " Size:0x" & WHex(Size) & " LocatedAddr:0x" & WHex(LocatedAddr) & " Addr+Size:0x" & WHex(Addr + Size)
+                'Print "Addr:0x" & WHex(Addr) & " Size:0x" & WHex(Size) & " LocatedAddr:0x" & WHex(LocatedAddr) & " Addr+Size:0x" & WHex(Addr + Size)
                 If Addr <= LocatedAddr AndAlso Addr + Size >= LocatedAddr Then ' 定位成功
-                    Print "找到"
+                    'Print "找到"
                     ListView.UnselectAllItems
                     ListView.SelectedItem = i
                     ListView.ScrollSelectedItem
@@ -1335,7 +1335,7 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
                 AfxMsg "移除失败!"
-                Print "[FrmListView_mnuMsgHook_mnuRemove]UnhookWindowsHookEx 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintWin32Error "FrmListView_mnuMsgHook_mnuRemove", "UnhookWindowsHookEx", "0x" & WHex(hHook)
             End If
         Case FrmListView_mnuMsgHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
@@ -1393,7 +1393,7 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
                 AfxMsg "移除失败!"
-                Print "[FrmListView_mnuEventHook_mnuRemove]UnhookWinEvent 0x" & WHex(hHook) & ":" & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintWin32Error "FrmListView_mnuEventHook_mnuRemove", "UnhookWinEvent", "0x" & WHex(hHook)
             End If
         Case FrmListView_mnuEventHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
@@ -1450,7 +1450,7 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
                 DeleteItemEx ListView, ListView.SelectedItem, True
             Else
                 AfxMsg "移除失败!"
-                Print "[FrmListView_mnuHotkey_mnuRemove]UnregisterHotKey 0x" & WHex(hWnd) & " 0x" & WHex(id) & ":" & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintWin32Error "FrmListView_mnuHotkey_mnuRemove", "UnregisterHotKey", "0x" & WHex(hWnd) & " 0x" & WHex(id)
             End If
         Case FrmListView_mnuHotkey_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."

@@ -619,7 +619,8 @@ Sub InitCommandRegistry()
     RegisterCmd "ssdt",          "list", "",                 True,  False, False, False, False, False, "List SSDT hooks"
     RegisterCmd "sssdt",          "list", "",                 True,  False, False, False, False, False, "List ShadowSSDT hooks"
     RegisterCmd "callbacks",     "list", "回调",             True,  False, False, False, False, False, "List kernel callbacks"
-    RegisterCmd "service",       "list", "服务",             False, False, False, False, False, False, "List system services"
+    RegisterCmd "service", "list", "服务", False, False, False, False, False, False, "List system services"
+    RegisterCmd "etw",  "list", "ETW会话",        False, False, False, False, False, False, "List ETW sessions"
     RegisterCmd "etw-provider",  "list", "ETW提供者",        False, False, False, False, False, False, "List ETW providers"
     RegisterCmd "minifilter",    "list", "",                 True,  False, False, False, False, False, "List minifilter drivers"
     RegisterCmd "filterdriver",  "list", "",                 True,  False, False, False, False, False, "List filter drivers"
@@ -1695,8 +1696,9 @@ Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) A
         Case "wfp-callout|list"   : InitializeListView WfpCallout, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpCalloutList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "wfp-filter|list"    : InitializeListView WfpFilter, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetWfpFilterList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "service|list"       : InitializeListView Service, FrmMain.ListView1 : GetServiceList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        
-        Case "etw-provider|list"  : InitializeListView EtwProvider, FrmMain.ListView1 : GetETWProviderList FrmMain.ListView1 : CuiPrintListViewData() : Return True
+            
+        Case "etw|list"  : InitializeTreeList EtwProvider, FrmMain.mCtrlTreeList1 : EnumETWSession FrmMain.mCtrlTreeList1 : Return True
+        'Case "etw-provider|list"  : InitializeListView EtwProvider, FrmMain.ListView1 : GetETWProviderList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "winsock-spi|list"   : InitializeListView WinsockSPI, FrmMain.ListView1 : GetWinsockSPIList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "task-scheduler|list": InitializeListView TaskScheduler, FrmMain.ListView1 : GetTaskSchedulerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "violent-check|scan" : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True

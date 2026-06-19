@@ -50,6 +50,7 @@ Enum Interface
     HalPrivateDispatch
     ObjectHook
     
+    Etw
     EtwProvider
     WinsockSPI
     TaskScheduler
@@ -563,6 +564,11 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
                 .AddColumn "标识信息", 300
                 .AddColumn "驱动 / 协议映像", 400
                 .AddColumn "地址", 200
+            Case Etw
+                .AddColumn "Name", 300
+                .AddColumn "Type", 100
+                .AddColumn "ID / GUID", 300
+                .AddColumn "Meta", 300
         End Select
     End With
 End Sub
@@ -2146,3 +2152,85 @@ Sub TreeList_SubItemHitTest(TreeList As Class_mCtrlTreeList, ByVal xPos As Long,
     'Print "[TreeList_SubItemHitTest]iColumnIndex:" & iColumnIndex
     iSubItem = iColumnIndex
 End Sub
+
+' 模拟TreeView指定节点的双击事件
+Sub TreeView_SimulateDblClick(ByVal hTree As HWND, ByVal hItem As HTREEITEM)
+    TreeView_SelectItem(hTree, hItem)
+    TreeView_EnsureVisible(hTree, hItem)
+    
+    Dim rc As RECT
+    TreeView_GetItemRect(hTree, hItem, @rc, True)
+    
+    Dim xPos As Long = (rc.left + rc.right) \ 2
+    Dim yPos As Long = (rc.top + rc.bottom) \ 2
+    
+    ' 发送自定义消息，让消息循环统一处理
+    SendMessage(GetParent(hTree), WM_TREEVIEW_DBLCLK, Cast(wParam, hItem), MAKELPARAM(xPos, yPos))
+End Sub
+
+' ===================== 递归查找节点 =====================
+
+' 在指定父节点下递归查找匹配文本的第一个子节点
+Private Function GetNodeByTextRecursive( _
+    ByVal hTree As HWND, _
+    ByVal hParent As HTREEITEM, _
+    ByVal searchText As StringW, _
+    ByVal bExactMatch As Boolean, _
+    ByVal bCaseSensitive As Boolean _
+) As HTREEITEM
+    
+    Dim hChild As HTREEITEM = TreeView_GetChild(hTree, hParent)
+    If hChild = NULL Then Return NULL
+    
+    Dim buffer As WString * 512
+    Dim tvi As TVITEMW
+    
+    Do While hChild <> NULL
+        ' 获取节点文本
+        ZeroMemory(@tvi, SizeOf(TVITEMW))
+        tvi.mask = TVIF_TEXT
+        tvi.hItem = hChild
+        tvi.pszText = @buffer
+        tvi.cchTextMax = 511
+        
+        If SendMessage(hTree, TVM_GETITEMW, 0, Cast(LPARAM, @tvi)) <> 0 Then
+            ' 比较文本
+            Dim isMatch As Boolean
+            If bExactMatch Then
+                If bCaseSensitive Then isMatch = (lstrcmpW(buffer, StrPtrW(searchText)) = 0) Else isMatch = (lstrcmpiW(buffer, StrPtrW(searchText)) = 0)
+            Else
+                If bCaseSensitive Then isMatch = (InStrW(buffer, searchText) > 0) Else isMatch = (InStrW(LCaseW(buffer), LCaseW(searchText)) > 0)
+            End If
+            
+            If isMatch Then Return hChild
+        End If
+        
+        ' 递归搜索子节点
+        Dim hFound As HTREEITEM = GetNodeByTextRecursive(hTree, hChild, searchText, bExactMatch, bCaseSensitive)
+        If hFound <> NULL Then Return hFound
+        
+        hChild = TreeView_GetNextSibling(hTree, hChild)
+    Loop
+    
+    Return NULL
+End Function
+
+' ===================== 公开接口 =====================
+
+' 在 TreeView 中按文本查找节点（从根开始）
+' 参数:
+'   MyTreeView    - VFB TreeView 控件对象
+'   searchText    - 要查找的文本
+'   bExactMatch   - True=完全匹配, False=包含匹配 (默认True)
+'   bCaseSensitive- True=区分大小写, False=不区分 (默认False)
+' 返回:
+'   找到的节点句柄，未找到返回NULL
+Function GetNodeByText( _
+    ByRef MyTreeView As Class_TreeView, _
+    ByVal searchText As StringW, _
+    ByVal bExactMatch As Boolean = True, _
+    ByVal bCaseSensitive As Boolean = False _
+) As HTREEITEM
+    
+    Return GetNodeByTextRecursive(MyTreeView.hWnd, TVI_ROOT, searchText, bExactMatch, bCaseSensitive)
+End Function

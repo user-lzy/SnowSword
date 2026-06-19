@@ -109,7 +109,7 @@ ToolTipBalloon=False
 Name=mnuKernelModule
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10查看/编辑内存FrmMain_mnuKernelModule_mnuEditMemory0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFilePath0-10
+Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10检测隐藏驱动FrmMain_mnuKernelModule_mnuCheckHideDriver0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10查看/编辑内存FrmMain_mnuKernelModule_mnuEditMemory0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFilePath0-10
 Left=500
 Top=220
 Tag=
@@ -756,6 +756,15 @@ Left=420
 Top=280
 Tag=
 
+[PopupMenu]
+Name=mnuTaskScheduler
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuTaskScheduler_mnuRefresh0-10-FrmMain_mnuTaskScheduler_mnuStep10-10启用FrmMain_mnuTaskScheduler_mnuEnable0-10运行FrmMain_mnuTaskScheduler_mnuRun0-10删除FrmMain_mnuTaskScheduler_mnuDelete0-10
+Left=460
+Top=280
+Tag=
+
 [Frame]
 Name=FmeAdvance
 Help=
@@ -1020,6 +1029,7 @@ Const MAX_HEIGHT = 500
 Const GWL_WNDPROC = -4
 
 #define WM_SignVerify (WM_USER + &H100)
+#define WM_TREEVIEW_DBLCLK WM_USER + &H200
 
 'Type WINDOWPROC As Function(ByVal As HWND, ByVal As UINT, ByVal As WPARAM, ByVal As LPARAM) As LRESULT
 
@@ -1253,6 +1263,7 @@ Private Sub DrawTreeView()
     treOther = treMain.AddItem(NULL, "其他")
     treMain.AddItem treOther, "服务"
     treMain.AddItem treOther, "启动项"
+    treMain.AddItem treOther, "Etw"
     treMain.AddItem treOther, "Etw Provider"
     treMain.AddItem treOther, "Winsock SPI"
     treMain.AddItem treOther, "任务计划"
@@ -1327,7 +1338,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!"
         End If
-    ElseIf Command(1) = "-DeleteFile" Then
+    /'ElseIf Command(1) = "-DeleteFile" Then
         AfxMsg Command(2)
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
@@ -1345,7 +1356,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
             AfxMsg "粉碎成功!"
         End If
     ElseIf Command(1) = "-UnlockFile" Then
-        /'If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+        If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If LoadDriver(App.Path & "SnowSword.sys", False) Then
                 hDrv = OpenDrv("\\.\\SnowSword", True)
                 If (hDrv <> INVALID_HANDLE_VALUE) Then
@@ -1364,16 +1375,18 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
             End If
         End If'/
     End If
+    
+    InitLog
     InitNtUserFunction
     InitAllModuleCache
-    Print GetSystemVersion
+    'MyLog.PrintLog GetSystemVersion
     'SetMenuText mnuProcess, FrmMain_mnuProcess_mnuTerminateProcess, "1"
     'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
     prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WNDPROC))
     InitCustomTooltip hWndForm
     'Dim bytData() As Byte
     'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
-    InitLog
+    
     
     InitThreadPool
     'CheckUpdate
@@ -1381,7 +1394,7 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     
     SymEngine_Init
     
-    'Print SizeOf(NDIS_MINIPORT_ENUM_ENTRY)
+    'Print SizeOf(TRACE_PROVIDER_INSTANCE_INFO)
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -1460,6 +1473,8 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
             PopupMenu hWndForm, mnuService.HMENU
         Case WinsockSPI
             PopupMenu hWndForm, mnuWinsockSPI.HMENU
+        Case TaskScheduler
+            PopupMenu hWndForm, mnuTaskScheduler.HMENU
         Case Else
             PopupMenu hWndForm, mnuListView.HMENU
     End Select
@@ -1469,6 +1484,7 @@ End Sub
 ' 改写完成：TreeView双击切换模块（自动分类型保存/恢复缓存）
 ' ==============================================
 Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, MouseFlags As Long, xPos As Long, yPos As Long)
+    'Print "FrmMain_treMain_WM_LButtonDblclk"
     Dim treSelect As HTREEITEM = treMain.HitTest(xPos, yPos)
     If treMain.GetChild(treSelect) <> NULL Then Exit Sub ' 父节点直接滚，不碰任何逻辑
     
@@ -1528,7 +1544,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
             start = Timer
             GetProcessList ListView1, GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
             finish = Timer
-            Print "函数执行耗时："; finish - start; " 秒"
+            MyLog.PrintLog LOG_INFO,,, "函数执行耗时：" & finish - start & " 秒"
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 
@@ -1652,6 +1668,22 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
                 End If
             End If
             lblNum.Caption = "数量:" & WStr(GetIDT(mCtrlTreeList1))
+        End If
+        
+    ElseIf SelectText = "Etw" Then
+        gLayoutMode = LAYOUT_LIST_ONLY
+        gMainView = VIEW_TREELIST
+        UpdateLayout
+        
+        CurrentInformation.intType = Etw
+        InitializeTreeList Etw, mCtrlTreeList1
+        lblNum.Caption = "正在获取..."
+        
+        ' TreeList 恢复缓存
+        If g_ViewCache(CurrentInformation.intType).IsCached Then
+            RestoreTreeListFromCache mCtrlTreeList1, CurrentInformation.intType
+        Else
+            lblNum.Caption = "数量:" & WStr(EnumETWSession(mCtrlTreeList1))
         End If
 
     ElseIf SelectText = "HalDispatch" Then
@@ -1962,7 +1994,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 
     ElseIf SelectText = "Etw Provider" Then
-        gLayoutMode = LAYOUT_LIST_ONLY
+        /'gLayoutMode = LAYOUT_LIST_ONLY
         gMainView = VIEW_LISTVIEW
         UpdateLayout
         
@@ -1975,7 +2007,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         Else
             GetETWProviderList ListView1
         End If
-        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)'/
 
     ElseIf SelectText = "Winsock SPI" Then
         gLayoutMode = LAYOUT_LIST_ONLY
@@ -2419,11 +2451,29 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
 
                 Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
                     Dim real As Long = ctx->VisibleIndex(cd->nmcd.dwItemSpec)
+                    
+                    ' 基础校验
+                    If real < 0 Or real >= ctx->Snap->RowCount Then Return CDRF_DODEFAULT
                     Dim r As LVRow Ptr = ctx->Snap->Rows[real]
-
+                    If r = NULL Then Return CDRF_DODEFAULT
+                    
+                    ' ========== 关键修复：获取当前子项索引并校验 ==========
+                    Dim iSubItem As Long = cd->iSubItem  ' 当前正在绘制的列索引
+                    
+                    ' 如果子项索引超出该行实际列数，使用默认绘制
+                    If iSubItem < 0 Or iSubItem >= r->ColCount Then
+                        Return CDRF_DODEFAULT
+                    End If
+                    
+                    ' 如果该子项数据为空（NULL 或空字符串），使用默认绘制
+                    ' 这样可以避免空列的颜色被错误设置
+                    If r->Cols[iSubItem] = NULL Then
+                        Return CDRF_DODEFAULT
+                    End If
+                    
+                    ' 只有数据有效的列才应用自定义颜色
                     cd->clrText   = r->Fore
                     cd->clrTextBk = r->Back
-
                     Return CDRF_DODEFAULT
 
                 End Select
@@ -2442,9 +2492,9 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
     Case WM_USER + TrayIco1.CallMsg
         Select Case lParam
         Case WM_LBUTTONDOWN
-            Print "左键单击托盘图标"
+            'Print "左键单击托盘图标"
         Case WM_LBUTTONDBLCLK
-            Print "左键双击托盘图标"
+            'Print "左键双击托盘图标"
             Me.WindowState = 0 ' 显示主窗口
             Me.Show
         Case WM_RBUTTONDOWN
@@ -2485,9 +2535,23 @@ Function FrmMain_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam, lP
             ListView1.Refresh
             LastRefresh = GetTickCount
         End If
+    Case WM_TREEVIEW_DBLCLK
+        Dim hItem As HTREEITEM = Cast(HTREEITEM, wParam)
+        Dim xPos As Long = LOWORD(lParam)
+        Dim yPos As Long = HIWORD(lParam)
+        
+        ' 直接调用你的处理函数
+        FrmMain_treMain_WM_LButtonDblclk(hWndForm, treMain.hWnd, 0, xPos, yPos)
+        Return 0
     End Select
     Function = FALSE ' 返回FALSE表示不阻止系统继续处理消息
 End Function
+
+' ===================== "转到进程"调用 =====================
+Sub SwitchToModule(ModuleName As StringW)
+    ' 触发切换/刷新（模拟双击或直接调用）
+    TreeView_SimulateDblClick treMain.hWnd, GetNodeByText(treMain, ModuleName)
+End Sub
 
 '[FrmMain.mnuKernelModule]事件 : 点击了菜单项
 'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
@@ -2535,8 +2599,8 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             
             If IoControl(hDrv, IOCTL_DumpKernelModule, @stMemory, SizeOf(MemoryStruct), NULL, 0, @lpRet) = 0 Then
                 AfxMsg "dump失败!"
-                Print "[FrmMain_mnuKernelModule_mnuDumpToFile]IOCTL_ReadProcessMemory:" & WinErrorMsg(GetLastError) & GetLastError
-                Print "Information:" & lpRet
+                'Print "[FrmMain_mnuKernelModule_mnuDumpToFile]IOCTL_ReadProcessMemory:" & WinErrorMsg(GetLastError) & GetLastError
+                'Print "Information:" & lpRet
                 Erase bytDump
                 Exit Sub
             End If
@@ -2544,23 +2608,7 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
                 Erase bytDump
                 Exit Sub
             End If
-            'Print "Information:0x" & Hex(lpRet)
             ReDim Preserve bytDump(lpRet - 1) As UByte
-            
-            /'Dim ImageSize As ULong = lpRet        ' 映像大小
-            Dim DriverEntryRVA As ULong = GetDriverEntryRVA(@bytDump(0))  ' 可通过 PE 解析得到（通常入口点 RVA）
-
-            Dim rd As RECOVERED_DISPATCH
-            If RecoverDispatchFromDump(@bytDump(0), ImageSize, ModuleBase, ModuleBase + DriverEntryRVA, @rd) Then
-                Print "Recovered " & rd.HitCount & " dispatch functions"
-                For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
-                    If rd.MajorFunction(i) <> 0 Then
-                        Print "IRP_MJ_" & i & " -> " & WHex(Cast(ULONG_PTR, ModuleBase) + rd.MajorFunction(i))
-                    End If
-                Next
-            Else
-                Print "Recovery failed"
-            End If'/
             
             Dim lpSavePath As StringW = FF_OpenFileDialog(,,,, "Driver files (*.sys)|*.sys|" & "All Files (*.*)|*.*|")
             If lpSavePath = "" Then
@@ -2582,7 +2630,7 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             MemoryInfo->dwProcessId = 0
             FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmMain_mnuKernelModule_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -2627,13 +2675,25 @@ End Sub
 '检查什么键按下用  If (MouseFlags And MK_CONTROL)<>0 Then CTRL键按下 
 'xPos yPos   当前鼠标位置，相对于控件。就是在控件里的坐标。
 Sub FrmMain_ListView1_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, MouseFlags As Long, xPos As Long, yPos As Long)
-    'Print "FrmMain_ListView1_WM_LButtonDblclk"
-    Dim CurrentNode As HTREEITEM = TreeView.Selection
-    Dim CurrentPath As StringW
+    Dim SelectIndex As Long = ListView1.SelectedItem
     Select Case CurrentInformation.intType
         Case File
-            GetPathByNodeW CurrentNode, TreeView, CurrentPath ' 获取当前文件路径
+            Dim CurrentPath As StringW = ""
+            GetPathByNodeW TreeView.Selection, TreeView, CurrentPath ' 获取当前文件路径
+            CurrentPath = CurrentPath & ListView1.GetItemText(SelectIndex, 0)
+            Print "CurrentPath:" & CurrentPath
             ShellExecute NULL, NULL, CurrentPath, NULL, NULL, 1 ' 以默认方式打开文件
+        Case TaskScheduler
+            Dim ProgramPath As StringW = UCaseW(ListView1.GetItemText(SelectIndex, 7))
+            SwitchToModule("进程")
+            For i As Integer = 0 To ListView1.ItemCount - 1
+                If UCaseW(ListView1.GetItemText(i, 2)) = ProgramPath Then
+                    ListView1.SelectedItem = i
+                    ListView_EnsureVisible(ListView1.hWnd, i, False)
+                    Return
+                End If
+            Next
+            AfxMsg "未找到进程!"
     End Select
 End Sub
 
@@ -2660,7 +2720,7 @@ Function FrmMain_txtFilePath_WM_KeyUp(hWndForm As hWnd, hWndControl As hWnd, nVi
                     If CurrentNode <> NULL Then
                         SendMessage TreeView.hWnd, TVM_SELECTITEM, TVGN_CARET, Cast(lParam, CurrentNode) ' 选中这项
                     Else
-                        Print "[FrmMain_txtFilePath_WM_KeyUp]CurrentNode = NULL"
+                        'Print "[FrmMain_txtFilePath_WM_KeyUp]CurrentNode = NULL"
                     End If
                 Else ' 是文件,直接打开
                     GetPathByNodeW CurrentNode, TreeView, CurrentPath ' 获取当前文件路径 
@@ -3185,8 +3245,8 @@ Sub FrmMain_ListView1_LVN_KeyDown(hWndForm As hWnd, hWndControl As hWnd, pNKD As
     ' 判断 Ctrl + C
     If pNKD.wVKey = Asc("C") Then
         If (GetKeyState(VK_CONTROL) And &H8000) <> 0 Then
-            Print "按下Ctrl+C"
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "按下Ctrl+C"
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -3372,8 +3432,8 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                    (Not bVerify) Then
                     GetItemColor ListView1, i, ForeColor, BackColor
                     SetItemColor ListView1, i, ForeColor, FB_GoldenYellow
-                    Print dwPID & "可疑!"
-                    Print strCompany & " " & strPath & " " & bVerify
+                    'Print dwPID & "可疑!"
+                    'Print strCompany & " " & strPath & " " & bVerify
                 End If
                 FF_DoEvents
             Next
@@ -3395,8 +3455,8 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
                     
                     GetItemColor ListView1, i, ForeColor, BackColor
                     SetItemColor ListView1, i, ForeColor, FB_GoldenYellow
-                    Print dwPID & "可疑!"
-                    Print strCompany & " " & strPath & " 签名无效"
+                    MyLog.PrintLog LOG_WARN,,, dwPID & "可疑!"
+                    'Print strCompany & " " & strPath & " 签名无效"
                 End If
                 FF_DoEvents
             Next
@@ -3452,7 +3512,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmListView.Show,, Cast(Integer, CurrentInfo)
 
         Case FrmMain_mnuProcess_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -3508,7 +3568,7 @@ Sub FrmMain_mnuCallbacks_WM_Command(hWndForm As hWnd, wID As ULong)
             MemoryInfo->dwProcessId = 0
             FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmMain_mnuCallbacks_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -3545,7 +3605,7 @@ Sub FrmMain_mnuService_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmMain_mnuService_mnuDeleteService ' 删除服务
             'If MyDeleteService(ListView1.GetItemText(ListView1.SelectedItem, 0)) Then AfxMsg "删除成功!" Else AfxMsg "删除失败!"
         Case FrmMain_mnuService_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -3598,7 +3658,7 @@ Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmMain_mnuRegKey_mnuCreateKey ' 新建
             Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新子键名称:", "新项 #1")
             Dim hkResult As HKEY
-            Print "新子键:" & CurrentPath & "\" & NewKey
+            'Print "新子键:" & CurrentPath & "\" & NewKey
             If RegCreateKey(hHKEY, CurrentPath & "\" & NewKey, @hkResult) = ERROR_SUCCESS Then
                 AfxMsg "创建成功!"
                 TreeView.InsertItem CurrentNode, TVI_SORT, NewKey
@@ -3619,7 +3679,7 @@ Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
             End If
         Case FrmMain_mnuRegKey_mnuRenameKey ' 重命名
             Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入子键新名称:", "新项 #1")
-            Print "子键新名称:" & CurrentPath & "\" & NewKey
+            'Print "子键新名称:" & CurrentPath & "\" & NewKey
             If RegRenameKey(hHKEY, CurrentPath, NewKey) = ERROR_SUCCESS Then
                 AfxMsg "重命名成功!"
                 TreeView_SetItemText(TreeView.hWnd, CurrentNode, StrPtrW(NewKey))
@@ -3750,10 +3810,10 @@ Sub FrmMain_mnuFilterDriver_WM_Command(hWndForm As hWnd,wID As ULong)
             lblNum.Caption = "数量:" & EnumAttachDevices(mCtrlTreeList1)
         Case FrmMain_mnuFilterDriver_mnuRemoveFilter ' 移除过滤设备
             If mCtrlTreeList1.GetChildCount(mCtrlTreeList1.Selection) = 0 Then
-                Print "无子项!"
+                'Print "无子项!"
             Else
                 Dim pDeviceObject As ULONG64 = ValULng(FF_Replace(mCtrlTreeList1.GetItemText(LastSelectItem, 4), "0x", "&H"))
-                Print "pDeviceObject:0x" & WHex(pDeviceObject)
+                'Print "pDeviceObject:0x" & WHex(pDeviceObject)
                 If pDeviceObject <> 0 Then
                     IoControl hDrv, IOCTL_RemoveAttachedDevice, @pDeviceObject, SizeOf(pDeviceObject)
                     AfxMsg "摘除成功!"
@@ -3779,11 +3839,11 @@ Sub FrmMain_mnuMinifilter_WM_Command(hWndForm As hWnd,wID As ULong)
             Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = MinifilterInstances
             CurrentInfo->CurrentDriver.DriverName = FilterName
-            Print "FilterName:" & FilterName
+            'Print "FilterName:" & FilterName
             FrmListView.Show,, Cast(Integer, CurrentInfo)
         Case FrmMain_mnuMinifilter_mnuRemoveFilter ' 移除过滤器
             Dim FilterName As WString * MAX_PATH = mCtrlTreeList1.GetItemText(LastSelectItem, 0)
-            Print "FilterName:" & FilterName
+            'Print "FilterName:" & FilterName
             DetachAllFilterInstances @FilterName
             If UnloadFilter(@FilterName) Then
                 AfxMsg "移除成功!"
@@ -3832,7 +3892,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
+            'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If CopyFile(SourcePath, TargetPath, True) <> 0 Then
                 AfxMsg "复制成功!"
             Else
@@ -3845,7 +3905,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
+            'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
             Else
@@ -3866,7 +3926,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmMain_mnuFile_mnuForceDelete ' 强制删除
             Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
             If (strFile = NULL) Then
-                Print "[FrmMain_mnuFile_mnuForceDelete]分配内存失败"
+                'Print "[FrmMain_mnuFile_mnuForceDelete]分配内存失败"
                 Exit Sub
             End If
             *strFile = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
@@ -3879,7 +3939,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
                 Else ' 是被打开的文件
                     IoControl hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)
                     DeleteFile strFile
-                    Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
+                    'Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
                 End If
             End If
             Deallocate strFile
@@ -3890,7 +3950,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             CurrentInfo->intType = FileStream
             FrmListView.Show,, Cast(Integer, CurrentInfo)
         Case FrmMain_mnuFile_mnuLittleCopy ' 复制单格数据
-            Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
+            'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
 
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -3923,7 +3983,7 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
                 'GetFileList CurrentNode,TreeView,ListView1
                 AfxMsg "创建文件夹成功!"
             Else
-                Print "新建文件夹:" & Err
+                'Print "新建文件夹:" & Err
                 AfxMsg "创建文件夹失败!"
             End If
         Case FrmMain_mnuFolder_mnuCopyFolder ' 复制
@@ -3945,7 +4005,7 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
+            'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
             Else
@@ -3957,20 +4017,20 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
                 TreeView.DeleteItem CurrentNode
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                Print "删除文件夹:" & Err
+                'Print "删除文件夹:" & Err
                 AfxMsg "删除文件夹失败!"
             End If
         Case FrmMain_mnuFolder_mnuForceDeleteFolder ' 强制删除
             Dim strFolder As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
             If (strFolder = NULL) Then
-                Print "[FrmMain_mnuFolder_mnuForceDelete]分配内存失败"
+                'Print "[FrmMain_mnuFolder_mnuForceDelete]分配内存失败"
                 Exit Sub
             End If
             *strFolder = "\??\" & CurrentPath
             If IsDriverLoaded Then
                 IoControl hDrv, IOCTL_DeleteFileByXCB, strFolder, MAX_PATH * SizeOf(Wstring)
                 DeleteFile strFolder
-                Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
+                'Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
             End If
             Deallocate strFolder
             TreeView.DeleteItem CurrentNode
@@ -4010,7 +4070,7 @@ Sub FrmMain_mCtrlTreeList1_WM_LButtonDown(hWndForm As hWnd, hWndControl As hWnd,
     Dim SelectItem As MC_HTREELISTITEM, SelectColumn As Long
     TreeList_SubItemHitTest mCtrlTreeList1, xPos, yPos, SelectItem, SelectColumn, False
     If SelectItem <> NULL AndAlso (SelectColumn >= 0 AndAlso SelectColumn <= mCtrlTreeList1.GetColumnCount - 1) Then
-        Print "SelectItem:" & mCtrlTreeList1.GetItemText(SelectItem, 0) & " SelectColumn:" & SelectColumn
+        'Print "SelectItem:" & mCtrlTreeList1.GetItemText(SelectItem, 0) & " SelectColumn:" & SelectColumn
         LastSelectItem = SelectItem
         LastClickedSubItem = SelectColumn
     End If
@@ -4020,7 +4080,7 @@ End Sub
 'hWndForm 当前窗口的句柄
 'wID      菜单项命令ID = IDM_SELECT_COLUMN_BASE + 列索引
 Sub FrmMain_mnuColumn_WM_Command(hWndForm As hWnd, wID As ULong)
-    Print "wID:" & wID
+    'Print "wID:" & wID
     Dim colIdx As Long = CLng(wID) - CLng(IDM_SELECT_COLUMN_BASE)
     If colIdx < 0 Then Exit Sub
     

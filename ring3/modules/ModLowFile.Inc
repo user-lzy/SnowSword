@@ -1967,6 +1967,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
 
             offset += entry->recordLen
             entry = Cast(ATTRIBUTE_LIST_ENTRY Ptr, listDataPtr + offset)
+            FF_DoEvents
         Loop
     End If
 

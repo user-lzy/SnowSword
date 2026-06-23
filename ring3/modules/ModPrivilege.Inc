@@ -45,7 +45,7 @@ Function IsAdmin() As Boolean
     Return False
 End Function
 
-Sub RestartasAdmin(ByVal IsLoadDriver As BOOLEAN = False)
+Sub RestartasAdmin(ByVal IsLoadDriver As Boolean = False)
     If IsAdmin Then
         AfxMsg "当前进程已获得管理员(UAC)权限!", "提示"
         Exit Sub
@@ -183,6 +183,7 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
             PrivilegeInfo(count) = privInfo
             count += 1
         End If
+        FF_DoEvents
     Next
     
     CloseHandle(hToken)

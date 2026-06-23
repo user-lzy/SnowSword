@@ -208,6 +208,7 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
                 "EnableFlags=0x" & _
                 Hex(pProps(i)->EnableFlags)
         End If
+        FF_DoEvents
     Next
     
     Dim ProviderMap() As PROVIDER_NAME_MAP
@@ -252,7 +253,6 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
                 ProviderMap(ProviderCount).GuidStr = GUIDToWString(pProv->ProviderGuid)
                 ProviderMap(ProviderCount).Name = *pProviderName
                 'If ProviderCount < 50 Then Print *pProviderName & " " & ProviderMap(ProviderCount).GuidStr
-
                 ProviderCount += 1
             Next
         End If
@@ -381,6 +381,7 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
                     End If
 
                     pEnable += 1
+                    FF_DoEvents
                 Next
             End If
 
@@ -687,11 +688,12 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                     Else
                         ' 调试打印：任务获取失败的错误码
                         Print "⚠️  第"; i; "个任务获取失败, hr=0x"; Hex(hr); ", vt="; taskVar.vt
-                        Print "--------------------------------------------------"
+                        'Print "--------------------------------------------------"
                     End If
                     VariantClear(@taskVar)
+                    FF_DoEvents
                 Next
-                Print
+                'Print
             End If
         End If
         VariantClear(@countVar)
@@ -726,6 +728,7 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                     VariantClear(@nameVar)
                 End If
                 VariantClear(@subFolderVar)
+                FF_DoEvents
             Next
         End If
         VariantClear(@folderCountVar)

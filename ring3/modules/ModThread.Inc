@@ -827,6 +827,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
                 WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath), WStr(GetFileCompany(strModulePath)))
                 VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, strModulePath
                 threadInfo += 1
+                FF_DoEvents
                 'i += 1
             Next
         End If
@@ -925,7 +926,7 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
                 AddItemColListEx lvwKernelThread, 6,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), WStr(ThreadStateToString(threadInfo)), _
                 WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), WStr(strModulePath)
                 threadInfo += 1
-                i += 1
+                FF_DoEvents
             Next
         End If
         
@@ -1293,6 +1294,7 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
         Dim strAddr As StringW = GetProxyDescription(img, sf.AddrPC.Offset)
         MyLog.PrintLog LOG_INFO, "GetCallStack",, (i - 1) & " 0x" & WHex(sf.AddrPC.Offset) & " " & WStr(strAddr)
         AddItemColListEx lvwThreadCallStack, 4,,, WStr(i - 1), "0x" & WHex(sf.AddrPC.Offset), WStr(strAddr), WStr("")
+        FF_DoEvents
     Next
 
 cleanup:

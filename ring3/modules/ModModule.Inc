@@ -275,6 +275,7 @@ Private Function EnumModules32(ByVal hProcess As HANDLE, ByVal pebAddr As ULONG_
         ' 移动到下一个节点
         ReadProcessMemory(hProcess, Cast(Any Ptr, Cast(ULONG_PTR, CurrentNode)), @listEntry, SizeOf(listEntry), @bytesRead)
         CurrentNode = listEntry.Flink
+        FF_DoEvents
     Loop While CurrentNode <> firstNode  ' 回到头部时退出
     
     Return moduleIdx - 1
@@ -340,7 +341,8 @@ Private Function EnumModules64(ByVal hProcess As HANDLE, ByVal pebAddr As ULONG_
         
         ' 移动到下一个节点
         ReadProcessMemory(hProcess, Cast(Any Ptr, CurrentNode), @listEntry, SizeOf(listEntry), @bytesRead)
-        currentNode = listEntry.Flink
+        CurrentNode = listEntry.Flink
+        FF_DoEvents
     Loop While CurrentNode <> firstNode  ' 回到头部时退出
     
     Return moduleIdx - 1

@@ -319,7 +319,9 @@ Dim Shared prevFrmListViewProc As LONG_PTR = NULL
 
 Dim Shared LastClickedItem As Long = -1 ' 最后点击的行
 Dim Shared LastSelectItem As MC_HTREELISTITEM = NULL ' 最后选择的TreeList行
-Dim Shared LastClickedSubItem As Long = -1   ' 最后点击的列
+Dim Shared LastClickedSubItem As Long = -1 ' 最后点击的列
+
+Dim Shared BusyDelete As Long = 0
 
 Const MIN_WIDTH = 350
 Const MIN_HEIGHT = 500
@@ -523,40 +525,25 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
             
             Select Case Nmhdr->code
             Case LVN_GETDISPINFO
-            Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
-            ' -------------- 纯渲染调试，无任何全局变量 --------------
-            'Print "====================================="
-            'Print "重绘窗口句柄：" & p->hdr.hwndFrom  ' 确认是正确的ListView
-            'Print "请求行：" & p->item.iItem & " 列：" & p->item.iSubItem
-            
-            ' 获取当前窗口的私有ctx（唯一渲染入口）
-            Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
-            'Print "ctx指针：" & ctx & " (空=崩溃，非空=正常)"
-            
-            If ctx = NULL Then Return 0
-            'Print "ctx->Snap：" & ctx->Snap & " (空=无数据)"
-            'Print "ctx->VisibleCount：" & ctx->VisibleCount
-            'Print "ctx->Snap->RowCount：" & ctx->Snap->RowCount
-            
-            ' 核心：VisibleIndex映射是否失效
-            Dim real As Long = ctx->VisibleIndex(p->item.iItem)
-            'Print "【关键】映射后真实索引：" & real & " (正常≥0，-1=失效)"
-            
-            If real < 0 Or real >= ctx->Snap->RowCount Then
-                'Print "❌ 索引越界 → 无文字"
-                Return 0
-            End If
-            
-            Dim r As LVRow Ptr = ctx->Snap->Rows[real]
-            'Print "行数据指针：" & r & " (空=无数据)"
-            If r = NULL Then Return 0
-            
-            ' 最终：文本指针是否有效
-            If p->item.iSubItem < r->ColCount Then
-                'Print "✅ 文本内容：" & r->Cols[p->item.iSubItem]
-            Else
-                'Print "❌ 列越界 → 无文字"
-            End If
+                Dim p As NMLVDISPINFO Ptr = Cast(NMLVDISPINFO Ptr, lParam)
+                If BusyDelete <> 0 Then
+                    'Print "发生重入!"
+                    p->item.pszText = @WStr("")
+                    Return 0
+                End If
+                
+                ' 获取当前窗口的私有ctx（唯一渲染入口）
+                Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(p->hdr.hwndFrom, GWLP_USERDATA))
+                If ctx = NULL Then Return 0
+                If ctx->Snap = NULL Then Return 0
+                If p->item.iItem < 0 Then Return 0
+                If p->item.iItem >= ctx->VisibleCount Then Return 0
+
+                Dim real As Long = ctx->VisibleIndex(p->item.iItem)
+                If real < 0 OrElse real >= ctx->Snap->RowCount Then Return 0
+                
+                Dim r As LVRow Ptr = ctx->Snap->Rows[real]
+                If r = NULL Then Return 0
 
                 If (p->item.mask And LVIF_TEXT) <> 0 Then
                     If p->item.iSubItem < r->ColCount Then
@@ -567,30 +554,44 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
                     p->item.cchTextMax = lstrlenW(p->item.pszText) + 1
                 End If
                 Return 0
-
-            Case NM_CUSTOMDRAW
-                Dim cd As NMLVCUSTOMDRAW Ptr = Cast(NMLVCUSTOMDRAW Ptr, lParam)
-                Dim ctx As ListViewContext Ptr = _
-                    Cast(ListViewContext Ptr, GetWindowLongPtr(cd->nmcd.hdr.hwndFrom, GWLP_USERDATA))
-
-                Select Case cd->nmcd.dwDrawStage
-                    Case CDDS_PREPAINT
-                        ' 告诉系统：我要接管 Item 绘制
-                        Return CDRF_NOTIFYITEMDRAW
-                    Case CDDS_ITEMPREPAINT
-                        ' 告诉系统：我还要管子项
-                        Return CDRF_NOTIFYSUBITEMDRAW
-                    Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
-                        Dim real As Long = ctx->VisibleIndex(cd->nmcd.dwItemSpec)
-                        Dim r As LVRow Ptr = ctx->Snap->Rows[real]
-                        cd->clrText   = r->Fore
-                        cd->clrTextBk = r->Back
-                        Return CDRF_DODEFAULT
-                End Select
-
             End Select
-        
         End If
+
+    Case NM_CUSTOMDRAW
+        If BusyDelete <> 0 Then Return CDRF_DODEFAULT
+        
+        Dim cd As NMLVCUSTOMDRAW Ptr = Cast(NMLVCUSTOMDRAW Ptr, lParam)
+        Dim ctx As ListViewContext Ptr = _
+            Cast(ListViewContext Ptr, GetWindowLongPtr(cd->nmcd.hdr.hwndFrom, GWLP_USERDATA))
+        
+        ' 先校验上下文和快照有效性
+        If ctx = NULL OrElse ctx->Snap = NULL Then Return CDRF_DODEFAULT
+        
+        Select Case cd->nmcd.dwDrawStage
+            Case CDDS_PREPAINT
+                Return CDRF_NOTIFYITEMDRAW
+            Case CDDS_ITEMPREPAINT
+                Return CDRF_NOTIFYSUBITEMDRAW
+            Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
+                ' 新增：完整边界校验
+                Dim itemIdx As DWORD = cd->nmcd.dwItemSpec
+                If itemIdx < 0 OrElse itemIdx >= ctx->VisibleCount Then
+                    Return CDRF_DODEFAULT
+                End If
+                
+                Dim real As Long = ctx->VisibleIndex(itemIdx)
+                If real < 0 OrElse real >= ctx->Snap->RowCount Then
+                    Return CDRF_DODEFAULT
+                End If
+                
+                Dim r As LVRow Ptr = ctx->Snap->Rows[real]
+                If r = NULL Then Return CDRF_DODEFAULT
+                
+                cd->clrText   = r->Fore
+                cd->clrTextBk = r->Back
+                Return CDRF_DODEFAULT
+        End Select
+        
     Case WM_SignVerify
         Dim pMsg As SIGNVERIFY_MSG Ptr = Cast(SIGNVERIFY_MSG Ptr, lParam)
         If pMsg <> 0 Then
@@ -980,7 +981,10 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmListView_mnuThread_mnuLittleCopy ' 复制单格数据
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -1035,7 +1039,10 @@ Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuModule_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 2 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmListView_mnuModule_mnuLittleCopy ' 复制单格数据
             'Print "最终索引："; LastClickedItem; "  "; LastClickedSubItem
             ' ==========================================
@@ -1065,11 +1072,16 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
             Unlock_File ListView
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
-        Case FrmListView_mnuUnlock_FIle_mnuCloseHandle ' 关闭句柄
+        Case FrmListView_mnuUnlock_File_mnuCloseHandle ' 关闭句柄
+            'MyLog.PrintLog LOG_INFO,,, "开始关闭句柄..."
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
+                    'MyLog.PrintLog LOG_INFO,,, "找到句柄"
                     If CloseProcessHandle(ValUInt(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 4), "0x", "&H")))) Then
+                        'MyLog.PrintLog LOG_INFO,,, "已关闭句柄"
+                        BusyDelete += 1
                         DeleteItemEx ListView, i, False
+                        BusyDelete -= 1
                         AfxMsg "关闭句柄成功!", "提示"
                     Else
                         'AfxMsg "关闭句柄失败!", "提示"
@@ -1078,7 +1090,7 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
             Next
             lblNum.Caption = "数量:" & ListView.ItemCount
             CommitListViewView ListView
-        Case FrmListView_mnuUnlock_FIle_mnuForceCloseHandle ' 强制关闭句柄
+        Case FrmListView_mnuUnlock_File_mnuForceCloseHandle ' 强制关闭句柄
             '&H863
             Dim DoSomething As DO_SOMETHING
             DoSomething.ProcessId = ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
@@ -1091,7 +1103,7 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
                 AfxMsg "强制关闭句柄失败!", "提示"
                 MyLog.PrintWin32Error "FrmListView_mnuUnlock_FIle_mnuForceCloseHandle", "IOCTL_CloseHandle"
             End If
-        Case FrmListView_mnuUnlock_FIle_mnuTerminateProcess ' 结束进程
+        Case FrmListView_mnuUnlock_File_mnuTerminateProcess ' 结束进程
             KillProcess ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
         Case FrmListView_mnuUnlock_File_mnuLittleCopy ' 复制单格数据
             ' ==========================================
@@ -1145,7 +1157,10 @@ Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd, wID As ULong)
         ' 搜索内存
         Case FrmListView_mnuMemory_mnuEditMemory ' 查看/编辑内存
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmListView_mnuMemory_mnuLittleCopy ' 复制单格数据
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -1358,7 +1373,10 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
         Case FrmListView_mnuMsgHook_mnuCopyRowData ' 复制整行数据
             
     End Select
@@ -1416,7 +1434,10 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
     End Select
 End Sub
 
@@ -1472,7 +1493,10 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
-            FrmMemoryEditor.Show,, Addr
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
     End Select
 End Sub
 

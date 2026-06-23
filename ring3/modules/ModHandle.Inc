@@ -445,7 +445,7 @@ Private Function GetHandleCount(ByVal ProcessId As DWORD, ByVal pHandleCount As 
     ZwClose hProcess
 End Function
 
-Private Function CloseProcessHandle(ByVal ProcessId As DWORD, ByVal HandleValue As HANDLE) As BOOLEAN
+Private Function CloseProcessHandle(ByVal ProcessId As DWORD, ByVal HandleValue As HANDLE) As Boolean
     Dim hProcess As HANDLE = OpenProcess(PROCESS_DUP_HANDLE, False, ProcessId)
     If (hProcess <= 0) Then
         Print "OpenProcess Failed!" & " " & WinErrorMsg(GetLastError)
@@ -590,7 +590,7 @@ Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
         "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
         j += 1
         ContinueDo : 
-        'FF_DoEvents
+        FF_DoEvents
     Next
     CommitListViewView ListView
 End Sub
@@ -696,18 +696,22 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
         If pHandleEntry->Handles(i).UniqueProcessId <> ProcessId Then Continue For
         Dim MyHandleInfo As HANDLE_INFO
         Dim DosPath As WString * 260
-        MyHandleInfo.dwHandle = Cast(HANDLE, Cast(UInteger, pHandleEntry->Handles(i).HandleValue))
-        MyHandleInfo.dwProcessId = Cast(HANDLE, Cast(Integer, pHandleEntry->Handles(i).UniqueProcessId))
-        MyHandleInfo.strName = ""
-        MyHandleInfo.strType = ""
-        SetLastError 0
-        IoControl hDrv, IOCTL_QueryObject, @MyHandleInfo, SizeOf(HANDLE_INFO), @MyHandleInfo, SizeOf(HANDLE_INFO)
-        'If GetLastError = ERROR_INVALID_HANDLE Then Goto ContinueDo
-        'Print PID(i + 1) & "有" & HandleCount & "个句柄" & " 0x" & Hex(dwHandle)
-        If NtPathToDosPathW(@MyHandleInfo.strName, @DosPath) Then
-            strHandleName = DosPath
+        If IsDriverLoaded Then
+            MyHandleInfo.dwHandle = Cast(HANDLE, Cast(UInteger, pHandleEntry->Handles(i).HandleValue))
+            MyHandleInfo.dwProcessId = Cast(HANDLE, Cast(Integer, pHandleEntry->Handles(i).UniqueProcessId))
+            MyHandleInfo.strName = ""
+            MyHandleInfo.strType = ""
+            SetLastError 0
+            IoControl hDrv, IOCTL_QueryObject, @MyHandleInfo, SizeOf(HANDLE_INFO), @MyHandleInfo, SizeOf(HANDLE_INFO)
+            'If GetLastError = ERROR_INVALID_HANDLE Then Goto ContinueDo
+            'Print PID(i + 1) & "有" & HandleCount & "个句柄" & " 0x" & Hex(dwHandle)
+            If NtPathToDosPathW(@MyHandleInfo.strName, @DosPath) Then
+                strHandleName = DosPath
+            Else
+                strHandleName = MyHandleInfo.strName
+            End If
         Else
-            strHandleName = MyHandleInfo.strName
+            If Not GetHandleType(ProcessId, Cast(HANDLE, Cast(ULONG_PTR, pHandleEntry->Handles(i).HandleValue)), @MyHandleInfo.strType) Then MyLog.PrintLog LOG_WARN, "GetHandleList", "GetHandleType", "HANDLE=0x" & WHex(pHandleEntry->Handles(i).HandleValue)
         End If
         Dim ProcessName As StringW, ProcessPath As StringW
         Dim dwProcessId As DWORD, dwThreadId As DWORD

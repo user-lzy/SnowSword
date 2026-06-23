@@ -312,6 +312,7 @@ Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
             AddItemColListEx lvwWindow, 7,,, WStr("0x" & WHex(hChildWindows(j))), IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), WStr(window_Title), _
             "0x" & WHex(pWndProc), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
         Next
+        FF_DoEvents
     Next
     CommitListViewView lvwWindow
 End Sub

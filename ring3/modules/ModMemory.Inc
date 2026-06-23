@@ -236,7 +236,8 @@ Private Sub GetMemoryBlockList(ByVal dwProcessId As DWORD, lvwMemory As Class_Li
                 ' 开始新的合并块
                 currentBlock = nextBlock
             End If
-        Next i
+            FF_DoEvents
+        Next
         
         ' 添加最后一个块
         AddMemoryBlockDirectly lvwMemory, dwProcessId, currentBlock

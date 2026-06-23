@@ -1321,7 +1321,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndex(strPath, False)
             'InvalidateRect lvwProcess.hWnd, NULL, True
             ProcessCount += 1
-            'FF_DoEvents
+            FF_DoEvents
         Next
     End If
     'lvwProcess.ReDraw = True
@@ -1502,7 +1502,7 @@ Sub GetProcessTimerList(ByVal bGlobal As Boolean, ByVal dwProcessId As DWORD, lv
     End If
     
     For i As DWORD = 0 To UBound(ProcessTimer)
-        Print "[GetProcessTimerList]nIDEvent:" & ProcessTimer(i).nIDEvent & " pfn:" & "0x" & WHex(ProcessTimer(i).pfn)
+        'Print "[GetProcessTimerList]nIDEvent:" & ProcessTimer(i).nIDEvent & " pfn:" & "0x" & WHex(ProcessTimer(i).pfn)
         
         Dim wszModulePath As WString * MAX_PATH = ""
         GetModuleByAddress ProcessTimer(i).ProcessId, Cast(PVOID, ProcessTimer(i).pfn), @wszModulePath
@@ -1525,6 +1525,7 @@ Sub GetProcessTimerList(ByVal bGlobal As Boolean, ByVal dwProcessId As DWORD, lv
             "0x" & WHex(ProcessTimer(i).hWnd), _ ' 所属窗口
             WStr(ProcessTimer(i).ThreadId) ' 线程ID
         End If
+        FF_DoEvents
     Next
 
     ' 释放内存

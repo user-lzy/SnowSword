@@ -1482,24 +1482,31 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
 End Sub
 
 Sub Cache_DeleteRow(ByVal moduleType As Interface, ByVal index As Long)
+    ' 【必加】首先校验模块索引合法性
+    If moduleType < 0 Or moduleType >= MaxInterfaceCount Then
+        OutputDebugString "Cache_DeleteRow: 非法 moduleType！"
+        'Exit Sub
+    End If
+
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache = 0 Then Exit Sub
     If cache->pListSnap = 0 Then Exit Sub
 
     Dim snap As ListViewSnapshot Ptr = cache->pListSnap
+    ' 【必加】索引边界校验
     If index < 0 Or index >= snap->RowCount Then Exit Sub
 
     ' 释放该行
     FreeLVRow snap->Rows[index]
 
-    ' 前移数组（指针[]不变）
+    ' 前移数组
     Dim i As Long
     For i = index To snap->RowCount - 2
         snap->Rows[i] = snap->Rows[i + 1]
     Next
-
     snap->RowCount -= 1
 
-    ' 🔥 修复：移除 ReDim/Erase → 用 ReAllocate 调整指针数组
+    ' 调整数组大小
     If snap->RowCount > 0 Then
         snap->Rows = Reallocate(snap->Rows, snap->RowCount * SizeOf(LVRow Ptr))
     Else
@@ -1519,85 +1526,267 @@ Private Function GetCtx(ListView As Class_ListView) As ListViewContext Ptr
     Return Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
 End Function
 
-' 排序：仅对VisibleIndex索引数组排序，不改动原始数据
-' 自动识别：数字按数值排序，文本按字符串排序
-' 【高性能自适应排序】缓存列类型，无重复校验，性能无损
-Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
-    If ctx = NULL Or ctx->VisibleCount <= 1 Then Exit Sub
-    If ctx->SortedColumn < 0 Then Exit Sub
+' 统一行比较函数：返回>0表示idx1应排在idx2后，<0表示排在前，=0相等
+Private Function CompareRow( _
+    ctx As ListViewContext Ptr, _
+    idx1 As Long, _
+    idx2 As Long, _
+    sortCol As Long, _
+    isNumber As Boolean _
+) As Long
+    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    Dim row1 As LVRow Ptr = snap->Rows[idx1]
+    Dim row2 As LVRow Ptr = snap->Rows[idx2]
+    
+    ' 空行处理：空行统一排最后
+    If row1 = NULL AndAlso row2 = NULL Then Return 0
+    If row1 = NULL Then Return 1
+    If row2 = NULL Then Return -1
+    
+    ' 列越界保护
+    If sortCol >= row1->ColCount OrElse sortCol >= row2->ColCount Then Return 0
+    
+    Dim cell1 As WString Ptr = row1->Cols[sortCol]
+    Dim cell2 As WString Ptr = row2->Cols[sortCol]
+    
+    ' 空单元格处理：空值排最后
+    Dim empty1 As Boolean = (cell1 = NULL OrElse *cell1 = WStr(""))
+    Dim empty2 As Boolean = (cell2 = NULL OrElse *cell2 = WStr(""))
+    If empty1 AndAlso empty2 Then Return 0
+    If empty1 Then Return 1
+    If empty2 Then Return -1
+    
+    If isNumber Then
+        ' 数值比较
+        Dim val1 As Double = Val(*cell1)
+        Dim val2 As Double = Val(*cell2)
+        If val1 > val2 Then Return 1
+        If val1 < val2 Then Return -1
+        Return 0
+    Else
+        ' 系统API字符串比较，性能远高于手写循环
+        Return lstrcmpW(cell1, cell2)
+    End If
+End Function
 
+' 插入排序：仅用于32行以内的小数据量
+Private Sub InsertionSort( _
+    arr() As Long, _
+    ctx As ListViewContext Ptr, _
+    sortCol As Long, _
+    isNumber As Boolean, _
+    isAsc As Boolean _
+)
+    Dim count As Long = UBound(arr) + 1
+    If count <= 1 Then Exit Sub
+    
+    For i As Long = 1 To count - 1
+        Dim key As Long = arr(i)
+        Dim j As Long = i - 1
+        
+        While j >= 0
+            Dim cmp As Long = CompareRow(ctx, arr(j), key, sortCol, isNumber)
+            ' 升序：前值大于当前值则后移；降序反之
+            If (isAsc AndAlso cmp > 0) OrElse (Not isAsc AndAlso cmp < 0) Then
+                arr(j + 1) = arr(j)
+                j -= 1
+            Else
+                Exit While
+            End If
+        Wend
+        arr(j + 1) = key
+    Next
+End Sub
+
+' 三数取中选基准：避免有序数据下快排退化到O(n²)
+Private Function GetMedian( _
+    arr() As Long, _
+    nLeft As Long, _
+    nMid As Long, _
+    nRight As Long, _
+    ctx As ListViewContext Ptr, _
+    sortCol As Long, _
+    isNumber As Boolean, _
+    isAsc As Boolean _
+) As Long
+    Dim cmpLM As Long = CompareRow(ctx, arr(nLeft), arr(nMid), sortCol, isNumber)
+    Dim cmpMR As Long = CompareRow(ctx, arr(nMid), arr(nRight), sortCol, isNumber)
+    Dim cmpLR As Long = CompareRow(ctx, arr(nLeft), arr(nRight), sortCol, isNumber)
+    
+    If (cmpLM <= 0 AndAlso cmpMR >= 0) OrElse (cmpLM >= 0 AndAlso cmpMR <= 0) Then
+        Return nMid
+    ElseIf (cmpLR <= 0 AndAlso cmpMR <= 0) OrElse (cmpLR >= 0 AndAlso cmpMR >= 0) Then
+        Return nRight
+    Else
+        Return nLeft
+    End If
+End Function
+
+' 快速排序核心：尾递归优化 + 小区间插入排序
+Private Sub ListView_QuickSort( _
+    arr() As Long, _
+    nLeft As Long, _
+    nRight As Long, _
+    ctx As ListViewContext Ptr, _
+    sortCol As Long, _
+    isNumber As Boolean, _
+    isAsc As Boolean _
+)
+    ' 小区间（≤16）直接用插入排序，减少递归开销
+    If nRight - nLeft + 1 <= 16 Then
+        For i As Long = nLeft + 1 To nRight
+            Dim key As Long = arr(i)
+            Dim j As Long = i - 1
+            While j >= nLeft
+                Dim cmp As Long = CompareRow(ctx, arr(j), key, sortCol, isNumber)
+                If (isAsc AndAlso cmp > 0) OrElse (Not isAsc AndAlso cmp < 0) Then
+                    arr(j + 1) = arr(j)
+                    j -= 1
+                Else
+                    Exit While
+                End If
+            Wend
+            arr(j + 1) = key
+        Next
+        Exit Sub
+    End If
+    
+    ' 三数取中选择基准
+    Dim nMid As Long = nLeft + (nRight - nLeft) \ 2
+    Dim pivotIdx As Long = GetMedian(arr(), nLeft, nMid, nRight, ctx, sortCol, isNumber, isAsc)
+    Swap arr(pivotIdx), arr(nRight)
+    Dim pivotVal As Long = arr(nRight)
+    
+    ' 分区操作
+    Dim i As Long = nLeft - 1
+    For j As Long = nLeft To nRight - 1
+        Dim cmp As Long = CompareRow(ctx, arr(j), pivotVal, sortCol, isNumber)
+        If (isAsc AndAlso cmp <= 0) OrElse (Not isAsc AndAlso cmp >= 0) Then
+            i += 1
+            Swap arr(i), arr(j)
+        End If
+    Next
+    Swap arr(i + 1), arr(nRight)
+    Dim partitionIdx As Long = i + 1
+    
+    ' 尾递归优化：优先递归短区间，最大限度降低栈深度
+    If partitionIdx - nLeft < nRight - partitionIdx Then
+        ListView_QuickSort(arr(), nLeft, partitionIdx - 1, ctx, sortCol, isNumber, isAsc)
+        ListView_QuickSort(arr(), partitionIdx + 1, nRight, ctx, sortCol, isNumber, isAsc)
+    Else
+        ListView_QuickSort(arr(), partitionIdx + 1, nRight, ctx, sortCol, isNumber, isAsc)
+        ListView_QuickSort(arr(), nLeft, partitionIdx - 1, ctx, sortCol, isNumber, isAsc)
+    End If
+End Sub
+
+Private Function IsValidNumberW(pwStr As WString Ptr) As Boolean
+    ' 空指针/空字符串 → 不是数字
+    If pwStr = NULL OrElse *pwStr = WStr("") Then Return False
+    
+    Dim p As WString Ptr = pwStr
+    Dim hasDot As Boolean = False    ' 是否已出现小数点
+    Dim hasDigit As Boolean = False  ' 是否包含至少一个数字
+    
+    ' 跳过开头空白（空格、制表符，不需要可以直接删掉这一段）
+    While *p <> 0 AndAlso (*p = 32 OrElse *p = 9)
+        p += 1
+    Wend
+    If *p = 0 Then Return False ' 全是空白
+    
+    ' 处理正负号（只能出现在开头）
+    If *p = 43 OrElse *p = 45 Then ' + 或 - 的Unicode码值
+        p += 1
+    End If
+    
+    ' 逐字符校验
+    While *p <> 0
+        Dim c As UShort = *p ' 直接取宽字符的编码值
+        If c = 46 Then 
+            ' 小数点，只能出现一次
+            If hasDot Then Return False
+            hasDot = True
+        ElseIf c >= 48 AndAlso c <= 57 Then 
+            ' 0-9 数字字符
+            hasDigit = True
+        ElseIf c = 32 OrElse c = 9 Then 
+            ' 尾部空白，直接结束校验
+            Exit While
+        Else
+            ' 出现其他非数字字符，直接判定为非数字
+            Return False
+        End If
+        p += 1
+    Wend
+    
+    ' 必须至少包含一个数字（排除只有 "+"、"-"、"." 的非法情况）
+    Return hasDigit
+End Function
+
+Private Sub CacheColumnTypes(ctx As ListViewContext Ptr)
+    If ctx = NULL OrElse ctx->Snap = NULL OrElse ctx->Snap->RowCount = 0 Then Exit Sub
+    
+    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    Dim firstRow As LVRow Ptr = snap->Rows[0]
+    If firstRow = NULL Then Exit Sub
+    
+    Dim colCount As Long = firstRow->ColCount
+    ReDim ctx->ColumnIsNumber(0 To colCount - 1)
+    
+    ' 初始默认所有列都是数字列，发现非数字再标记为False
+    For col As Long = 0 To colCount - 1
+        ctx->ColumnIsNumber(col) = True
+    Next
+    
+    ' 遍历所有行校验（超大数据量可改为前100行：i < Min(snap->RowCount, 100)）
+    For i As Long = 0 To snap->RowCount - 1
+        Dim row As LVRow Ptr = snap->Rows[i]
+        If row = NULL Then Continue For
+        
+        For col As Long = 0 To colCount - 1
+            ' 已经判定为文本列的，跳过校验提升性能
+            If ctx->ColumnIsNumber(col) = False Then Continue For
+            
+            Dim cell As WString Ptr = row->Cols[col]
+            ' 空单元格不影响列类型判断，直接跳过
+            If cell = NULL OrElse *cell = WStr("") Then Continue For
+            
+            ' 只要有一个非空单元格不是数字，整列标记为文本列
+            If Not IsValidNumberW(cell) Then
+                ctx->ColumnIsNumber(col) = False
+                ' 新增：打印第一个触发非数字判定的单元格内容
+                'Print "列" & col & "第" & i & "行 非数字内容: [" & cell & "]"
+            End If
+        Next
+    Next
+    ' 打印每一列的最终判定结果
+    For col As Long = 0 To colCount - 1
+        'Print "列" & col & "类型:" & IIf(ctx->ColumnIsNumber(col), WStr("数字"), WStr("文本"))
+    Next
+End Sub
+
+' 高性能自适应排序入口：对外唯一接口，自动选择最优算法
+Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
+    If ctx = NULL OrElse ctx->VisibleCount <= 1 Then Exit Sub
+    If ctx->SortedColumn < 0 Then Exit Sub
+    
     Dim snap As ListViewSnapshot Ptr = ctx->Snap
     Dim sortCol As Long = ctx->SortedColumn
     Dim isAsc As Boolean = ctx->SortAscending
-    Dim count As Long = ctx->VisibleCount
-
-    ' 直接用缓存！0校验开销，和硬编码一样快
+    
+    ' 缓存容错：缺失则自动生成
+    If UBound(ctx->ColumnIsNumber) < 0 Then
+        CacheColumnTypes(ctx)
+    End If
     If sortCol > UBound(ctx->ColumnIsNumber) Then Exit Sub
     Dim isNumber As Boolean = ctx->ColumnIsNumber(sortCol)
-
-    ' 冒泡排序
-    For i As Long = 0 To count - 2
-        For j As Long = 0 To count - 2 - i
-            Dim idx1 As Long = ctx->VisibleIndex(j)
-            Dim idx2 As Long = ctx->VisibleIndex(j + 1)
-            
-            Dim row1 As LVRow Ptr = snap->Rows[idx1]
-            Dim row2 As LVRow Ptr = snap->Rows[idx2]
-            If row1 = NULL Or row2 = NULL Then Continue For
-            If sortCol >= row1->ColCount Or sortCol >= row2->ColCount Then Continue For
-
-            Dim cmp As Long = 0
-            If isNumber Then
-                ' 纯数字列：数值排序
-                Dim val1 As Double = Val(*row1->Cols[sortCol])
-                Dim val2 As Double = Val(*row2->Cols[sortCol])
-                If val1 > val2 Then cmp = 1
-                If val1 < val2 Then cmp = -1
-            Else
-                ' 文本列：字典序排序
-                cmp = lstrcmpW(row1->Cols[sortCol], row2->Cols[sortCol])
-            End If
-
-            If Not isAsc Then cmp = -cmp
-            If cmp > 0 Then Swap ctx->VisibleIndex(j), ctx->VisibleIndex(j + 1)
-        Next j
-    Next i
-End Sub
-
-/'Sub InitListViewData(ListView As Class_ListView)
-    Dim oldCtx As ListViewContext Ptr = GetCtx(ListView)
-    If oldCtx <> NULL Then
-        oldCtx->IsValid = False
-        oldCtx->Snap = NULL
-        Deallocate oldCtx
+    
+    ' 自适应选择排序算法
+    If ctx->VisibleCount <= 32 Then
+        InsertionSort(ctx->VisibleIndex(), ctx, sortCol, isNumber, isAsc)
+    Else
+        ListView_QuickSort(ctx->VisibleIndex(), 0, ctx->VisibleCount - 1, ctx, sortCol, isNumber, isAsc)
     End If
-
-    Dim ctx As ListViewContext Ptr = CAllocate(1, SizeOf(ListViewContext))
-    ctx->hLV = ListView.hWnd
-
-    Static g_InstanceId As ULong = 0
-    g_InstanceId += 1
-    ctx->InstanceId = g_InstanceId
-    ctx->IsValid = True
-
-    ctx->Snap = CAllocate(1, SizeOf(ListViewSnapshot))
-    ctx->Snap->RowCount = 0
-    ' 🔥 修复：空数组改为 NULL 指针
-    ctx->Snap->Rows = 0
-
-    ' 🔥 修复：本地数组保持 () 不变
-    ReDim ctx->VisibleIndex(-1)
-    ctx->VisibleCount = 0
-    ctx->Filter = 0
-    ctx->SortedColumn = -1
-    ctx->SortAscending = True
-
-    SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
-
-    ListView.DeleteAllItems
-    ListView_SetUnicodeFormat(ListView.hWnd, True)
-    ListView_SetExtendedListViewStyleEx(ListView.hWnd, LVS_OWNERDATA, LVS_OWNERDATA)
-End Sub '/
+End Sub
 
 Sub InitListViewData(ListView As Class_ListView)
     Dim oldCtx As ListViewContext Ptr = GetCtx(ListView)
@@ -1607,7 +1796,7 @@ Sub InitListViewData(ListView As Class_ListView)
     ' ==============================================
     If oldCtx = NULL Then
         ' 【首次初始化】：全新分配上下文
-        Dim ctx As ListViewContext Ptr = CAllocate(1, SizeOf(ListViewContext))
+        Dim ctx As ListViewContext Ptr = New ListViewContext'CAllocate(1, SizeOf(ListViewContext))
         ctx->hLV = ListView.hWnd
 
         Static g_InstanceId As ULong = 0
@@ -1859,37 +2048,6 @@ Sub GetItemColor(ListView As Class_ListView, Row As Long, ByRef Fore As COLORREF
     Back = r->Back
 End Sub
 
-' 【极简高性能版】基于ValW的纯数字判断（完美解决进程名误判）
-Private Function IsValidNumberW(pwStr As WString Ptr) As Boolean
-    ' 空指针/空字符串 → 不是数字
-    If pwStr = NULL Or *pwStr = WStr("") Then Return False
-    
-    ' 1. 转换为数值
-    Dim num As Double = Val(*pwStr)
-    
-    ' 2. 核心逻辑：
-    '    - 数字≠0 → 必须 原字符串 = 数值的字符串（杜绝360xxx）
-    '    - 数字=0 → 必须 原字符串严格等于 "0"
-    Function = (num <> 0 AndAlso WStr(num) = *pwStr) OrElse (*pwStr = WStr("0"))
-End Function
-
-' 一次性缓存所有列的类型（纯数字/文本），后续直接用，性能拉满
-Private Sub CacheColumnTypes(ctx As ListViewContext Ptr)
-    If ctx = NULL Or ctx->Snap = NULL Or ctx->Snap->RowCount = 0 Then Exit Sub
-    
-    Dim snap As ListViewSnapshot Ptr = ctx->Snap
-    ' 获取第一行数据
-    Dim firstRow As LVRow Ptr = snap->Rows[0]  ' 🔥 修复指针访问
-    If firstRow = NULL Then Exit Sub
-    
-    ' 本地数组保持 ()
-    Redim ctx->ColumnIsNumber(0 To firstRow->ColCount - 1)
-    
-    For col As Long = 0 To firstRow->ColCount - 1
-        ctx->ColumnIsNumber(col) = IsValidNumberW(firstRow->Cols[col])
-    Next col
-End Sub
-
 Sub CommitListViewView(ListView As Class_ListView)
     Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
     
@@ -1943,30 +2101,28 @@ Sub DeleteItemEx(ListView As Class_ListView, VisibleRow As Long, ByVal bCommit A
     
     If ctx = NULL Or ctx->Snap = NULL Then Exit Sub
     If VisibleRow < 0 Or VisibleRow >= ctx->VisibleCount Then Exit Sub
-
     Dim real As Long = ctx->VisibleIndex(VisibleRow)
     If real < 0 Or real >= ctx->Snap->RowCount Then Exit Sub
     
     Dim r As LVRow Ptr = ctx->Snap->Rows[real]
     If r = NULL Then Exit Sub
-
-    ' 正确释放：先释放每列的字符串，再释放列数组
+    
+    ' 释放行内存
     For i As Long = 0 To r->ColCount - 1
         If r->Cols[i] <> NULL Then
             Deallocate(r->Cols[i])
         End If
     Next
     Deallocate r->Cols
-    Deallocate r  ' 🔥 修复：Delete → Deallocate
-
-    ' 移动后续行
+    Deallocate r
+    
+    ' 前移快照行数组
     For i As Long = real To ctx->Snap->RowCount - 2
         ctx->Snap->Rows[i] = ctx->Snap->Rows[i + 1]
     Next
-
     ctx->Snap->RowCount -= 1
     
-    ' 🔥 修复：ReDim 改为 ReAllocate
+    ' 调整快照行数组大小
     If ctx->Snap->RowCount > 0 Then
         ctx->Snap->Rows = Reallocate(ctx->Snap->Rows, ctx->Snap->RowCount * SizeOf(LVRow Ptr))
     Else
@@ -1974,9 +2130,26 @@ Sub DeleteItemEx(ListView As Class_ListView, VisibleRow As Long, ByVal bCommit A
         ctx->Snap->Rows = 0
     End If
     
-    Cache_DeleteRow(CurrentInformation.intType, real) ' 🔥 修复：必须传 real 行，不是 VisibleRow
-    ' 需要重新计算可见索引
-    If bCommit Then CommitListViewView(ListView)
+    ' ========== 新增：同步更新可见索引数组 ==========
+    ' 1. 移除当前可见行
+    /'For i As Long = VisibleRow To ctx->VisibleCount - 2
+        ctx->VisibleIndex(i) = ctx->VisibleIndex(i + 1)
+    Next
+    ctx->VisibleCount -= 1
+    
+    ' 2. 所有大于 real 的可见索引全部减 1（因为快照行前移了）
+    For i As Long = 0 To ctx->VisibleCount - 1
+        If ctx->VisibleIndex(i) > real Then
+            ctx->VisibleIndex(i) -= 1
+        End If
+    Next'/
+    
+    Cache_DeleteRow(CurrentInformation.intType, real)
+    
+    If bCommit Then
+        'SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, ctx->VisibleCount, 0)
+        CommitListViewView ListView
+    End If
 End Sub
 
 Sub DeleteAllItemsEx(ListView As Class_ListView)
@@ -2034,7 +2207,8 @@ Sub UninitListViewData(ListView As Class_ListView)
     If ctx->Filter <> 0 Then Deallocate(ctx->Filter)
 
     SetWindowLongPtr(ListView.hWnd, GWLP_USERDATA, 0)
-    Deallocate(ctx)
+    'Deallocate(ctx)
+    Delete ctx
 End Sub
 
 Sub SetListViewItemBackColor(ListView As Class_ListView, ByVal ItemIndex As Integer, ByVal ItemColor As COLORREF)
@@ -2161,7 +2335,7 @@ Sub TreeView_SimulateDblClick(ByVal hTree As HWND, ByVal hItem As HTREEITEM)
     Dim rc As RECT
     TreeView_GetItemRect(hTree, hItem, @rc, True)
     
-    Dim xPos As Long = (rc.left + rc.right) \ 2
+    Dim xPos As Long = (rc.Left + rc.Right) \ 2
     Dim yPos As Long = (rc.top + rc.bottom) \ 2
     
     ' 发送自定义消息，让消息循环统一处理

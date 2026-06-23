@@ -255,6 +255,7 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
         MyLog.PrintLog LOG_INFO, "GetMsgHook",, "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
         " | 模块:" & finalModulePath
         CloseHandle hProcess
+        FF_DoEvents
     Next
 
     CommitListViewView lvwMsgHook
@@ -369,6 +370,7 @@ Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEve
         MyLog.PrintLog LOG_INFO, "GetEventHookList",, "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
         " | PID:" & info.ProcessId & " | 模块:" & finalModulePath & " | VA:0x" & Hex(realVA)
         CloseHandle hProcess
+        FF_DoEvents
     Next
 
     CommitListViewView lvwEventHook
@@ -475,7 +477,8 @@ Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey
         ' 调试打印
         /'Print "[" & i & "] 热键: " & sHotkey & " | 句柄:0x" & WHex(info.HotkeyHandle) & _
               " | PID:" & info.ProcessId & " | TID:" & info.ThreadId & _
-              " | hWnd:0x" & WHex(info.hWnd)'/
+              " | hWnd:0x" & WHex(info.hWnd) '/
+        FF_DoEvents
     Next
 
     CommitListViewView lvwHotkey

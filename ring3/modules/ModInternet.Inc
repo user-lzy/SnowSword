@@ -1,7 +1,5 @@
 ﻿#include Once "win/winsock2.bi"
 
-#define BUFFER_SIZE 1024
-
 'Extern "C"
 Declare Function inet_ntop Lib "ws2_32.dll " Alias "inet_ntop"(ByVal Family As INT_, ByVal pAddr As PVOID, ByVal pStringBuf As LPSTR, ByVal StringBufSize As UInteger) As LPCSTR
 Declare Function IcmpCreateFile Lib "iphlpapi.dll" Alias "IcmpCreateFile"() As HANDLE
@@ -118,8 +116,9 @@ Function IPStringToIPADDR(ipStr As String) As UInteger
 End Function
 
 Sub NetworkListenerThread(ByVal userdata As Any Ptr)
+    Dim dwBuf As ULong = 1024
     ' 堆分配缓冲区（避免栈溢出）
-    Dim buffer As Byte Ptr = New Byte[BUFFER_SIZE]
+    Dim buffer As Byte Ptr = New Byte[dwBuf]
     Dim ip As IPHeader
     Dim tcp As TCPHeader
     Do While True ' IsStartSniffer
@@ -141,7 +140,7 @@ Sub NetworkListenerThread(ByVal userdata As Any Ptr)
         If retSelect <= 0 Then Continue Do
         
         ' 接收数据
-        Dim ret As Long = recv(sock, buffer, BUFFER_SIZE, 0)
+        Dim ret As Long = recv(sock, buffer, dwBuf, 0)
         If ret <= 0 Then Continue Do
         
         Print "ret > 0"

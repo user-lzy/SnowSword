@@ -125,7 +125,7 @@ Private Function GetNode(ByVal szPath As LPWSTR,treFolder As Class_TreeView) As 
     Return NULL
 End Function
 
-Public Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
+Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
     Dim CurrentNode As HTREEITEM = Node
     Dim FullPath As StringW = ""  ' 初始化空路径，核心修复
     Dim ParentNode As HTREEITEM
@@ -214,6 +214,7 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
         End If '/
         i += 1
         If i >= UBound(fData) Then ReDim Preserve fData(UBound(fData) + 50) As WIN32_FIND_DATAW
+        FF_DoEvents
     Loop While FindNextFileW(hFind,@fData(i)) <> 0
     FindClose hFind
     
@@ -266,6 +267,7 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
                     SetItemColor lvwFile, ItemIndex, FB_Red, FB_White
                 End If
             End If
+            FF_DoEvents
         Next
     End If
     CommitListViewView lvwFile

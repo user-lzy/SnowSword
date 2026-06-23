@@ -233,6 +233,7 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
             End If
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", NewIndex, DriverPath
         End If
+        FF_DoEvents
     Next
     CommitListViewView lvwCallbacks
 End Sub
@@ -331,6 +332,7 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
             "0x" & WHex(pInfo[i].NotifyFn), _
             "0x" & WHex(pInfo[i].FlowDeleteFn), _
             pInfo[i].wName
+        FF_DoEvents
     Next
 
     CommitListViewView lvwCallouts
@@ -378,6 +380,7 @@ Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
 
     For i As Integer = 0 To count - 1
         AddItemColListEx lvwFilters, 5,,, WStr(pInfo[i].FilterId), WStr(pInfo[i].CalloutId), pInfo[i].wName, WStr(pInfo[i].ActionType), WStr(GuidToString(pInfo[i].CalloutGuid))
+        FF_DoEvents
     Next
 
     CommitListViewView lvwFilters
@@ -541,6 +544,7 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
                 End If
             Next
         End If
+        FF_DoEvents
     Next
 
     Return filterCount
@@ -675,7 +679,7 @@ Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName
         '' 读取下一个实例
         ZeroMemory(@buffer(0), bufSize)
         hr = FilterInstanceFindNext(hFind, InstanceAggregateStandardInformation, @buffer(0), bufSize, retLen)
-
+        FF_DoEvents
     Loop While hr = 0 '' 0=成功，继续循环
 
 CLEANUP:
@@ -1294,7 +1298,8 @@ Function EnumAttachDevices(ByVal lvwAttachDevice As Class_mCtrlTreeList, _
         
         ' 递归添加子节点
         AddNodesByParent lvwAttachDevice, rootItem, nodes(), nodeCount, devObj, totalAdded, _
-                        marked(), markedCount
+        marked(), markedCount
+        FF_DoEvents
     Next
     
     ' 5. 清理

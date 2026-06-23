@@ -1257,6 +1257,7 @@ Private Sub DrawTreeView()
     treMain.AddItem treKernelCallbacks, "WfpCallout"
     treMain.AddItem treKernelCallbacks, "WfpFilter"
     treMain.AddItem treKernelCallbacks, "Ndis"
+    treMain.AddItem treKernel, "对象目录"
     treHardDisk = treMain.AddItem(NULL, "硬盘")
     treMain.AddItem treHardDisk, "文件"
     treMain.AddItem NULL, "注册表"
@@ -1536,7 +1537,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         InitializeListView Process, ListView1
         RestoreColumnVisibility Process, ListView1.hWnd   ' 恢复用户隐藏的列
         lblNum.Caption = "正在获取..."
-        
+        'AfxMsg "1"
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
@@ -1975,6 +1976,24 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
             GetRootList TreeView
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+        
+    ElseIf SelectText = "对象目录" Then
+        gLayoutMode = LAYOUT_LIST_TREE
+        gMainView = VIEW_LISTVIEW
+        UpdateLayout
+        
+        CurrentInformation.intType = ObjectDirectory
+        InitializeListView ObjectDirectory, ListView1
+        InitializeTreeView TreeView
+        lblNum.Caption = "正在获取..."
+        
+        If g_ViewCache(CurrentInformation.intType).IsCached Then
+            RestoreTreeViewFromCache TreeView, CurrentInformation.intType
+            RestoreListViewFromCache ListView1, CurrentInformation.intType
+        Else
+            GetObjectRootList TreeView
+        End If
+        lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
     ' ====================================================================================
 
     ElseIf SelectText = "服务" Then
@@ -2111,6 +2130,13 @@ Function FrmMain_TreeView_NM_DBLCLK(hWndForm As hWnd, hWndControl As hWnd) As LR
         TreeView.ExpandEx hClickedItem, TVE_EXPAND
         Dim currentPath As StringW
         Select Case CurrentInformation.intType
+            Case ObjectDirectory
+                lblNum.Caption = "正在获取..."
+                GetObjectList hClickedItem, TreeView, ListView1, True, True
+                GetPathByNodeW hClickedItem, TreeView, currentPath
+                lblNum.Caption = "对象数量:" & ListView1.ItemCount
+                currentPath = RightW(currentPath, LenW(currentPath) - 1)
+                If currentPath <> "" Then txtFilePath.Text = currentPath
             Case File
                 lblNum.Caption = "正在获取..."
                 GetFileList hClickedItem, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
@@ -2138,6 +2164,7 @@ Function FrmMain_TreeView_NM_RCLICK(hWndForm As hWnd, hWndControl As hWnd) As LR
     Dim hClickedItem As HTREEITEM = TreeView_GetClickedItem(hWndControl)
     Dim currentPath As StringW
     GetPathByNodeW hClickedItem, TreeView, currentPath
+    If CurrentInformation.intType = ObjectDirectory Then currentPath = RightW(currentPath, LenW(currentPath) - 1)
     'If currentPath <> "" Then txtFilePath.Text = currentPath
     
     If hClickedItem <> 0 Then
@@ -2564,6 +2591,14 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             GetKernelModuleList ListView1
             'SetListViewData ListView1
             lblNum.Caption = "数量:" & ListView1.ItemCount
+        Case FrmMain_mnuKernelModule_mnuCheckHideDriver ' 检测隐藏驱动
+            Dim bState As Boolean = GetMenuCheckState(mnuKernelModule, FrmMain_mnuKernelModule_mnuCheckHideDriver)
+            SetMenuCheckState mnuKernelModule, FrmMain_mnuKernelModule_mnuCheckHideDriver, Not bState
+            If Not bState Then
+                GetKernelModuleList ListView1
+            Else
+                GetKernelModuleList ListView1
+            End If
         Case FrmMain_mnuKernelModule_mnuUnloadDriver ' 卸载驱动
             If Not (UnloadDriver(ListView1.GetItemText(ListView1.SelectedItem, 4), False)) Then
                 If IsDriverLoaded Then
@@ -3220,6 +3255,7 @@ Function FrmMain_TreeView_NM_CLICK(hWndForm As hWnd, hWndControl As hWnd) As LRe
     Dim currentPath As StringW
     CurrentNode = hClickedItem
     GetPathByNodeW hClickedItem, TreeView, currentPath
+    If CurrentInformation.intType = ObjectDirectory Then currentPath = RightW(currentPath, LenW(currentPath) - 1)
     If currentPath <> "" Then txtFilePath.Text = currentPath
     'Print "[NM_CLICK]" & currentPath & " " & txtFilePath.Text
     Function = False '返回 TRUE 非零以防止默认处理，返回 False 零以允许默认处理。

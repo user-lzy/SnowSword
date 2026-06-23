@@ -454,23 +454,489 @@ ToolTipBalloon=False
 
 
 [AllCode]
-'这是标准的工程模版，你也可做自己的模版。
-'写好工程，复制全部文件到VFB软件文件夹里【template】里即可，子文件夹名为 VFB新建工程里显示的名称
-'快去打造属于你自己的工程模版吧。
+' Hex 格式常量（和你的生成逻辑严格对应）
+Const HEX_LINE_LENGTH As Integer = 87
+Const HEX_AREA_START   As Integer = 20
+Const HEX_AREA_END As Integer = 67
 
-Dim Shared FrmMemoryEditor_PID As DWORD = 0
+#define MemoryInfo_Index 0
+#define OldTxtDataProc_Index 1
+
+' 辅助函数：判断指定位置（0-based）是否在Hex列区域内
+Function IsPosInHexArea(ByVal hWnd As HWND, ByVal nPos As Integer) As Boolean
+    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+    If nPos < 0 Or nPos >= txtLen Then Return False
+    
+    Dim lineOff As Integer = nPos Mod HEX_LINE_LENGTH
+    Return (lineOff >= HEX_AREA_START AndAlso lineOff <= HEX_AREA_END)
+End Function
+
+' 安全获取编辑框文本（强制ANSI，避免编码不匹配）
+Function GetEditText(ByVal hWnd As HWND) As String
+    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+    If txtLen <= 0 Then Return ""
+    
+    Dim buf As ZString Ptr = Allocate(txtLen + 1)
+    If buf = 0 Then Return ""
+    *buf = ""
+    
+    SendMessageA(hWnd, WM_GETTEXT, txtLen + 1, Cast(LPARAM, buf))
+    Dim res As String = *buf
+    Deallocate(buf)
+    Return res
+End Function
+
+' Hex区域内自动跳过空格
+Function SkipSpaceInHexArea(ByVal hWnd As HWND, ByVal curPos As Integer, ByVal isBackward As Boolean) As Integer
+    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+    If curPos < 0 Or curPos >= txtLen Then Return curPos
+    
+    Dim txt As String = GetEditText(hWnd)
+    Do
+        ' 边界校验
+        If isBackward AndAlso curPos < 0 Then Exit Do
+        If Not isBackward AndAlso curPos >= txtLen Then Exit Do
+        
+        Dim ch As String = Mid(txt, curPos + 1, 1)
+        If ch <> " " Then Exit Do
+        
+        If isBackward Then
+            curPos -= 1
+        Else
+            curPos += 1
+        End If
+    Loop
+    
+    ' 最终边界兜底
+    If curPos < 0 Then curPos = 0
+    If curPos > txtLen Then curPos = txtLen
+    Return curPos
+End Function
+
+' 判断选中范围是否都在Hex编辑区
+Function IsSelectionInHexArea(ByVal hWnd As HWND, ByVal start As Integer, ByVal endPos As Integer) As Boolean
+    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+    If start < 0 Or endPos > txtLen Then Return False
+    
+    For i As Integer = start To endPos - 1
+        If Not IsPosInHexArea(hWnd, i) Then Return False
+    Next
+    Return True
+End Function
+
+' 更新自定义块光标的位置
+Sub UpdateCaretPos(ByVal hWnd As HWND, ByVal charPos As Integer)
+    ' 正确调用 EM_POSFROMCHAR：wParam传字符索引，lParam传0
+    Dim posResult As LRESULT = SendMessageA(hWnd, EM_POSFROMCHAR, Cast(WPARAM, charPos), 0)
+    ' 从返回值提取坐标：低16位x，高16位y
+    Dim x As Integer = LOWORD(posResult)
+    Dim y As Integer = HIWORD(posResult)
+    ' 设置光标位置
+    SetCaretPos(x, y)
+End Sub
+
+' 统一获取选中范围（32位无溢出）
+Sub GetSel(ByVal hWnd As HWND, ByRef start As Integer, ByRef endPos As Integer)
+    Dim s As UInteger, e As UInteger
+    SendMessageA(hWnd, EM_GETSEL, Cast(WPARAM, @s), Cast(LPARAM, @e))
+    start = s
+    endPos = e
+End Sub
+
+Function TxtDataWndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+    Me.hWndForm = GetParent(hWnd)
+    Dim OldTxtDataProc As WNDPROC = Cast(WNDPROC, Me.UserData(OldTxtDataProc_Index))
+    
+    ' ========== 反汇编视图：系统原生只读，不做任何自定义拦截 ==========
+    If optDisasm.Value Then
+        ' 所有消息全部走原生窗口过程，只读特性由 EM_SETREADONLY 系统样式保证
+        ' 原生完整支持：Ctrl+C复制、Ctrl+A全选、方向键导航、右键菜单复制/全选等所有只读操作
+        ' 同时天然禁止所有修改操作：键盘输入、退格删除、粘贴、剪切、右键修改等
+        Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+    End If
+    
+    ' ========== Hex视图：编辑控制 ==========
+    Select Case uMsg
+        ' ==============================================
+        ' 字符输入：完全接管
+        ' ==============================================
+        Case WM_CHAR, WM_IME_CHAR
+            ' 控制字符单独处理
+            If wParam < 32 Then
+                Select Case wParam
+                    Case VK_BACK, VK_DELETE
+                        Dim selStart As Integer, selEnd As Integer
+                        GetSel(hWnd, selStart, selEnd)
+                        
+                        ' 区域合法性校验
+                        If Not IsSelectionInHexArea(hWnd, selStart, selEnd) Then
+                            Return 0
+                        End If
+                        
+                        Dim fullText As String = GetEditText(hWnd)
+                        
+                        If selStart <> selEnd Then
+                            ' 有选中：全部替换为0
+                            Mid(fullText, selStart + 1, selEnd - selStart) = String(selEnd - selStart, Asc("0"))
+                            SendMessageA(hWnd, WM_SETTEXT, 0, Cast(LPARAM, StrPtr(fullText)))
+                            SendMessageA(hWnd, EM_SETSEL, selStart, selStart)
+                            UpdateCaretPos(hWnd, selStart)
+                        Else
+                            ' 无选中：计算目标位置
+                            Dim targetPos As Integer = IIf(wParam = VK_BACK, selStart - 1, selStart)
+                            
+                            ' 边界校验
+                            If targetPos < 0 OrElse targetPos >= Len(fullText) Then
+                                Return 0
+                            End If
+                            
+                            ' 退格时向左跳过空格
+                            If wParam = VK_BACK Then
+                                targetPos = SkipSpaceInHexArea(hWnd, targetPos, True)
+                            End If
+                            
+                            ' 二次校验目标位置
+                            If Not IsPosInHexArea(hWnd, targetPos) Then
+                                Return 0
+                            End If
+                            
+                            Mid(fullText, targetPos + 1, 1) = "0"
+                            SendMessageA(hWnd, WM_SETTEXT, 0, Cast(LPARAM, StrPtr(fullText)))
+                            SendMessageA(hWnd, EM_SETSEL, targetPos, targetPos)
+                            UpdateCaretPos(hWnd, targetPos)
+                        End If
+                        Return 0
+                    
+                    Case VK_RETURN, VK_TAB
+                        ' 禁止换行制表，破坏格式
+                        Return 0
+                    
+                    Case Else
+                        ' 其他控制字符（如Ctrl+组合）放行给原生
+                        Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+                End Select
+            End If
+            
+            ' --- 可打印字符：Hex校验 + 覆盖替换 ---
+            Dim inputCh As String = UCase(Chr(wParam))
+            If Not ((inputCh >= "0" AndAlso inputCh <= "9") OrElse (inputCh >= "A" AndAlso inputCh <= "F")) Then
+                Return 0
+            End If
+            
+            Dim selStart As Integer, selEnd As Integer
+            GetSel(hWnd, selStart, selEnd)
+            
+            ' 区域校验
+            If Not IsSelectionInHexArea(hWnd, selStart, selEnd) Then
+                Return 0
+            End If
+            
+            Dim fullText As String = GetEditText(hWnd)
+            Dim txtLen As Integer = Len(fullText)
+            Dim editPos As Integer = selStart
+            
+            If selStart <> selEnd Then
+                ' 有选中：覆盖整个范围
+                Dim fillLen As Integer = selEnd - selStart
+                Mid(fullText, selStart + 1, fillLen) = String(fillLen, Asc(inputCh))
+                editPos = selEnd
+            Else
+                ' 无选中：覆盖当前字符
+                If editPos >= txtLen Then Return 0
+                Mid(fullText, editPos + 1, 1) = inputCh
+                editPos += 1
+            End If
+            
+            ' 写回文本
+            SendMessageA(hWnd, WM_SETTEXT, 0, Cast(LPARAM, StrPtr(fullText)))
+            
+            ' 光标后移并跳过空格
+            If editPos < txtLen Then
+                editPos = SkipSpaceInHexArea(hWnd, editPos, False)
+            End If
+            editPos = IIf(editPos > txtLen, txtLen, editPos)
+            
+            ' 最终确保光标在Hex区域内
+            If Not IsPosInHexArea(hWnd, editPos) Then
+                ' 跳到下一行Hex开头
+                Dim curLine As Integer = editPos \ HEX_LINE_LENGTH
+                editPos = curLine * HEX_LINE_LENGTH + HEX_AREA_START
+                ' 兜底校验
+                If editPos >= txtLen Then
+                    editPos = txtLen
+                End If
+            End If
+            
+            SendMessageA(hWnd, EM_SETSEL, editPos, editPos)
+            UpdateCaretPos(hWnd, editPos)
+            
+            Return 0
+        
+        ' ==============================================
+        ' 方向键：校准光标，跳过空格，限制在Hex区域
+        ' ==============================================
+        Case WM_KEYDOWN
+            Select Case wParam
+                Case VK_LEFT, VK_RIGHT
+                    ' 先让原生移动一步
+                    Dim res As LRESULT = CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+                    
+                    Dim curPos As Integer, tmp As Integer
+                    GetSel(hWnd, curPos, tmp)
+                    
+                    Dim isBack As Boolean = (wParam = VK_LEFT)
+                    curPos = SkipSpaceInHexArea(hWnd, curPos, isBack)
+                    
+                    ' 边界限制：确保在Hex区域内
+                    If Not IsPosInHexArea(hWnd, curPos) Then
+                        If isBack Then
+                            ' 向左超出：跳到上一行Hex末尾
+                            Dim curLine As Integer = curPos \ HEX_LINE_LENGTH
+                            If curLine > 0 Then
+                                curPos = (curLine - 1) * HEX_LINE_LENGTH + HEX_AREA_END
+                            Else
+                                curPos = HEX_AREA_START ' 第一行开头
+                            End If
+                        Else
+                            ' 向右超出：跳到下一行Hex开头
+                            Dim curLine As Integer = curPos \ HEX_LINE_LENGTH
+                            Dim maxLine As Integer = (SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)) \ HEX_LINE_LENGTH
+                            If curLine < maxLine Then
+                                curPos = (curLine + 1) * HEX_LINE_LENGTH + HEX_AREA_START
+                            Else
+                                curPos = curLine * HEX_LINE_LENGTH + HEX_AREA_END ' 最后一行末尾
+                            End If
+                        End If
+                    End If
+                    
+                    ' 最终位置兜底
+                    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+                    If curPos < 0 Then curPos = 0
+                    If curPos > txtLen Then curPos = txtLen
+                    
+                    SendMessageA(hWnd, EM_SETSEL, curPos, curPos)
+                    UpdateCaretPos(hWnd, curPos)
+                    Return res
+                
+                Case VK_UP, VK_DOWN
+                    Dim curPos As Integer, tmp As Integer
+                    GetSel(hWnd, curPos, tmp)
+                    
+                    Dim txtLen As Integer = SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0)
+                    Dim isUp As Boolean = (wParam = VK_UP)
+                    
+                    ' 计算当前行列
+                    Dim curLine As Integer = curPos \ HEX_LINE_LENGTH
+                    Dim lineOff As Integer = curPos Mod HEX_LINE_LENGTH
+                    
+                    ' 目标行边界
+                    Dim targetLine As Integer = IIf(isUp, curLine - 1, curLine + 1)
+                    Dim maxLine As Integer = txtLen \ HEX_LINE_LENGTH
+                    If targetLine < 0 Or targetLine > maxLine Then
+                        Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+                    End If
+                    
+                    ' 计算目标位置并校准
+                    Dim targetPos As Integer = targetLine * HEX_LINE_LENGTH + lineOff
+                    targetPos = SkipSpaceInHexArea(hWnd, targetPos, isUp)
+                    
+                    ' 确保在Hex区域内
+                    If Not IsPosInHexArea(hWnd, targetPos) Then
+                        targetPos = targetLine * HEX_LINE_LENGTH + HEX_AREA_START
+                    End If
+                    
+                    ' 兜底
+                    If targetPos < 0 Then targetPos = 0
+                    If targetPos > txtLen Then targetPos = txtLen
+                    
+                    SendMessageA(hWnd, EM_SETSEL, targetPos, targetPos)
+                    UpdateCaretPos(hWnd, targetPos)
+                    Return 0
+            End Select
+            
+            ' 其他按键走原生
+            Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+        
+        ' ==============================================
+        ' 粘贴：过滤 + 覆盖
+        ' ==============================================
+        Case WM_PASTE
+            Dim selStart As Integer, selEnd As Integer
+            GetSel(hWnd, selStart, selEnd)
+            
+            If Not IsSelectionInHexArea(hWnd, selStart, selEnd) Then
+                Return 0
+            End If
+            
+            ' 获取剪贴板内容
+            If OpenClipboard(hWnd) = 0 Then Return 0
+            Dim hClip As HANDLE = GetClipboardData(CF_TEXT)
+            If hClip = 0 Then
+                CloseClipboard()
+                Return 0
+            End If
+            
+            Dim pClipText As ZString Ptr = GlobalLock(hClip)
+            Dim clipStr As String = UCase(*pClipText)
+            GlobalUnlock(hClip)
+            CloseClipboard()
+            
+            ' 过滤仅保留Hex字符
+            Dim cleanStr As String
+            For i As Integer = 1 To Len(clipStr)
+                Dim ch As String = Mid(clipStr, i, 1)
+                If (ch >= "0" AndAlso ch <= "9") OrElse (ch >= "A" AndAlso ch <= "F") Then
+                    cleanStr &= ch
+                End If
+            Next
+            If Len(cleanStr) = 0 Then Return 0
+            
+            ' 覆盖替换，不超出文本长度
+            Dim fullText As String = GetEditText(hWnd)
+            Dim txtLen As Integer = Len(fullText)
+            Dim pasteLen As Integer = Len(cleanStr)
+            If selStart + pasteLen > txtLen Then
+                pasteLen = txtLen - selStart
+                cleanStr = Left(cleanStr, pasteLen)
+            End If
+            
+            Mid(fullText, selStart + 1, pasteLen) = cleanStr
+            SendMessageA(hWnd, WM_SETTEXT, 0, Cast(LPARAM, StrPtr(fullText)))
+            
+            ' 设置光标
+            Dim endPos As Integer = selStart + pasteLen
+            endPos = SkipSpaceInHexArea(hWnd, endPos, False)
+            If endPos > txtLen Then endPos = txtLen
+            
+            SendMessageA(hWnd, EM_SETSEL, endPos, endPos)
+            UpdateCaretPos(hWnd, endPos)
+            
+            Return 0
+        
+        ' ==============================================
+        ' 焦点：自定义块光标
+        ' ==============================================
+        Case WM_SETFOCUS
+            Dim res As LRESULT = CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+            
+            ' 计算字符尺寸
+            Dim hdc As HDC = GetDC(hWnd)
+            Dim hFont As HFONT = Cast(HFONT, SendMessageA(hWnd, WM_GETFONT, 0, 0))
+            Dim oldFont As HFONT = SelectObject(hdc, hFont)
+            
+            Dim charSize As SIZE
+            'Dim szChar As ZString * 2 = 
+            GetTextExtentPoint32(hdc, "0", 1, @charSize)
+            
+            SelectObject(hdc, oldFont)
+            ReleaseDC(hWnd, hdc)
+            
+            ' 创建实心块光标
+            CreateCaret(hWnd, Cast(HBITMAP, 0), charSize.cx, charSize.cy)
+            ShowCaret(hWnd)
+            
+            ' 初始化光标位置
+            Dim curPos As Integer, tmp As Integer
+            GetSel(hWnd, curPos, tmp)
+            UpdateCaretPos(hWnd, curPos)
+            
+            Return res
+        
+        Case WM_KILLFOCUS
+            DestroyCaret()
+            Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+        
+        ' ==============================================
+        ' 窗口销毁：恢复原窗口过程
+        ' ==============================================
+        Case WM_NCDESTROY
+            SetWindowLongPtr(hWnd, GWLP_WNDPROC, Cast(LONG_PTR, OldTxtDataProc))
+            Me.UserData(OldTxtDataProc_Index) = 0
+            Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+    End Select
+    
+    ' 其余消息全部走原生
+    Return CallWindowProc(OldTxtDataProc, hWnd, uMsg, wParam, lParam)
+End Function
 
 ' ==============================================
-' 终极版：仅使用你指定的Hex函数 + 修复所有问题
+' 辅助函数：从Hex视图文本中解析出字节数组
+' ==============================================
+Function ParseBytesFromHexText(ByVal hexText As String, outBytes() As UByte) As Boolean
+    Dim nPos As Integer = 1
+    Dim allHex As String
+    
+    ' 逐行提取Hex部分
+    While nPos <= Len(hexText)
+        Dim crPos As Integer = InStr(nPos, hexText, !"\r\n")
+        Dim strLine As String
+        If crPos = 0 Then
+            strLine = Mid(hexText, nPos)
+            nPos = Len(hexText) + 1
+        Else
+            strLine = Mid(hexText, nPos, crPos - nPos)
+            nPos = crPos + 2
+        End If
+        
+        ' 跳过非地址行
+        If Len(strLine) < 20 OrElse Left(strLine, 2) <> "0x" Then
+            Continue While
+        End If
+        
+        ' 提取Hex列（第21位开始，共48字符，1-based索引）
+        Dim hexPart As String = Mid(strLine, 21, 48)
+        ' 过滤空格，拼接所有Hex字符
+        For i As Integer = 1 To Len(hexPart)
+            Dim c As String = Mid(hexPart, i, 1)
+            If c <> " " Then
+                allHex += c
+            End If
+        Next
+    Wend
+    
+    ' 合法性校验
+    If Len(allHex) = 0 Then
+        AfxMsg "未解析到有效Hex数据！"
+        Return False
+    End If
+    If Len(allHex) Mod 2 <> 0 Then
+        AfxMsg "Hex数据长度不完整（奇数个字符），无法解析！"
+        Return False
+    End If
+    
+    ' 字符合法性校验
+    For i As Integer = 1 To Len(allHex)
+        Dim c As String = UCase(Mid(allHex, i, 1))
+        If Not ((c >= "0" And c <= "9") Or (c >= "A" And c <= "F")) Then
+            AfxMsg "包含非法Hex字符：" & c & "（位置：" & i & "）"
+            Return False
+        End If
+    Next
+    
+    ' 转换为字节数组
+    Dim byteCount As Integer = Len(allHex) \ 2
+    ReDim outBytes(byteCount - 1) As UByte
+    For i As Integer = 0 To byteCount - 1
+        Dim hexByte As String = Mid(allHex, i * 2 + 1, 2)
+        outBytes(i) = ValUInt("&H" & hexByte)
+    Next
+    
+    Return True
+End Function
+
+' ==============================================
+' 终极版：仅使用指定Hex函数 + 修复所有问题
 ' ==============================================
 Sub UpdateTextBoxFromBytes( _
-    ByVal TextBox As Class_TextBox, _
+    TextBox As Class_TextBox, _
     bytes() As UByte, _
     ByVal disasm As Boolean = False, _
     ByVal baseAddr As UInteger = 0 _
 )
     If UBound(bytes) < 0 Then
         TextBox.Text = "无数据"
+        ' 无数据时反汇编视图仍设为只读
+        SendMessage TextBox.hWnd, EM_SETREADONLY, disasm, 0
         Exit Sub
     End If
     
@@ -478,28 +944,28 @@ Sub UpdateTextBoxFromBytes( _
     Dim As Integer arrLen = UBound(bytes) - LBound(bytes) + 1
     
     ' ============================
-    ' Hex 视图（100%修复：两位标准格式+完美对齐）
+    ' Hex 视图（修复：两位标准格式+完美对齐）
     ' ============================
     If disasm = False Then
         Dim As Integer i = 0
         While i < arrLen
-            ' 地址：0x + 16位标准十六进制（用你指定的Hex函数）
+            ' 地址：0x + 16位标准十六进制
             Dim addr As String = "0x" & Hex(baseAddr + i, 16)
             outputStr += addr & "  "
             
-            ' Hex数据：固定2位十六进制，16字节一行
+            ' Hex数据：固定2位十六进制，16字节一行，不足补空格
             Dim hexLine As String
             For j As Integer = 0 To 15
                 If i + j < arrLen Then
-                    ' ✅ 核心：用你指定的Hex函数，转2位十六进制
-                    hexLine += Hex(@bytes(i+j), 2) & " "
+                    ' 修复：直接传字节值，而非取元素地址
+                    hexLine += Hex(bytes(i+j), 2) & " "
                 Else
                     hexLine += "   "
                 End If
             Next
             outputStr += Left(hexLine, 48) & " "
             
-            ' ASCII列
+            ' ASCII列：可打印字符直接显示，其余用.代替
             Dim asciiLine As String
             For j As Integer = 0 To 15
                 If i + j < arrLen Then
@@ -529,7 +995,7 @@ Sub UpdateTextBoxFromBytes( _
             Dim As Const ZString Ptr hexText = ud_insn_hex(@u)
             Dim As UInt64 offset = ud_insn_off(@u)
             
-            ' 统一用你指定的Hex函数
+            ' 统一使用指定Hex函数格式化地址
             Dim addrStr As String = "0x" & Hex(offset, 16)
             Dim hexStr As String = *hexText
             Dim fixedHex As String = hexStr
@@ -545,14 +1011,16 @@ Sub UpdateTextBoxFromBytes( _
     End If
     
     TextBox.Text = outputStr
+    ' 视图切换时自动设置只读：反汇编视图只读，Hex视图可编辑
+    SendMessage TextBox.hWnd, EM_SETREADONLY, disasm, 0
 End Sub
 
 '[FrmMemoryEditor.CmdRead]事件 : 单击
-'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码。
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Me.hWndForm = hWndForm
-    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(0))
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(MemoryInfo_Index))
     If MemoryInfo->dwProcessId = 4 Then MemoryInfo->dwProcessId = 0
     
     ' 读取参数初始化（共用逻辑）
@@ -588,7 +1056,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     ' 逻辑分支2：驱动未加载 → 优先使用系统API ReadProcessMemory
     ' ==============================================
-    Dim hProcess As HANDLE = OpenProcess(PROCESS_VM_READ, FALSE, FrmMemoryEditor_PID)
+    Dim hProcess As HANDLE = OpenProcess(PROCESS_VM_READ, FALSE, Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId)))
     If hProcess = INVALID_HANDLE_VALUE Then
         Print "[API读取]OpenProcess失败：" & WinErrorMsg(GetLastError)
     Else
@@ -642,42 +1110,138 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         Print "[驱动读取]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
         AfxMsg "驱动读取内存失败！"
     Else
-        Print "optDisasm.Value:" & optDisasm.Value
         UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, readAddr
     End If
 End Sub
 
+'[FrmMemoryEditor.CmdWrite]事件 : 单击
+Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
+    Me.hWndForm = hWndForm
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(MemoryInfo_Index))
+    If MemoryInfo->dwProcessId = 4 Then MemoryInfo->dwProcessId = 0
+    
+    ' 反汇编视图禁止直接写入
+    If optDisasm.Value = True Then
+        AfxMsg "反汇编视图无法直接修改，请切换到Hex视图编辑字节后再写入。"
+        Exit Sub
+    End If
+    
+    ' 解析Hex文本为字节数组
+    Dim bytData() As UByte
+    If Not ParseBytesFromHexText(txtData.Text, bytData()) Then
+        Exit Sub
+    End If
+    
+    Dim dwSize As DWORD = UBound(bytData) - LBound(bytData) + 1
+    Dim writeAddr As UInteger = ValULng(FF_Replace(txtAddr.Text, "0x", "&H"))
+    
+    ' ==============================================
+    ' 逻辑分支1：驱动已加载 → 直接使用驱动写入
+    ' ==============================================
+    If IsDriverLoaded = True Then
+        Dim stMemory As MemoryStruct
+        stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, MemoryInfo->dwProcessId))
+        stMemory.Addr = Cast(PVOID, writeAddr)
+        stMemory.dwSize = dwSize
+        stMemory.pData = @bytData(0)
+        SetLastError 0
+        
+        If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
+            Print "[驱动写入]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+            AfxMsg "驱动写入内存失败！"
+        Else
+            AfxMsg "内存写入成功！"
+            ' 写入成功后刷新显示，同步ASCII与反汇编
+            UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
+        End If
+        Exit Sub
+    End If
+    
+    ' ==============================================
+    ' 逻辑分支2：驱动未加载 → 优先使用系统API WriteProcessMemory
+    ' ==============================================
+    Dim hProcess As HANDLE = OpenProcess(PROCESS_VM_WRITE Or PROCESS_VM_OPERATION, FALSE, Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId)))
+    If hProcess = INVALID_HANDLE_VALUE Then
+        Print "[API写入]OpenProcess失败：" & WinErrorMsg(GetLastError)
+    Else
+        Dim bytesWritten As SIZE_T = 0
+        If WriteProcessMemory(hProcess, Cast(LPVOID, writeAddr), @bytData(0), dwSize, @bytesWritten) And bytesWritten = dwSize Then
+            AfxMsg "内存写入成功！"
+            ' 写入成功后刷新显示
+            UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
+            CloseHandle(hProcess)
+            Exit Sub
+        Else
+            Print "[API写入]WriteProcessMemory失败：" & WinErrorMsg(GetLastError)
+        End If
+        CloseHandle(hProcess)
+    End If
+    
+    ' ==============================================
+    ' API写入失败 → 弹窗询问是否使用驱动写入
+    ' ==============================================
+    If AfxMsg("系统API写入内存失败，是否尝试加载驱动写入？",, MB_YESNO) = IDNO Then
+        Exit Sub
+    End If
+    
+    ' ==============================================
+    ' 驱动加载 + 驱动写入
+    ' ==============================================
+    If Not IsDriverLoaded Then
+        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
+            AfxMsg "驱动加载失败!"
+            Exit Sub
+        End If
+        hDrv = OpenDrv("\\.\\SnowSword", True)
+        If hDrv = INVALID_HANDLE_VALUE Then
+            AfxMsg "驱动打开失败!"
+            Exit Sub
+        End If
+        AfxMsg "驱动加载成功!"
+        FrmMain.Check6.Value = True
+        IsDriverLoaded = True
+    End If
+    
+    ' 驱动写入执行
+    Dim stMemory As MemoryStruct
+    stMemory.dwProcessId = Cast(HANDLE, Cast(ULONG64, MemoryInfo->dwProcessId))
+    stMemory.Addr = Cast(PVOID, writeAddr)
+    stMemory.dwSize = dwSize
+    stMemory.pData = @bytData(0)
+    SetLastError 0
+    
+    If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
+        Print "[驱动写入]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+        AfxMsg "驱动写入内存失败！"
+    Else
+        AfxMsg "内存写入成功！"
+        ' 同步更新显示
+        UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
+    End If
+End Sub
+
 '[FrmMemoryEditor]事件 : 窗口完全显示后。
-'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
 Sub FrmMemoryEditor_Shown(hWndForm As hWnd, UserData As Integer)
     Me.hWndForm = hWndForm
-    Me.UserData(0) = UserData
+    Me.UserData(MemoryInfo_Index) = UserData
     Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, UserData)
+    
     txtPID.Text = WStr(MemoryInfo->dwProcessId)
     txtAddr.Text = "0x" & WHex(Cast(ULONG64, MemoryInfo->Addr))
     txtSize.Text = "0x200"
     FrmMemoryEditor.Caption = "内存编辑器"
     txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId))))
+    
+    Me.UserData(OldTxtDataProc_Index) = Cast(Integer, SetWindowLongPtr(txtData.hWnd, GWLP_WNDPROC, Cast(LONG_PTR, @TxtDataWndProc)))
 End Sub
 
-'[FrmMemoryEditor.txtPID]事件 : 文本已经被修改（修改前用 EN_UPDATE
-'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+'[FrmMemoryEditor.txtPID]事件 : 文本已经被修改
 Sub FrmMemoryEditor_txtPID_EN_Change(hWndForm As hWnd, hWndControl As hWnd)
     Me.hWndForm = hWndForm
-    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(0))
-    MemoryInfo->dwProcessId = Cast(HANDLE, ValULng(txtPID.Text))
-    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId))))
+    Dim MemoryInfo As MemoryStruct Ptr = Cast(MemoryStruct Ptr, Me.UserData(MemoryInfo_Index))
+    Dim newPid As DWORD = Cast(DWORD, ValULng(txtPID.Text))
+    
+    MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, newPid))
+    
+    txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(newPid))
 End Sub
-
-'[FrmMemoryEditor]事件 : 即将关闭窗口，返回非0可阻止关闭
-'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-Function FrmMemoryEditor_WM_Close(hWndForm As hWnd) As LResult
-
-
-   Function = FALSE ' 返回 TRUE 阻止关闭窗口。
-End Function
-
-
-

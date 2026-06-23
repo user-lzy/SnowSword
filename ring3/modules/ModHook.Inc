@@ -831,8 +831,8 @@ Function ScanIAT64(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook A
             pOrigThunk += SizeOf(IMAGE_THUNK_DATA)
             pCurThunk += SizeOf(IMAGE_THUNK_DATA)
         Loop
-
         impPtr += SizeOf(IMAGE_IMPORT_DESCRIPTOR)
+        FF_DoEvents
     Loop
 End Function
 
@@ -919,7 +919,6 @@ Function ScanIAT32(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook A
 ContinueDo:
             pOrg += 4 : pCur += 4
         Loop
-
         pImp += SizeOf(IMAGE_IMPORT_DESCRIPTOR)
         FF_DoEvents
     Loop

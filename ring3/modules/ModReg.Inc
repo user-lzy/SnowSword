@@ -326,6 +326,7 @@ Function GetRegList1( _
         outResult.Values(idx).ValueData = ProcessValueData(dataType, buf(), dataSize)
         
         idx += 1
+        FF_DoEvents
     Loop
 
     ' 关闭句柄

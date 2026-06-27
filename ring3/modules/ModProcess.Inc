@@ -281,6 +281,7 @@ Declare Function ZwQueryInformationProcess Lib "ntdll.dll" Alias "ZwQueryInforma
     ByVal ProcessInformation As LPVOID, ByVal ProcessInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS
 Declare Function _IsProcessCritical Lib "kernel32" Alias "IsProcessCritical"(ByVal hProcess As HANDLE, ByVal Critical As PBOOLEAN) As Boolean
 Declare Function GetProcessIdOfThread Lib "kernel32" Alias "GetProcessIdOfThread"(ByVal Thread As HANDLE) As DWORD
+Declare Function ConvertSidToStringSid Lib "advapi32.dll" Alias "ConvertSidToStringSidA" (ByVal SID As PSID, ByRef StringSid As LPSTR) As BOOL
 
 CONST OBJ_KERNEL_HANDLE = &H00000200
 #define SYSTEM_CALL_OPENPROCESS &H26
@@ -1030,6 +1031,99 @@ Cleanup:
     If hProcess <> NULL Then CloseHandle(hProcess)
 End Function
 
+' 辅助：SID转字符串Key，用作缓存匹配
+Private Function SidToCacheKey(pSid As PVOID) As String
+    Dim sidLen As DWORD = GetLengthSid(pSid)
+    Dim buf As ZString * 512
+    ConvertSidToStringSid(pSid, @buf)
+    Return buf
+End Function
+
+' 缓存包装入口，外部替换GetProcessUserName → GetProcessUserNameCached
+Function GetProcessUserNameCached(ByVal dwProcessId As DWORD) As StringW
+    Static cacheKey() As StringW
+    Static cacheResult() As StringW
+    Static cacheCnt As Integer = 0
+    
+    ' 1. 先执行原函数内部逻辑，拿到TokenUser与SID（复用原有打开流程，不重写底层）
+    Const TokenQuery As DWORD = &H0008
+    Dim hProcess As HANDLE = NULL
+    Dim hToken As HANDLE = NULL
+    Dim dwSize As DWORD = 0
+    Dim pUserBuf As UByte Ptr = NULL
+    Dim pTokenUser As TOKEN_USER Ptr
+    Dim szUserName As WString * 256
+    Dim szDomainName As WString * 256
+    Dim userNameLen As DWORD = 256
+    Dim domainLen As DWORD = 256
+    Dim useType As DWORD = 0
+    Dim errCode As DWORD = 0
+    Dim finalUser As StringW = "(failed)"
+    Dim sidKey As StringW
+
+    If IsDriverLoaded Then
+        hProcess = SnowSword_OpenProcess(dwProcessId)
+    Else
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwProcessId)
+    End If
+    If hProcess = NULL Then
+        Goto Cleanup
+    End If
+
+    If OpenProcessToken(hProcess, TokenQuery, @hToken) = 0 Then
+        Goto Cleanup
+    End If
+
+    GetTokenInformation(hToken, TokenUser, NULL, 0, @dwSize)
+    If dwSize = 0 Then Goto Cleanup
+
+    pUserBuf = Allocate(dwSize)
+    If pUserBuf = NULL Then Goto Cleanup
+
+    If GetTokenInformation(hToken, TokenUser, pUserBuf, dwSize, @dwSize) = 0 Then
+        Goto Cleanup
+    End If
+
+    pTokenUser = Cast(TOKEN_USER Ptr, pUserBuf)
+    If pTokenUser->User.SID = NULL Then Goto Cleanup
+
+    ' 生成SID缓存Key
+    sidKey = SidToCacheKey(pTokenUser->User.SID)
+
+    ' 2. 查找缓存
+    For i As Integer = 0 To cacheCnt - 1
+        If cacheKey(i) = sidKey Then
+            finalUser = cacheResult(i)
+            Goto Cleanup ' 命中直接返回，跳过LookupAccountSid
+        End If
+    Next
+
+    ' 3. 未命中，执行原LookupAccountSid逻辑
+    If LookupAccountSid(NULL, pTokenUser->User.Sid, @szUserName, @userNameLen, @szDomainName, @domainLen, @useType) Then
+        finalUser = LeftW(szDomainName, domainLen) & "\" & LeftW(szUserName, userNameLen)
+    Else
+        finalUser = "(failed)"
+    End If
+
+    ' 4. 写入缓存，自动扩容
+    If cacheCnt = 0 Then
+        ReDim cacheKey(0 To 15)
+        ReDim cacheResult(0 To 15)
+    ElseIf cacheCnt > UBound(cacheKey) Then
+        ReDim Preserve cacheKey(0 To cacheCnt * 2 - 1)
+        ReDim Preserve cacheResult(0 To cacheCnt * 2 - 1)
+    End If
+    cacheKey(cacheCnt) = sidKey
+    cacheResult(cacheCnt) = finalUser
+    cacheCnt += 1
+
+Cleanup:
+    If pUserBuf <> NULL Then Deallocate(pUserBuf)
+    If hToken <> NULL Then CloseHandle(hToken)
+    If hProcess <> NULL Then CloseHandle(hProcess)
+    Return finalUser
+End Function
+
 ' 辅助函数
 Private Function FileTimeToLocalStr(ByVal ft As FILETIME) As String
     Dim st As SYSTEMTIME, lt As SYSTEMTIME
@@ -1196,6 +1290,169 @@ Function GetProcessOtherInfo(ByVal PID As DWORD, txtInfo As Class_TextBox) As Pr
     Return info
 End Function
 
+Public Function GetProcessList1(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
+    Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
+    Dim ProcessCount As Integer = 0
+    Dim dwPID As DWORD
+    Dim strPID As StringW
+    Dim strEProcess As StringW
+    Dim dwParentPID As DWORD
+    Dim strParentPID As StringW
+    Dim strPath As StringW
+    Dim strPath1 As StringW
+    Dim strName As StringW
+    Dim strSessionId As StringW
+    Dim strUserName As StringW
+    Dim strCommandLine As StringW
+    Dim strCompany As StringW
+    Dim errCode As Long
+    
+    ' 全局阶段计时变量
+    Dim tStartAll As Double = Timer()
+    Dim tStartEnumPID As Double, tEndEnumPID As Double
+    Dim tStartLoopCollect As Double, tEndLoopCollect As Double
+    Dim tStartListViewFill As Double, tEndListViewFill As Double
+    Dim tStartSignCheck As Double, tEndSignCheck As Double
+    Dim tStartCommit As Double, tEndCommit As Double
+
+    'lvwProcess.ReDraw = False
+    InitListViewData lvwProcess
+    
+    ' ========== 阶段1：枚举PID与进程路径数组 ==========
+    tStartEnumPID = Timer()
+    GetAllPID ProcessPath(), PID1(), 0
+    tEndEnumPID = Timer()
+    MyLog.PrintLog LOG_INFO,,,"【阶段1 GetAllPID总耗时】：" & tEndEnumPID - tStartEnumPID & " 秒"
+    
+    If IsCheckHideProcess Then
+        ' 原有隐藏进程逻辑保持不变，本次只修改False分支，省略不贴
+    Else
+        ' ========== 阶段2：批量采集进程信息循环 ==========
+        tStartLoopCollect = Timer()
+        
+        ' 各子函数累计计时变量
+        Dim tGetParent As Double = 0
+        Dim tGetPath As Double = 0
+        Dim tGetSession As Double = 0
+        Dim tGetUserName As Double = 0
+        Dim tGetCmdLine As Double = 0
+        Dim tGetCompany As Double = 0
+        Dim tGetIcon As Double = 0
+        Dim tDoEvents As Double = 0
+        Dim tTemp As Double ' 临时计时变量
+        
+        For i As Integer = 0 To UBound(PID1) - 1
+            Dim ForeColor As COLORREF = FB_Black
+            Dim BackColor As COLORREF = FB_White
+            
+            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
+            
+            dwPID = PID1(i + 1)
+            
+            ' 1. 父进程ID
+            tTemp = Timer()
+            If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
+            tGetParent += Timer() - tTemp
+            
+            ' 驱动模式EProcess地址
+            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
+            
+            ' 2. 进程路径（快照返回值 + 二次读取对比）
+            tTemp = Timer()
+            strPath = ProcessPath(i + 1)
+            strPath1 = GetProcessPath(dwPID)
+            tGetPath += Timer() - tTemp
+            
+            ' 路径一致性判断
+            If InStr(strPath, ":") = 0 Then
+                If InStr(strPath1, ":") = 0 Then
+                    strName = ProcessPath(i + 1)
+                Else
+                    strPath = strPath1
+                End If
+            Else
+                If strPath1 <> "" AndAlso strPath <> strPath1 Then
+                    ForeColor = FB_LightRed
+                End If
+            End If
+            strName = GetNameByPath(strPath)
+            
+            ' 3. 文件公司名
+            tTemp = Timer()
+            strCompany = GetFileCompanyCached(strPath)
+            tGetCompany += Timer() - tTemp
+            
+            ' 4. 会话ID
+            tTemp = Timer()
+            Dim dwSessionId As DWORD = 0
+            If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
+            tGetSession += Timer() - tTemp
+            
+            ' 5. 用户名
+            tTemp = Timer()
+            strUserName = GetProcessUserNameCached(dwPID)
+            tGetUserName += Timer() - tTemp
+            
+            ' 6. 命令行
+            tTemp = Timer()
+            strCommandLine = GetProcessCommandLine(dwPID)
+            tGetCmdLine += Timer() - tTemp
+            
+            ' ========== 阶段3：虚拟列表行填充 ==========
+            tStartListViewFill = Timer()
+            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
+            
+            ' 7. 图标索引
+            tTemp = Timer()
+            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
+            tGetIcon += Timer() - tTemp
+            tEndListViewFill = Timer()
+            
+            ' ========== 阶段4：异步文件签名校验调用 ==========
+            tStartSignCheck = Timer()
+            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
+            tEndSignCheck = Timer()
+
+            SetItemColor lvwProcess, ItemIndex, ForeColor, BackColor
+            ProcessCount += 1
+            
+            ' 8. 消息循环
+            tTemp = Timer()
+            ' 原代码：FF_DoEvents
+            If (i + 1) Mod 20 = 0 Then FF_DoEvents
+            tDoEvents += Timer() - tTemp
+        Next
+        tEndLoopCollect = Timer()
+        
+        ' 输出各函数细分耗时统计
+        Dim procTotal As Double = tEndLoopCollect - tStartLoopCollect
+        MyLog.PrintLog LOG_INFO,,,"===== 阶段2 子函数细分耗时统计 ====="
+        MyLog.PrintLog LOG_INFO,,,"阶段2总耗时：" & procTotal & " 秒，进程总数：" & ProcessCount
+        MyLog.PrintLog LOG_INFO,,,"1. GetParentProcessId 总耗时：" & tGetParent & " 秒，占比：" & Format(tGetParent/procTotal*100, "0.0") & "%，单进程平均：" & tGetParent/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"2. GetProcessPath 总耗时：" & tGetPath & " 秒，占比：" & Format(tGetPath/procTotal*100, "0.0") & "%，单进程平均：" & tGetPath/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"3. GetProcessSessionId 总耗时：" & tGetSession & " 秒，占比：" & Format(tGetSession/procTotal*100, "0.0") & "%，单进程平均：" & tGetSession/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"4. GetProcessUserNameCached 总耗时：" & tGetUserName & " 秒，占比：" & Format(tGetUserName/procTotal*100, "0.0") & "%，单进程平均：" & tGetUserName/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"5. GetProcessCommandLine 总耗时：" & tGetCmdLine & " 秒，占比：" & Format(tGetCmdLine/procTotal*100, "0.0") & "%，单进程平均：" & tGetCmdLine/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"6. GetFileCompanyCached 总耗时：" & tGetCompany & " 秒，占比：" & Format(tGetCompany/procTotal*100, "0.0") & "%，单进程平均：" & tGetCompany/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"7. GetFileIconIndexCached 总耗时：" & tGetIcon & " 秒，占比：" & Format(tGetIcon/procTotal*100, "0.0") & "%，单进程平均：" & tGetIcon/ProcessCount & " 秒"
+        MyLog.PrintLog LOG_INFO,,,"8. FF_DoEvents 总耗时：" & tDoEvents & " 秒，占比：" & Format(tDoEvents/procTotal*100, "0.0") & "%，单进程平均：" & tDoEvents/ProcessCount & " 秒"
+    End If
+    
+    ' ========== 阶段5：虚拟列表统一提交渲染 ==========
+    tStartCommit = Timer()
+    CommitListViewView lvwProcess
+    tEndCommit = Timer()
+    MyLog.PrintLog LOG_INFO,,,"【阶段5 CommitListViewView总耗时】：" & tEndCommit - tStartCommit & " 秒"
+
+    ' 全流程总耗时汇总
+    Dim totalAll As Double = Timer() - tStartAll
+    MyLog.PrintLog LOG_INFO,,,"==== GetProcessList(IsCheckHideProcess=False) 完整总耗时 ===="
+    MyLog.PrintLog LOG_INFO,,,"总耗时：" & totalAll & " 秒，进程总数：" & ProcessCount & "，全局单进程平均：" & totalAll / ProcessCount & " 秒"
+    
+    'lvwProcess.ReDraw = True
+    Return ProcessCount
+End Function
+
 Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
     Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
     Dim ProcessCount As Integer = 0
@@ -1247,13 +1504,15 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             End If
             Print dwPID & ":" & strPath
             strName = GetNameByPath(strPath)
-            strCompany = GetFileCompany(strPath)
+            strCompany = GetFileCompanyCached(strPath)
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
-            strUserName = GetProcessUserName(dwPID)
+            strUserName = GetProcessUserNameCached(dwPID)
             strCommandLine = GetProcessCommandLine(dwPID)
-
-            AddItemColListEx lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)
+            
+            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
+            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
+            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
             ProcessCount += 1
         Next
         
@@ -1274,15 +1533,17 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 strName = ProcessPath(i + 1)
             Else
                 strName = GetNameByPath(strPath)
-                strCompany = GetFileCompany(strPath)
+                strCompany = GetFileCompanyCached(strPath)
             End If
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
-            strUserName = GetProcessUserName(dwPID)
+            strUserName = GetProcessUserNameCached(dwPID)
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
             SetItemColor lvwProcess, ItemIndex, FB_Red, FB_White
+            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
+            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
             ProcessCount += 1
         Next
     Else
@@ -1296,7 +1557,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
             If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
             strPath = ProcessPath(i + 1)
-            strPath1 = GetProcessPath(dwPID)
+            strPath1 = GetProcessPathCached(dwPID)
             If InStr(strPath, ":") = 0 Then
                 If InStr(strPath1, ":") = 0 Then
                     strName = ProcessPath(i + 1)
@@ -1310,15 +1571,15 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 End If
             End If
             strName = GetNameByPath(strPath)
-            strCompany = GetFileCompany(strPath)
+            strCompany = GetFileCompanyCached(strPath)
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
-            strUserName = GetProcessUserName(dwPID)
+            strUserName = GetProcessUserNameCached(dwPID)
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany)) ' 可以在第一次调用GetProcessList时直接AddItemColList
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
-            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndex(strPath, False)
+            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
             'InvalidateRect lvwProcess.hWnd, NULL, True
             ProcessCount += 1
             FF_DoEvents

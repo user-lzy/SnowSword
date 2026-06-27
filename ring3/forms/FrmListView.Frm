@@ -841,7 +841,7 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            Unlock_File ListView', FilePathByUnlock
+            Unlock_File1 ListView', FilePathByUnlock
             Me.Caption = "文件占用查看小工具"
         Case IOFunction
             If CurrentInfo->CurrentDriver.DriverObject <> 0 Then
@@ -1156,7 +1156,7 @@ Sub FrmListView_mnuMemory_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmMemoryChange.Show,, Cast(Integer, mc)
         ' 搜索内存
         Case FrmListView_mnuMemory_mnuEditMemory ' 查看/编辑内存
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, 0), "0x", "&H"))
             Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
             MemoryInfo->Addr = Cast(PVOID, Addr)
             MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))

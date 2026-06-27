@@ -17,40 +17,6 @@ Type SYSTEM_HANDLE_INFORMATION
     Handles(0) As SYSTEM_HANDLE_TABLE_ENTRY_INFO
 End Type
 
-/'Private Type PROCESS_HANDLE_TABLE_ENTRY_INFO
-    HandleValue As Long
-    HandleCount As Long
-    PointerCount As Long
-    GrantedAccess As Long
-    ObjectTypeIndex As Long
-    HandleAttributes As Long
-    Reserved As Long
-End Type
-Private Type PROCESS_HANDLE_SNAPSHOT_INFORMATION
-    NumberOfHandles As Long
-    Handles(0) As PROCESS_HANDLE_TABLE_ENTRY_INFO
-End Type'/
-
-' 定义对象基本信息结构
-/'Type OBJECT_BASIC_INFORMATION
-    Attributes As ULong
-    GrantedAccess As ACCESS_MASK
-    HandleCount As ULong
-    PointerCount As ULong
-    PagedPoolUsage As ULong
-    NonPagedPoolUsage As ULong
-    Reserved(2) As ULong
-    NameInformationLength As ULong
-    TypeInformationLength As ULong
-    SecurityDescriptorLength As ULong
-    CreationTime As LARGE_INTEGER
-End Type
-
-' 定义对象名称信息结构
-Type OBJECT_NAME_INFORMATION
-    Name As UNICODE_STRING
-End Type'/
-
 ' 定义对象类型信息结构
 Type OBJECT_TYPE_INFORMATION
     TypeName As UNICODE_STRING
@@ -71,6 +37,24 @@ Type HANDLE_INFO
     pObject As PVOID
     strType As Wstring * 50
     strName As Wstring * 260
+End Type
+
+' SystemObjectInformation (17) 返回的对象类型信息结构
+Type SYSTEM_OBJECTTYPE_INFORMATION Field = 8
+    NextEntryOffset            As ULong          ' 下一项的字节偏移，为0表示最后一项
+    NumberOfObjects            As ULong          ' 该类型的内核对象实例总数
+    NumberOfHandles            As ULong          ' 该类型的全局打开句柄总数
+    TypeIndex                  As ULong          ' 对象类型全局索引
+    InvalidAttributes          As ULong          ' 无效属性掩码
+    GenericMapping             As GENERIC_MAPPING ' 通用权限到具体权限的映射表
+    ValidAccessMask            As ULong          ' 该类型支持的有效访问权限掩码
+    SecurityRequired           As UByte          ' 创建对象是否必须附带安全描述符（BOOLEAN，1字节）
+    MaintainHandleCount        As UByte          ' 是否维护句柄引用计数（BOOLEAN，1字节）
+    Reserved(1)                As UByte          ' 对齐保留字段（2字节）
+    PoolType                   As ULong          ' 使用的内存池类型（POOL_TYPE）
+    DefaultPagedPoolCharge     As ULong          ' 默认分页池内存配额
+    DefaultNonPagedPoolCharge  As ULong          ' 默认非分页池内存配额
+    NameBuffer(0)              As WChar          ' 变长对象类型名称（宽字符柔性数组）
 End Type
 
 /'' 定义线程参数结构
@@ -538,7 +522,296 @@ Private Function GetHandleType(ByVal ProcessId As DWORD, ByVal hHandle As HANDLE
     Return False
 End Function
 
+' 获取系统"File"对象的类型索引，仅需调用一次；失败返回0，退化为全量查询
+Private Function GetFileObjectTypeIndex() As ULong
+    Dim bufNeeded As ULong = &H20000 ' 初始缓冲区大小
+    Dim buf As PVOID = Allocate(bufNeeded)
+    Dim st As NTSTATUS
+    Dim fileTypeIndex As ULong = 0
+
+    ' 扩容循环：第四个参数输出需要的总长度
+    Do
+        If buf = 0 Then Exit Do ' 分配失败直接退出
+        st = ZwQuerySystemInformation(SystemObjectInformation, buf, bufNeeded, @bufNeeded)
+        If st <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
+        ' 重新分配更大缓冲区
+        Dim newBuf As PVOID = Reallocate(buf, bufNeeded)
+        If newBuf = 0 Then Exit Do
+        buf = newBuf
+    Loop
+
+    ' 查询成功，遍历所有对象类型
+    If NT_SUCCESS(st) AndAlso buf <> 0 Then
+        Dim pCur As SYSTEM_OBJECTTYPE_INFORMATION Ptr = buf
+        Do
+            ' 对比名称 L"File"
+            If lstrcmpW(@pCur->NameBuffer(0), @WStr("File")) = 0 Then
+                fileTypeIndex = pCur->TypeIndex
+                Exit Do ' 找到File类型直接跳出遍历
+            End If
+            ' 无下一项则结束
+            If pCur->NextEntryOffset = 0 Then Exit Do
+            ' 偏移跳转下一条
+            pCur = CPtr(SYSTEM_OBJECTTYPE_INFORMATION Ptr, CPtr(UByte Ptr, pCur) + pCur->NextEntryOffset)
+        Loop
+    End If
+
+    ' 释放缓冲区
+    If buf <> 0 Then Deallocate(buf)
+    Return fileTypeIndex
+End Function
+
+' 同PID进程路径缓存，同一进程仅查询一次
+Function GetProcessPathCached(ByVal dwPID As DWORD) As StringW
+    Static cachePid() As DWORD
+    Static cachePath() As StringW
+    Static cacheCnt As Integer = 0
+    
+    ' 命中缓存直接返回
+    For i As Integer = 0 To cacheCnt - 1
+        If cachePid(i) = dwPID Then
+            Return cachePath(i)
+        End If
+    Next
+    
+    ' 未命中查询并写入缓存
+    Dim path As StringW = GetProcessPath(dwPID)
+    
+    If cacheCnt = 0 Then
+        ReDim cachePid(0 To 127)
+        ReDim cachePath(0 To 127)
+    ElseIf cacheCnt > UBound(cachePid) Then
+        ReDim Preserve cachePid(0 To cacheCnt * 2 - 1)
+        ReDim Preserve cachePath(0 To cacheCnt * 2 - 1)
+    End If
+    cachePid(cacheCnt) = dwPID
+    cachePath(cacheCnt) = path
+    cacheCnt += 1
+    
+    Return path
+End Function
+
+Function NtPathToDosPathWFast(ByVal ntPath As LPWSTR, ByVal outDosPath As LPWSTR) As Boolean
+#define MAX_CACHE 16
+    Static cacheNtPrefix() As WString * MAX_PATH
+    Static cacheDosPrefix() As WString * MAX_PATH
+    Static cacheCnt As Integer = 0
+
+    ' 空指针防护
+    If ntPath = 0 OrElse outDosPath = 0 Then Return False
+
+    Dim ntPathLen As Long = lstrlenW(ntPath)
+    If ntPathLen = 0 Then Return False
+
+    ' ========== 缓存命中逻辑 ==========
+    For i As Integer = 0 To cacheCnt - 1
+        Dim prefixLen As Integer = LenW(cacheNtPrefix(i))
+        ' 长度不足直接跳过
+        If ntPathLen < prefixLen Then Continue For
+        
+        ' 大小写不敏感前缀匹配
+        Dim cmpResult As Long = CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, _
+            ntPath, prefixLen, _
+            @cacheNtPrefix(i), prefixLen)
+        
+        If cmpResult = 2 Then
+            ' 关键：前缀包含末尾反斜杠，剩余路径从反斜杠后开始，避免双反斜杠
+            Dim remainPtr As WChar Ptr = ntPath + prefixLen
+            ' 先拷贝盘符前缀
+            lstrcpyW(outDosPath, @cacheDosPrefix(i))
+            ' 再追加剩余路径
+            lstrcpyW(outDosPath + 3, remainPtr)
+            Return True
+        End If
+    Next
+
+    ' ========== 未命中，调用原函数 ==========
+    If NtPathToDosPathW(ntPath, outDosPath) Then
+        ' 正确转换：指针转FB宽字符串，必须用WStr()，绝对不能用*解引用
+        Dim ntStr As WString * MAX_PATH = "", dosStr As WString * MAX_PATH = ""
+        lstrcpyW(@ntStr, ntPath)
+        lstrcpyW(@dosStr, outDosPath)
+
+        ' 提取NT卷前缀（包含末尾反斜杠，如 \Device\HarddiskVolume8\）
+        Dim pos1 As Integer = InStrW(2, ntStr, "\")  ' 第二个反斜杠位置
+        If pos1 = 0 Then Return True ' 非法NT路径，不缓存
+        
+        Dim pos2 As Integer = InStrW(pos1 + 1, ntStr, "\") ' 第三个反斜杠位置
+        Dim ntPrefix As WString * MAX_PATH = ""
+        
+        If pos2 > 0 Then
+            ' 普通路径：包含第三个反斜杠作为前缀结尾，避免Volume1匹配Volume10
+            ntPrefix = LeftW(ntStr, pos2)
+        Else
+            ' 卷根路径：末尾补反斜杠，统一前缀格式
+            ntPrefix = ntStr & "\"
+        End If
+
+        ' 仅缓存标准盘符格式（X:\），过滤UNC、网络路径
+        If LenW(dosStr) >= 3 AndAlso MidW(dosStr, 2, 1) = ":" AndAlso MidW(dosStr, 3, 1) = "\" Then
+            Dim dosPrefix As StringW = LeftW(dosStr, 3)
+
+            ' 首次初始化缓存数组
+            If cacheCnt = 0 Then
+                ReDim cacheNtPrefix(0 To MAX_CACHE - 1) As Wstring * MAX_PATH
+                ReDim cacheDosPrefix(0 To MAX_CACHE - 1) As Wstring * MAX_PATH
+            End If
+
+            ' 写入缓存前先去重，避免重复条目
+            Dim exist As Boolean = False
+            For j As Integer = 0 To cacheCnt - 1
+                If LenW(cacheNtPrefix(j)) = LenW(ntPrefix) Then
+                    Dim c As Long = CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, _
+                        @cacheNtPrefix(j), LenW(ntPrefix), _
+                        @ntPrefix, LenW(ntPrefix))
+                    If c = 2 Then exist = True : Exit For
+                End If
+            Next
+
+            ' 未达上限且不重复则写入
+            If (Not exist) AndAlso CBool(cacheCnt < MAX_CACHE) Then
+                cacheNtPrefix(cacheCnt) = ntPrefix
+                cacheDosPrefix(cacheCnt) = dosPrefix
+                cacheCnt += 1
+            End If
+        End If
+
+        Return True
+    End If
+
+    Return False
+End Function
+
 Public Sub Unlock_File(ListView As Class_ListView)', FilePath As String = "")
+    Dim st As NTSTATUS
+    ' 全局总计时
+    'Dim tTotalStart As Double = Timer()
+    
+    ' 分段计时变量
+    Dim tBufAllocStart As Double, tBufAllocEnd As Double
+    Dim tLoopStart As Double, tLoopEnd As Double
+    Dim tIoCtlTotal As Double = 0.0
+    Dim tPathConvTotal As Double = 0.0
+    Dim tGetProcPathTotal As Double = 0.0
+    Dim tListViewAddTotal As Double = 0.0
+    Dim tDoEventsTotal As Double = 0.0
+    Dim tTemp As Double
+    
+    InitListViewData ListView
+    
+    Dim bufferSize As ULong = &H1000
+    Dim buffer As PVOID = Allocate(bufferSize)
+    
+    ' ========== 阶段1：动态扩容缓冲区 + ZwQuerySystemInformation 循环 ==========
+    'tBufAllocStart = Timer()
+    Do
+        bufferSize *= 2
+        buffer = Reallocate(buffer, bufferSize)
+        st = ZwQuerySystemInformation(SystemHandleInformation, buffer, bufferSize, NULL)
+        Print bufferSize & " " & Hex(st)
+    Loop While st = STATUS_INFO_LENGTH_MISMATCH
+    'tBufAllocEnd = Timer()
+    
+    Dim fileTypeIndex As UByte = GetFileObjectTypeIndex
+    Dim pHandleEntry As SYSTEM_HANDLE_INFORMATION Ptr = CPtr(SYSTEM_HANDLE_INFORMATION Ptr, buffer)
+    Dim totalHandleCount As ULong = pHandleEntry->NumberOfHandles
+    Dim matchFileCount As Integer = 0
+    Dim lastDoEvents As Double = Timer()
+    
+    Dim strHandleName As WString * MAX_PATH, j As Integer
+    j = 0
+    
+    ' ========== 阶段2：遍历全部系统句柄循环 ==========
+    tLoopStart = Timer()
+    For i As Integer = 0 To pHandleEntry->NumberOfHandles - 1
+        Dim MyHandleInfo As HANDLE_INFO
+        Dim DosPath As WString * 260, ProcessName As StringW, ProcessPath As StringW
+        
+        ' 【最外层快速过滤：非文件句柄直接跳过，不执行任何 heavy 操作】
+        If fileTypeIndex <> 0 AndAlso pHandleEntry->Handles(i).ObjectTypeIndex <> fileTypeIndex Then
+            Goto ContinueDo
+        End If
+        
+        MyHandleInfo.dwHandle = Cast(HANDLE, Cast(UInteger, pHandleEntry->Handles(i).HandleValue))
+        MyHandleInfo.dwProcessId = Cast(HANDLE, Cast(Integer, pHandleEntry->Handles(i).UniqueProcessId))
+        MyHandleInfo.strName = ""
+        MyHandleInfo.strType = ""
+        SetLastError 0
+        
+        ' 1. 驱动IOCTL查询对象信息计时
+        'tTemp = Timer()
+        IoControl hDrv, IOCTL_QueryObject, @MyHandleInfo, SizeOf(HANDLE_INFO), @MyHandleInfo, SizeOf(HANDLE_INFO)
+        'tIoCtlTotal += Timer() - tTemp
+        
+        If ((MyHandleInfo.strType <> "File") OrElse (InStrW(MyHandleInfo.strName, "\Device\HarddiskVolume") = 0)) Then Goto ContinueDo
+        
+        ' 2. NT路径转DOS路径计时
+        'tTemp = Timer()
+        If NtPathToDosPathWFast(@MyHandleInfo.strName, @DosPath) Then
+            strHandleName = DosPath
+        Else
+            strHandleName = MyHandleInfo.strName
+        End If
+        'tPathConvTotal += Timer() - tTemp
+        
+        ' 3. 获取进程路径计时
+        'tTemp = Timer()
+        ProcessPath = GetProcessPathCached(pHandleEntry->Handles(i).UniqueProcessId)
+        'tGetProcPathTotal += Timer() - tTemp
+        
+        If InStrW(ProcessPath, ":") <= 0 Then
+            ProcessName = ProcessPath
+        Else
+            ProcessName = RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
+        End If
+        
+        ' 4. 虚拟列表行填充计时
+        'tTemp = Timer()
+        AddItemColListEx ListView, 5,,, WStr(ProcessName), WStr(pHandleEntry->Handles(i).UniqueProcessId), strHandleName, WStr(ProcessPath), _
+        "0x" & WHex(pHandleEntry->Handles(i).HandleValue)
+        'tListViewAddTotal += Timer() - tTemp
+        
+        matchFileCount += 1
+        j += 1
+        
+        ' 5. FF_DoEvents计时
+        tTemp = Timer()
+        If Timer() - lastDoEvents > 0.05 Then ' 50ms 执行一次消息循环
+            FF_DoEvents
+            lastDoEvents = Timer()
+        End If
+        'tDoEventsTotal += Timer() - tTemp
+        
+ContinueDo : 
+    Next
+    'tLoopEnd = Timer()
+    
+    ' ========== 阶段3：统一提交ListView ==========
+    'Dim tCommitStart As Double = Timer()
+    CommitListViewView ListView
+    'Dim tCommitEnd As Double = Timer()
+    
+    ' 释放缓冲区
+    If buffer <> NULL Then Deallocate(buffer)
+    
+    ' ========== 输出全量耗时日志 ==========
+    'Dim totalAllCost As Double = Timer() - tTotalStart
+    'Dim loopTotalCost As Double = tLoopEnd - tLoopStart
+    
+    /'MyLog.PrintLog LOG_INFO,,,"==== Unlock_File 耗时统计 ===="
+    MyLog.PrintLog LOG_INFO,,,"总系统句柄数量：" & totalHandleCount & "，匹配磁盘文件句柄数：" & matchFileCount
+    MyLog.PrintLog LOG_INFO,,,"阶段1 缓冲区扩容+ZwQuerySystemInformation 耗时：" & tBufAllocEnd - tBufAllocStart & " 秒"
+    MyLog.PrintLog LOG_INFO,,,"阶段2 全句柄遍历循环总耗时：" & loopTotalCost & " 秒"
+    MyLog.PrintLog LOG_INFO,,,"  - IoControl查询对象总耗时：" & tIoCtlTotal & " 秒，单句柄平均：" & tIoCtlTotal / totalHandleCount
+    MyLog.PrintLog LOG_INFO,,,"  - NtPathToDosPathW转换总耗时：" & tPathConvTotal & " 秒，匹配条目平均：" & IIf(matchFileCount>0, tPathConvTotal/matchFileCount, 0)
+    MyLog.PrintLog LOG_INFO,,,"  - GetProcessPath获取进程路径总耗时：" & tGetProcPathTotal & " 秒，匹配条目平均：" & IIf(matchFileCount>0, tGetProcPathTotal/matchFileCount, 0)
+    MyLog.PrintLog LOG_INFO,,,"  - AddItemColListEx列表填充总耗时：" & tListViewAddTotal & " 秒，匹配条目平均：" & IIf(matchFileCount>0, tListViewAddTotal/matchFileCount, 0)
+    MyLog.PrintLog LOG_INFO,,,"  - FF_DoEvents消息循环总耗时：" & tDoEventsTotal & " 秒，单句柄平均：" & tDoEventsTotal / totalHandleCount
+    MyLog.PrintLog LOG_INFO,,,"阶段3 CommitListViewView统一提交耗时：" & tCommitEnd - tCommitStart & " 秒"
+    MyLog.PrintLog LOG_INFO,,,"Unlock_File 完整总耗时：" & totalAllCost & " 秒"'/
+End Sub
+
+Public Sub Unlock_File1(ListView As Class_ListView)', FilePath As String = "")
     Dim st As NTSTATUS
     
     InitListViewData ListView

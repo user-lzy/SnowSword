@@ -18,7 +18,6 @@ End Type
 
 Declare Function RegDeleteTree Lib "Advapi32.dll" Alias "RegDeleteTreeW"(ByVal HKEY As HKEY, ByVal lpSubKey As LPCWSTR) As Long
 Declare Function RegRenameKey Lib "Advapi32.dll" Alias "RegRenameKey"(ByVal HKEY As HKEY, ByVal lpSubKey As LPCWSTR, ByVal lpNewKeyName As LPCWSTR) As Long
-Declare Function ConvertSidToStringSid Lib "advapi32.dll" Alias "ConvertSidToStringSidA" (ByVal SID As PSID, ByRef StringSid As LPSTR) As BOOL
 
 Type QWORD As ULongInt
 

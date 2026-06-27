@@ -88,6 +88,109 @@ Enum SYSTEM_INFORMATION_CLASS
     SystemSessionProcessesInformation    ' 53 Y N
 End Enum
 
+' ==============================================================================
+' SYSTEM_INFORMATION_CLASS 完整枚举 (FreeBasic 64位)
+' 区分: Q=NtQuerySystemInformation可读 / S=NtSetSystemInformation可写
+' 仅收录你伪代码中出现、Windows原生公开/未公开有效Class
+' ==============================================================================
+/'Enum SYSTEM_INFORMATION_CLASS
+    ' ========== 基础通用类 ==========
+    SystemBasicInformation = 0          ' Q
+    SystemProcessorInformation = 1     ' Q
+    SystemPerformanceInformation = 2    ' Q
+    SystemTimeOfDayInformation = 3      ' Q
+    SystemProcessInformation = 5        ' Q
+    SystemCallCounts = 6                ' Q(仅读,Set无实现)
+    SystemModuleInformation = 11        ' Q
+    SystemHandleInformation = 12       ' Q
+    SystemObjectInformation = 14       ' Q
+    SystemPageFileInformation = 18    ' Q
+
+    ' ========== 内存管理类 ==========
+    SystemWorkSetInformation = 21       ' Q+S
+    SystemTimeAdjustmentInformation = 28 ' Q+S
+    SystemCreateMirrorInformation = 30  ' S
+    SystemMemoryListCommandInformation = 80 ' S (0x50 MmIssueMemoryListCommand)
+    SystemMemoryScrubInformation = 127  ' S
+    SystemCombinePhysicalPagesInfo = 130 ' S
+
+    ' ========== DPC / 调度 / 上下文切换 ==========
+    SystemDpcInformation = 24           ' Q+S
+    SystemContextSwitchInformation = 36 ' Q(仅读,Set无实现)
+    SystemPrioritySeparation = 39       ' Q+S
+
+    ' ========== 驱动镜像加载卸载 ==========
+    SystemLoadImageInformation = 26     ' S
+    SystemUnloadImageInformation = 27   ' S
+    SystemLoadAndCallImage = 38         ' S
+    SystemConsoleDriverLoadInfo = 132   ' S condrv.sys 专用
+
+    ' ========== 系统标志 / 调试全局配置 ==========
+    SystemGlobalFlagInformation = 9     ' Q+S
+    SystemGlobalFlag2Information = 207  ' Q+S
+
+    ' ========== 崩溃转储 ==========
+    SystemCrashDumpStateInformation = 34 ' Q+S
+
+    ' ========== 注册表配额 ==========
+    SystemRegistryQuotaInformation = 37 ' Q+S
+
+    ' ========== ETW 性能跟踪 ==========
+    SystemPerformanceTraceInformation = 31 ' Q+S
+
+    ' ========== SuperFetch / 预取 ==========
+    SystemSuperfetchInformation = 79    ' Q+S
+
+    ' ========== 预取器(Prefetcher) ==========
+    SystemPrefetcherInformation = 56     ' Q+S
+
+    ' ========== 驱动验证器 Verifier ==========
+    SystemAddVerifierEntry = 40         ' S
+    SystemRemoveVerifierEntry = 41      ' S
+    SystemVerifierInformation = 51       ' Q+S
+    SystemVerifierInformationEx = 92     ' S
+
+    ' ========== 内核对象引用跟踪 ==========
+    SystemObjectRefTraceInformation = 86 ' Q+S
+
+    ' ========== 时间滑移调试事件 ==========
+    SystemTimeSlipEventInformation = 46  ' S
+
+    ' ========== CPU 集 / 资源调度 ==========
+    SystemCpuQuotaInformation = 113      ' Q+S
+    SystemModifyAllowedCpuSets = 168     ' S
+    SystemTagCpuSetsInfo = 176          ' S
+    SystemIntSteerCpuSetAssign = 170     ' S
+
+    ' ========== 时区配置 ==========
+    SystemTimeZoneInformationClass = 93  ' Q+S
+
+    ' ========== DPC 看门狗 ==========
+    SystemDpcWatchdogConfig = 228       ' S
+
+    ' ========== 闰秒开关 ==========
+    SystemLeapSecondInfo = 206           ' Q+S
+
+    ' ========== 调试内核断点配置 ==========
+    SystemResourceTimeoutConfig = 236   ' S
+    SystemContextUnwindBreakConfig = 237 ' S
+
+    ' ========== VSL / VBS 虚拟化安全 ==========
+    SystemVslRelaxQuotaInfo = 190       ' S
+    SystemDumpEncryptionProvision = 194  ' S
+
+    ' ========== IOMMU 设备控制 ==========
+    SystemIommuBlockDevice = 233        ' S
+
+    ' ========== Hypervisor 启动页配置 ==========
+    SystemHvlBootPagesInfo = 235        ' S
+End Enum'/
+
+' 读写标记说明:
+' Q = 仅 NtQuerySystemInformation 可读，NtSetSystemInformation 无对应逻辑
+' S = 仅 NtSetSystemInformation 可写，Query无实现
+' Q+S = 读写双向支持，Query读取参数/统计，Set修改配置
+
 'Declare Function ZwQuerySystemInformation Lib "ntdll.dll" Alias "ZwQuerySystemInformation"(ByVal SystemInformationClass As SYSTEM_INFORMATION_CLASS,ByVal SystemInformation As PVOID,ByVal SystemInformationLength As ULong,ByVal ReturnLength As PULONG) As NTSTATUS
 Declare Sub RtlInitUnicodeString Lib "ntdll.dll" Alias "RtlInitUnicodeString"(ByVal DestinationString As UNICODE_STRING Ptr,ByVal SourceString As PCWSTR)
 
@@ -1286,7 +1389,9 @@ End Type
     
     ' 初始化
     If IsEnumSubDir Then DeleteChildItem treObjectDirectory, CurrentNode
+    AfxMsg "0"
     InitListViewData lvwObject
+    AfxMsg "1"
     
     GetPathByNodeW CurrentNode, treObjectDirectory, szPath
     ' 对象目录路径格式如 "\" 或 "\Devices\"，需要去掉末尾的\
@@ -1295,6 +1400,7 @@ End Type
     If RightW(szPath, 1) = "\" Then szPath = LeftW(szPath, LenW(szPath) - 1)
     'Print "szPath:" & szPath
     If szPath = "" Then szPath = "\"  ' 根目录
+    'Print szPath
     
     ' 加载ntdll
     hNtDll = GetModuleHandleW("ntdll.dll")
@@ -1343,14 +1449,14 @@ End Type
     Dim startIndex As ULong = 0
     
     ' 收集所有对象信息
-    Dim objNames() As StringW
-    Dim objTypes() As StringW
-    Dim objLinkTargets() As StringW  ' SymbolicLink的目标路径
+    Dim objNames() As WString * MAX_PATH
+    Dim objTypes() As WString * 100
+    Dim objLinkTargets() As WString * MAX_PATH  ' SymbolicLink的目标路径
     Dim objIsDir() As Boolean        ' 是否是目录对象
     Dim totalObjs As Long = 0
-    ReDim objNames(50) As StringW
-    ReDim objTypes(50) As StringW
-    ReDim objLinkTargets(50) As StringW
+    ReDim objNames(50) As Wstring * MAX_PATH
+    ReDim objTypes(50) As Wstring * MAX_PATH
+    ReDim objLinkTargets(50) As Wstring * MAX_PATH
     ReDim objIsDir(50) As Boolean
     
     Do
@@ -1362,25 +1468,25 @@ End Type
             
             For i As ULONG = 0 To entries - 1
                 ' 从UNICODE_STRING提取名称和类型
-                Dim nameStr As StringW = ""
-                Dim typeStr As StringW = ""
-                
+                Dim nameStr As WString * MAX_PATH = ""
+                Dim typeStr As WString * MAX_PATH = ""
+                'Print "0"
                 If pInfo[i].Name.Length > 0 AndAlso pInfo[i].Name.Buffer <> NULL Then
-                    nameStr = *Cast(WString Ptr, pInfo[i].Name.Buffer)
+                    nameStr = *Cast(Wstring Ptr, pInfo[i].Name.Buffer)
                 End If
-                
+                'Print "nameStr:" & nameStr
                 If pInfo[i].TypeName.Length > 0 AndAlso pInfo[i].TypeName.Buffer <> NULL Then
-                    typeStr = *Cast(WString Ptr, pInfo[i].TypeName.Buffer)
+                    typeStr = *Cast(Wstring Ptr, pInfo[i].TypeName.Buffer)
                 End If
-                
+                'Print "typeStr:" & typeStr
                 ' 跳过空项（最后一个NULL结构）
                 If nameStr = "" Then Continue For
                 
                 ' 扩展数组
                 If totalObjs >= UBound(objNames) Then
-                    ReDim Preserve objNames(UBound(objNames) + 50) As StringW
-                    ReDim Preserve objTypes(UBound(objTypes) + 50) As StringW
-                    ReDim Preserve objLinkTargets(UBound(objLinkTargets) + 50) As StringW
+                    ReDim Preserve objNames(UBound(objNames) + 50) As Wstring * MAX_PATH
+                    ReDim Preserve objTypes(UBound(objTypes) + 50) As Wstring * 100
+                    ReDim Preserve objLinkTargets(UBound(objLinkTargets) + 50) As Wstring * MAX_PATH
                     ReDim Preserve objIsDir(UBound(objIsDir) + 50) As Boolean
                 End If
                 
@@ -1397,11 +1503,11 @@ End Type
                     Dim retLen As ULONG = 0
                     
                     ' 构造完整路径: szPath & "\" & nameStr
-                    Dim fullPath As StringW = szPath
+                    Dim fullPath As WString * MAX_PATH = szPath
                     If RightW(fullPath, 1) <> "\" Then fullPath = fullPath & "\" 
                     fullPath = fullPath & nameStr
-                    
-                    pRtlInitUnicodeString(linkName, fullPath)
+                    'Print "fullPath:" & fullPath
+                    pRtlInitUnicodeString(linkName, @fullPath)
                     InitializeObjectAttributes(@linkOa, @linkName, 0)
                     
                     If pNtOpenSymbolicLinkObject(hLink, SYMBOLIC_LINK_QUERY, linkOa) = STATUS_SUCCESS Then
@@ -1411,7 +1517,8 @@ End Type
                         If targetStr.Buffer <> NULL Then
                             If pNtQuerySymbolicLinkObject(hLink, targetStr, retLen) = STATUS_SUCCESS Then
                                 If targetStr.Buffer <> NULL AndAlso targetStr.Length > 0 Then
-                                    objLinkTargets(totalObjs) = *Cast(WString Ptr, targetStr.Buffer)
+                                    lstrcpyW(objLinkTargets(totalObjs), targetStr.Buffer)
+                                    'Print "1"
                                 End If
                             End If
                             Deallocate(targetStr.Buffer)

@@ -229,6 +229,46 @@ Function GetFileIconIndex(ByVal filePath As String, ByVal isDirectory As Boolean
     
 End Function
 
+' 图标索引缓存包装函数：同扩展名仅查询一次
+Function GetFileIconIndexCached(ByVal filePath As StringW, ByVal isDirectory As Boolean = False) As Long
+    ' 文件夹不做缓存，直接调用原函数
+    If isDirectory Then Return GetFileIconIndex(filePath, True)
+    
+    ' 提取扩展名（包含点，如 ".exe"）并转小写
+    Dim dotPos As Integer = InStrRevW(filePath, ".")
+    If dotPos = 0 Then Return GetFileIconIndex(filePath, False) ' 无扩展名直接查询
+    Dim ext As StringW = LCaseW(MidW(filePath, dotPos))
+    
+    ' 静态缓存：多次调用自动复用，无需全局变量
+    Static cacheExt() As StringW
+    Static cacheIndex() As Long
+    Static cacheCount As Integer = 0
+    
+    ' 查找缓存命中
+    For i As Integer = 0 To cacheCount - 1
+        If cacheExt(i) = ext Then
+            Return cacheIndex(i)
+        End If
+    Next
+    
+    ' 未命中：调用原函数查询
+    Dim idx As Long = GetFileIconIndex(filePath, False)
+    
+    ' 写入缓存（自动扩容）
+    If cacheCount = 0 Then
+        ReDim cacheExt(0 To 31)
+        ReDim cacheIndex(0 To 31)
+    ElseIf cacheCount > UBound(cacheExt) Then
+        ReDim Preserve cacheExt(0 To cacheCount * 2 - 1)
+        ReDim Preserve cacheIndex(0 To cacheCount * 2 - 1)
+    End If
+    cacheExt(cacheCount) = ext
+    cacheIndex(cacheCount) = idx
+    cacheCount += 1
+    
+    Return idx
+End Function
+
 Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
     ListView.DeleteAllColumn
     ListView.DeleteAllItems ' 此处是否有问题

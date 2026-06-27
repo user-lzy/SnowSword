@@ -116,29 +116,54 @@ NTSTATUS VxkCopyMemory(PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCo
     return STATUS_SUCCESS;
 }
 
-//MmCopyMemory
-NTSTATUS CopyMemory(HANDLE dwProcessId, PVOID pSourceAddress, PVOID pDestinationAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred)
+NTSTATUS ReadProcessMemory(HANDLE dwProcessId, PVOID pSourceAddress, PVOID pDestinationBuffer, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred)
 {
-    if (dwProcessId == NULL) return VxkCopyMemory(pDestinationAddress, pSourceAddress, SizeOfCopy, pBytesTransferred);
-    
+    if (dwProcessId == NULL) {
+        return VxkCopyMemory(pDestinationBuffer, pSourceAddress, SizeOfCopy, pBytesTransferred);
+    }
+
     NTSTATUS status;
-	PEPROCESS pEProcess = NULL;
-	status = PsLookupProcessByProcessId(dwProcessId, &pEProcess);
-	if (!NT_SUCCESS(status))
-	{
-		DbgPrint("PsLookupProcessByProcessId failed, status: 0x%X\n", status);
-		return status;
-	}
-    
-	status = MmCopyVirtualMemory(pEProcess, pSourceAddress, PsGetCurrentProcess(), pDestinationAddress, SizeOfCopy, KernelMode, pBytesTransferred);
-    if (!status) DbgPrint("[CopyMemory]MmCopyVirtualMemory:status=%X", status);
-    //KAPC_STATE ApcState = { 0 };
-    //KeStackAttachProcess(pEProcess, &ApcState);
-    //status = VxkCopyMemory(pDestinationAddress, pSourceAddress, SizeOfCopy) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
-    //for (SIZE_T i = 0; i < min(SizeOfCopy, 16); i++) DbgPrint("Byte %llu: 0x%02X\n", i, ((PUCHAR)pDestinationAddress)[i]);
-    //KeUnstackDetachProcess(&ApcState);
-	ObDereferenceObject(pEProcess);
-	return status;
+    PEPROCESS pEProcess = NULL;
+    status = PsLookupProcessByProcessId(dwProcessId, &pEProcess);
+    if (!NT_SUCCESS(status)) return status;
+
+    status = MmCopyVirtualMemory(
+        pEProcess,              // 源：目标进程
+        pSourceAddress,          // 源地址
+        PsGetCurrentProcess(),   // 目标：当前进程
+        pDestinationBuffer,      // 目标地址
+        SizeOfCopy,
+        KernelMode,
+        pBytesTransferred
+    );
+
+    ObDereferenceObject(pEProcess);
+    return status;
+}
+
+NTSTATUS WriteProcessMemory(HANDLE dwProcessId, PVOID pSourceBuffer, PVOID pDestinationAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred)
+{
+    if (dwProcessId == NULL) {
+        return VxkCopyMemory(pDestinationAddress, pSourceBuffer, SizeOfCopy, pBytesTransferred);
+    }
+
+    NTSTATUS status;
+    PEPROCESS pEProcess = NULL;
+    status = PsLookupProcessByProcessId(dwProcessId, &pEProcess);
+    if (!NT_SUCCESS(status)) return status;
+
+    status = MmCopyVirtualMemory(
+        PsGetCurrentProcess(),   // 源：当前进程
+        pSourceBuffer,            // 源地址
+        pEProcess,               // 目标：目标进程
+        pDestinationAddress,      // 目标地址
+        SizeOfCopy,
+        KernelMode,
+        pBytesTransferred
+    );
+
+    ObDereferenceObject(pEProcess);
+    return status;
 }
 
 NTSTATUS DisableCopyOnWrite(PVOID pMem, SIZE_T ulMemSize)

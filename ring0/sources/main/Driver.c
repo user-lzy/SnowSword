@@ -338,44 +338,6 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
 
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
-
-    // 测试打印代码（修正版）
-    //PNDIS_FILTER_INFO pFilterArray = NULL;
-    //ULONG filterCount = 0;
-
-    //status = EnumNdisFilterDrivers(&pFilterArray, &filterCount);
-    //if (NT_SUCCESS(status))
-    //{
-    //    DbgPrint("==================== 枚举结果 ====================\n");
-    //    for (ULONG i = 0; i < filterCount; i++)
-    //    {
-    //        if (pFilterArray[i].bValid)
-    //        {
-    //            // ✅ 正确打印UNICODE_STRING
-    //            // ✅ 正确打印GUID（修复%wG错误）
-    //            DbgPrint("驱动%d: %wZ GUID:{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
-    //                i + 1,
-    //                &pFilterArray[i].FilterName,
-    //                pFilterArray[i].FilterGuid.Data1,
-    //                pFilterArray[i].FilterGuid.Data2,
-    //                pFilterArray[i].FilterGuid.Data3,
-    //                pFilterArray[i].FilterGuid.Data4[0],
-    //                pFilterArray[i].FilterGuid.Data4[1],
-    //                pFilterArray[i].FilterGuid.Data4[2],
-    //                pFilterArray[i].FilterGuid.Data4[3],
-    //                pFilterArray[i].FilterGuid.Data4[4],
-    //                pFilterArray[i].FilterGuid.Data4[5],
-    //                pFilterArray[i].FilterGuid.Data4[6],
-    //                pFilterArray[i].FilterGuid.Data4[7]);
-    //        }
-    //    }
-    //    FreeNdisFilterArray(pFilterArray);
-    //}
-	//SampleReadAndPrintAsciiHeader(L"\\??\\C:\\Users\\21607\\Desktop\\Shellcode32版本3.txt");
-    //PVOID pArray = NULL;
-    //ULONG Count = 0;
-    //NdisEnumMiniportsAlloc((PNDIS_MINIPORT_ENUM_ENTRY*)&pArray, &Count);
-    //DbgPrint("Count:%d", Count);
     return STATUS_SUCCESS;
 }
 
@@ -415,6 +377,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     static CallbackInfo Callbacks[64] = { 0 };
     static ObCallbackInfo ObCallbacks[64] = {0};
     PWSTR ustrFileName = NULL;
+    SIZE_T BytesTransferred = 0;
 
     IoControlCode = IoStackLocation->Parameters.DeviceIoControl.IoControlCode;
     pInputData = pIrp->AssociatedIrp.SystemBuffer;
@@ -435,17 +398,17 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 DbgPrint("Kill Process %p Failed!\n", dwProcessId);
             }
         }
-        if (pOutputData != NULL && OutputDataLength >= strlen("Hello-World") + 1)
-        {
-            memcpy(pOutputData, "Hello-World", strlen("Hello-World") + 1);
-            status = STATUS_SUCCESS;
-            Information = strlen("Hello-World") + 1;
-        }
-        else
-        {
-            status = STATUS_INSUFFICIENT_RESOURCES;   //内存不够
-            Information = 0;
-        }
+        //if (pOutputData != NULL && OutputDataLength >= strlen("Hello-World") + 1)
+        //{
+        //    memcpy(pOutputData, "Hello-World", strlen("Hello-World") + 1);
+        //    status = STATUS_SUCCESS;
+        //    Information = strlen("Hello-World") + 1;
+        //}
+        //else
+        //{
+        //    status = STATUS_INSUFFICIENT_RESOURCES;   //内存不够
+        //    Information = 0;
+        //}
         break;
     case IOCTL_MemKillProcess:
         if (pInputData != NULL && InputDataLength > 0)
@@ -733,25 +696,26 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             stMemory = *(PMemoryStruct)pInputData;
             //ProbeForRead((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
             SIZE_T BytesTransferred = 0;
-            status = CopyMemory(stMemory.dwProcessId, (PVOID)stMemory.Addr, stMemory.pData, stMemory.Size, &BytesTransferred);
-			Information = BytesTransferred;
+            status = ReadProcessMemory(stMemory.dwProcessId, (PVOID)stMemory.Addr, stMemory.pData, stMemory.Size, &BytesTransferred);
+            Information = BytesTransferred;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             status = GetExceptionCode();
         }
-        DbgPrint("status=%X, Information=%lld", status, Information);
+        //DbgPrint("status=%X, Information=%lld", status, Information);
         break;
     case IOCTL_WriteProcessMemory:
         __try {
             stMemory = *(PMemoryStruct)pInputData;
             //ProbeForWrite((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
             SIZE_T BytesTransferred = 0;
-            status = CopyMemory(stMemory.dwProcessId, stMemory.pData, (PVOID)stMemory.Addr, stMemory.Size, &BytesTransferred);
+            status = WriteProcessMemory(stMemory.dwProcessId, stMemory.pData, (PVOID)stMemory.Addr, stMemory.Size, &BytesTransferred);
             Information = BytesTransferred;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             status = GetExceptionCode();
         }
+        //DbgPrint("status=%X, Information=%lld", status, Information);
         break;
     case IOCTL_ScanKernelMemory:
         if (pInputData != NULL && InputDataLength > 0) {
@@ -1350,8 +1314,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
             // 清零（确保无效页填充0）
             RtlZeroMemory(pKernelBuffer, stMemory.Size);
-
-            SIZE_T BytesTransferred = 0;
             //DbgPrint("IRQL at entry: %d\n", KeGetCurrentIrql());
             // 调用内核DUMP函数（只传内核缓冲区）
             status = DumpKernelModule(

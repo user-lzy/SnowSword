@@ -949,7 +949,7 @@ Function GetFileCompany(FileName As StringW) As StringW
     Dim subBlock As StringW
     Dim i As Integer ' 声明循环变量
     
-    If FileExists(Str(FileName)) = 0 Then Return "-"
+    'If FileExists(Str(FileName)) = 0 Then Return "-"
 
     ' 获取文件版本信息的大小
     dwSize = GetFileVersionInfoSizeW(FileName, @dwDummy)
@@ -1000,6 +1000,96 @@ Function GetFileCompany(FileName As StringW) As StringW
     ' 释放缓冲区
     Deallocate pBuffer
     Return "-"
+End Function
+
+Function GetFileCompany_Opt(ByVal FileName As StringW) As StringW
+    ' 静态缓冲区全局复用，避免频繁堆分配释放
+    Static verBuf As UByte Ptr = NULL
+    Static verBufSize As DWORD = 0
+    Dim dwSize As DWORD
+    Dim dwDummy As DWORD
+    Dim lpData As WString * MAX_PATH = ""
+    Dim lpBuffer As PVOID
+    Dim dwLen As DWORD
+    Dim pTransTable As LANGANDCODEPAGE Ptr
+    Dim nQuerySize As DWORD
+    Dim langCharset As DWORD
+    Dim subBlock As StringW
+
+    ' 短路1：无盘符路径（System/Idle等内核进程）直接返回
+    If InStrW(FileName, ":") = 0 Then
+        Return "-"
+    End If
+
+    dwSize = GetFileVersionInfoSizeW(FileName, @dwDummy)
+    If dwSize = 0 Then
+        Return ""
+    End If
+
+    ' 复用静态缓冲区，不足则重新分配
+    If verBufSize < dwSize Then
+        If verBuf <> NULL Then Deallocate(verBuf)
+        verBuf = Allocate(dwSize)
+        verBufSize = dwSize
+    End If
+
+    If GetFileVersionInfoW(FileName, 0, dwSize, verBuf) = 0 Then
+        MyLog.PrintWin32Error "GetFileCompany_Opt", "GetFileVersionInfoW", "Path=" & FileName
+        Return "-"
+    End If
+
+    If VerQueryValueW(verBuf, StrPtrW("\VarFileInfo\Translation"), @pTransTable, @nQuerySize) = 0 Then
+        MyLog.PrintWin32Error "GetFileCompany_Opt", "VerQueryValueW Translation", "Path=" & FileName
+        Return ""
+    End If
+
+    ' 仅取第一条语言信息，绝大多数场景够用，省去循环
+    langCharset = (pTransTable[0].wLanguage Shl 16) Or pTransTable[0].wCodePage
+    subBlock = "\StringFileInfo\" & Hex(langCharset, 8) & "\CompanyName"
+
+    If VerQueryValueW(verBuf, StrPtrW(subBlock), @lpBuffer, @dwLen) Then
+        If dwLen >= 2 Then
+            CopyMemory(StrPtr(lpData), lpBuffer, dwLen * 2)
+            Return lpData
+        End If
+    End If
+
+    MyLog.PrintLog LOG_INFO,,,"GetFileCompany_Opt 未找到CompanyName, Path=" & FileName
+    Return ""
+End Function
+
+' 文件公司名缓存包装函数：同路径仅读取一次
+Function GetFileCompanyCached(ByVal FileName As StringW) As StringW
+    If FileName = "" Then Return "-"
+    
+    ' 静态缓存
+    Static cachePath() As StringW
+    Static cacheCompany() As StringW
+    Static cacheCount As Integer = 0
+    
+    ' 查找缓存命中
+    For i As Integer = 0 To cacheCount - 1
+        If cachePath(i) = FileName Then
+            Return cacheCompany(i)
+        End If
+    Next
+    
+    ' 未命中：调用原函数读取
+    Dim result As StringW = GetFileCompany_Opt(FileName)
+    
+    ' 写入缓存（自动扩容）
+    If cacheCount = 0 Then
+        ReDim cachePath(0 To 63)
+        ReDim cacheCompany(0 To 63)
+    ElseIf cacheCount > UBound(cachePath) Then
+        ReDim Preserve cachePath(0 To cacheCount * 2 - 1)
+        ReDim Preserve cacheCompany(0 To cacheCount * 2 - 1)
+    End If
+    cachePath(cacheCount) = FileName
+    cacheCompany(cacheCount) = result
+    cacheCount += 1
+    
+    Return result
 End Function
 
 ' 辅助函数：从指定文件提取签名证书并判断是否为微软

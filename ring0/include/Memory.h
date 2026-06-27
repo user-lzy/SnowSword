@@ -44,13 +44,12 @@ typedef struct _HARDWARE_PTE {
 
 typedef struct MemoryStruct* PMemoryStruct;
 
+NTKERNELAPI NTSTATUS MmCopyVirtualMemory(PEPROCESS SourceProcess, PVOID SourceAddress, PEPROCESS TargetProcess, PVOID TargetAddress, SIZE_T BufferSize, KPROCESSOR_MODE PreviousMode, PSIZE_T ReturnSize);
+
 NTSTATUS VxkCopyMemory(PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred);
 NTSTATUS ReadKernelMemory(PVOID pAddress, PVOID pBuffer, ULONG SizeOfRead);
-NTSTATUS NTKERNELAPI MmCopyVirtualMemory(PEPROCESS SourceProcess, PVOID SourceAddress, PEPROCESS TargetProcess, PVOID TargetAddress, SIZE_T BufferSize, KPROCESSOR_MODE PreviousMode, PSIZE_T ReturnSize);
-//PULONG64 NTKERNELAPI MiGetPteAddress(PVOID VirtualAddress);
-
-//MmCopyMemory
-NTSTATUS CopyMemory(HANDLE dwProcessId, PVOID pSourceAddress, PVOID pDestinationAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred);
+NTSTATUS ReadProcessMemory(HANDLE dwProcessId, PVOID pSourceAddress, PVOID pDestinationBuffer, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred);
+NTSTATUS WriteProcessMemory(HANDLE dwProcessId, PVOID pSourceBuffer, PVOID pDestinationAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred);
 
 NTSTATUS DisableCopyOnWrite(PVOID pMem, SIZE_T ulMemSize);
 

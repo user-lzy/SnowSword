@@ -715,7 +715,7 @@ Tag=
 Name=mnuIDT
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuIDT_mnuRefresh0-10-FrmMain_mnuIDT_mnuStep10-10查看/编辑内存FrmMain_mnuIDT_FrmMain_mnuGDT_mnuEditMemory0-10
+Menu=刷新FrmMain_mnuIDT_mnuRefresh0-10-FrmMain_mnuIDT_mnuStep10-10查看/编辑内存FrmMain_mnuIDT_mnuEditMemory0-10
 Left=260
 Top=280
 Tag=
@@ -724,7 +724,7 @@ Tag=
 Name=mnuWfpCallout
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuWfpCallout_mnuRefresh0-10
+Menu=刷新FrmMain_mnuWfpCallout_mnuRefresh0-10查看/编辑内存FrmMain_mnuWfpCallout_mnuEditMemory0-10
 Left=340
 Top=280
 Tag=
@@ -1476,6 +1476,8 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
             PopupMenu hWndForm, mnuWinsockSPI.HMENU
         Case TaskScheduler
             PopupMenu hWndForm, mnuTaskScheduler.HMENU
+        Case WfpCallout
+        Case WfpFilter
         Case Else
             PopupMenu hWndForm, mnuListView.HMENU
     End Select
@@ -1541,11 +1543,11 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         If g_ViewCache(CurrentInformation.intType).IsCached Then
             RestoreListViewFromCache ListView1, CurrentInformation.intType
         Else
-            Dim As Double start, finish
-            start = Timer
+            'Dim As Double start, finish
+            'start = Timer
             GetProcessList ListView1, GetMenuCheckState(mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
-            finish = Timer
-            MyLog.PrintLog LOG_INFO,,, "函数执行耗时：" & finish - start & " 秒"
+            'finish = Timer
+            'MyLog.PrintLog LOG_INFO,,, "函数执行耗时：" & finish - start & " 秒"
         End If
         lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 
@@ -2992,6 +2994,14 @@ End Function
 '[FrmMain.VEH1]事件 : 向量化异常处理（程序崩溃后处理）
 '整个软件，只需一个VEH即可，在主窗口放置控件，所有窗口、模块、多线程等发生崩溃，都会跑到这里执行。
 Function FrmMain_VEH1_VectExcepHandler(ByRef excp As EXCEPTION_POINTERS) As Integer
+    ' 这两种异常是 OutputDebugString 的产物，不是真正的错误
+    ' DBG_PRINTEXCEPTION_C = 0x40010006
+    ' DBG_PRINTEXCEPTION_W = 0x4001000A
+    If excp.ExceptionRecord->ExceptionCode = &H40010006 OrElse _
+       excp.ExceptionRecord->ExceptionCode = &H4001000A Then
+        ' 直接返回 EXCEPTION_CONTINUE_SEARCH，系统会正常处理
+        Return 0  ' 或者 Return 1 也行，这里返回 0 让系统自行处理即可
+    End If
     'AfxMsg "程序即将崩溃..."
     保存软件崩溃日志 App.Path & "bug" & NowString(1) & ".txt", excp
     Return 0
@@ -3670,6 +3680,10 @@ Sub FrmMain_mCtrlTreeList1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd,
     LastClickedSubItem = iCurrentColumn
     
     Select Case CurrentInformation.intType
+        Case GDT
+            PopupMenu hWndForm, mnuGDT.HMENU
+        Case IDT
+            PopupMenu hWndForm, mnuIDT.HMENU
         Case Minifilter
             ReleaseCapture ' 这里是否存在问题?
             PopupMenu hWndForm, mnuMinifilter.HMENU
@@ -3729,11 +3743,31 @@ Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
     End Select
 End Sub
 
+'[FrmMain.mnuRegValue]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd,wID As ULong)
+    Select Case wID
+        Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
+
+        Case FrmMain_mnuRegValue_mnuCreate ' 新建
+
+        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值
+
+        Case FrmMain_mnuRegValue_mnuDeleteValue ' 删除
+
+        Case FrmMain_mnuRegValue_mnuModifyValue ' 修改
+
+    End Select
+End Sub
+
 '[FrmMain.mnuListView]事件 : 点击了菜单项
 'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 ''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
 'wID      菜单项命令ID
-Sub FrmMain_mnuListView_WM_Command(hWndForm As hWnd,wID As ULong)
+Sub FrmMain_mnuListView_WM_Command(hWndForm As hWnd, wID As ULong)
+   Static iSubItem As Long = 0
     Select Case wID
         Case FrmMain_mnuListView_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
@@ -3746,25 +3780,31 @@ Sub FrmMain_mnuListView_WM_Command(hWndForm As hWnd,wID As ULong)
                 'Case ForegroundProcess
                 '    GetVisibleProcessList ListView1
                 Case SSDT
+                    iSubItem = 3
                     GetSSDT ListView1
                 Case ShadowSSDT
+                    iSubItem = 3
                     GetSSSDT ListView1
                 Case HalDispatch
+                    iSubItem = 2
                     GetHalDispatchTable ListView1
                 Case HalPrivateDispatch
+                    iSubItem = 2
                     GetHalPrivateDispatchTable ListView1
                 Case ObjectHook
+                    iSubItem = 1
                     GetObjectInfo ListView1
-                Case WfpCallout
+                /'Case WfpCallout
+                    iSubItem = 2
                     'If GetSystemVersion <> "Windows 11 24H2" AndAlso GetSystemVersion <> "Windows 10 22H2" AndAlso AfxMsg("暂不支持的版本,是否执意继续?",, MB_YESNO) = IDNO Then Exit Sub
                     GetWfpCalloutList ListView1
                 Case WfpFilter
-                    GetWfpFilterList ListView1
+                    GetWfpFilterList ListView1'/
             End Select
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
         Case FrmMain_mnuListView_mnuEditMemory ' 查看/编辑内存
-            If LastClickedSubItem <> 3 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, iSubItem), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
             Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
             MemoryInfo->Addr = Cast(PVOID, Addr)
             MemoryInfo->dwProcessId = 0
@@ -4076,25 +4116,6 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
    End Select
 End Sub
 
-'[FrmMain.mnuRegValue]事件 : 点击了菜单项
-'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
-'wID      菜单项命令ID
-Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd,wID As ULong)
-    Select Case wID
-        Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
-
-        Case FrmMain_mnuRegValue_mnuCreate ' 新建
-
-        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值
-
-        Case FrmMain_mnuRegValue_mnuDeleteValue ' 删除
-
-        Case FrmMain_mnuRegValue_mnuModifyValue ' 修改
-
-    End Select
-End Sub
-
 '[FrmMain.mCtrlTreeList1]事件 : 按下鼠标左键
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
@@ -4129,4 +4150,79 @@ Sub FrmMain_mnuColumn_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim curVisible As Boolean = GetColumnVisible(intType, colIdx)
     SetColumnVisible intType, colIdx, Not curVisible, ListView1.hWnd
 End Sub
+
+'[FrmMain.mnuWfpCallout]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuWfpCallout_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmMain_mnuWfpCallout_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetWfpCalloutList ListView1
+            lblNum.Caption = "数量:" & ListView1.ItemCount
+        Case FrmMain_mnuWfpCallout_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView1.GetItemText(LastClickedItem, 2), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = 0
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
+   End Select
+End Sub
+
+'[FrmMain.mnuWfpFilter]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuWfpFilter_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmMain_mnuWfpFilter_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetWfpFilterList ListView1
+            lblNum.Caption = "数量:" & ListView1.ItemCount
+   End Select
+End Sub
+
+'[FrmMain.mnuGDT]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuGDT_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmMain_mnuGDT_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            lblNum.Caption = "数量:" & GetGDT(mCtrlTreeList1)
+        Case FrmMain_mnuGDT_FrmMain_mnuGDT_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(mCtrlTreeList1.GetItemText(LastSelectItem, 1), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = 0
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
+   End Select
+End Sub
+
+'[FrmMain.mnuIDT]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuIDT_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmMain_mnuIDT_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            lblNum.Caption = "数量:" & GetGDT(mCtrlTreeList1)
+        Case FrmMain_mnuIDT_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(mCtrlTreeList1.GetItemText(LastSelectItem, 3), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = 0
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
+   End Select
+End Sub
+
+
+
+
 

@@ -227,6 +227,16 @@ Type ProcessInfo
     pplSigner      As Byte
 End Type
 
+Type PIDInfo
+    PID As DWORD
+    bExited As Boolean
+End Type
+
+Type EProcessInfo Field = 8
+    EProcess As UInteger
+    bExited As Boolean
+End Type
+
 Public Enum PROCESSINFOCLASS
     BasicInformation = 0
     ProcessQuotaLimits
@@ -575,14 +585,14 @@ Function GetPEB(ByVal dwProcessId As DWORD) As Any Ptr
     Return pbi.PebBaseAddress
 End Function
 
-Private Function GetEProcess(ByVal ProcessId As DWORD) As ULONG64
-    Dim pEProcess As ULONG64, lpRet As DWORD
-    IoControl hDrv, IOCTL_GetEProcess, @ProcessId, SizeOf(DWORD), @pEProcess, SizeOf(ULONG64), @lpRet
-    If ProcessId = 1892 Then Print "The EPROCESS Of Process 1852:" & Hex(pEProcess)
-    Return pEProcess
+Private Function GetEProcess(ByVal ProcessId As DWORD) As EProcessInfo
+    Dim EProcessInfo As EProcessInfo, lpRet As DWORD
+    IoControl hDrv, IOCTL_GetEProcess, @ProcessId, SizeOf(DWORD), @EProcessInfo, SizeOf(EProcessInfo), @lpRet
+    'If ProcessId = 1892 Then Print "The EPROCESS Of Process 1852:" & Hex(pEProcess)
+    Return EProcessInfo
 End Function
 
-Private Sub GetPIDList1(PIDs() As DWORD)
+Private Sub GetPIDList1(PIDs() As PIDInfo)
     Dim st As NTSTATUS
     
     Dim bufferSize As ULong = &H1000
@@ -597,7 +607,7 @@ Private Sub GetPIDList1(PIDs() As DWORD)
     
     Dim pHandleEntry As SYSTEM_HANDLE_INFORMATION Ptr = CPtr(SYSTEM_HANDLE_INFORMATION Ptr, buffer)
     Dim j As Integer
-    ReDim PIDs(100) As DWORD
+    ReDim PIDs(100) As PIDInfo
     For i As Integer = 0 To pHandleEntry->NumberOfHandles - 1
         Dim MyHandle As HANDLE = NULL, ProcessId As DWORD, ThreadId As DWORD
         Dim hProcess As HANDLE = OpenProcess(PROCESS_DUP_HANDLE, False, pHandleEntry->Handles(i).UniqueProcessId)
@@ -609,7 +619,8 @@ Private Sub GetPIDList1(PIDs() As DWORD)
         If (Not IsDWORDInArray(ProcessId, PIDs())) AndAlso ProcessId <> 0 Then
             'Print "找到PID:" & ProcessId & " EPROCESS:" & WHex(pHandleEntry->Handles(i).pObject)
             If j > UBound(PIDs) Then ReDim Preserve PIDs(UBound(PIDs) + 50)
-            PIDs(j) = ProcessId
+            PIDs(j).PID = ProcessId
+            PIDs(j).bExited = False ' 这里将来会改
             j += 1
             Continue For
         End If
@@ -619,7 +630,8 @@ Private Sub GetPIDList1(PIDs() As DWORD)
         If (Not IsDWORDInArray(ProcessId, PIDs())) AndAlso ProcessId <> 0 Then
             'Print "找到PID:" & ProcessId & " EPROCESS:" & WHex(pHandleEntry->Handles(i).pObject)
             If j > UBound(PIDs) Then ReDim Preserve PIDs(UBound(PIDs) + 50)
-            PIDs(j) = ProcessId
+            PIDs(j).PID = ProcessId
+            PIDs(j).bExited = False
             j += 1
             Continue For
         End If
@@ -631,17 +643,18 @@ Private Sub GetPIDList1(PIDs() As DWORD)
     'PrintArray PIDs()
 End Sub
 
-Private Function GetPIDList2(PID() As DWORD) As Integer
+Private Function GetPIDList2(PIDInfo() As PIDInfo) As Integer
     Dim hProcess As HANDLE, j As Integer, k As Integer = 100
-    ReDim PID(k)
+    ReDim PID(k) As PIDInfo
     For dwPID As DWORD = 0 To &H20000 Step 4
         hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, dwPID)
         If j > k Then
             k += 100
-            ReDim Preserve PID(k)
+            ReDim Preserve PID(k) As PIDInfo
         End If
+        'If dwPId = 11956 OrElse dwPID = 17572 Then Print dwPID & "error:" & GetLastError
         If (hProcess <> 0) Or (GetLastError <> ERROR_INVALID_PARAMETER) Then ' 找到一个进程
-            PID(j) = dwPID
+            PID(j).PID = dwPID
             j += 1
             CloseHandle hProcess
         End If
@@ -650,20 +663,19 @@ Private Function GetPIDList2(PID() As DWORD) As Integer
     Return j + 1
 End Function
 
-Private Function GetPIDList3(PID() As DWORD) As Integer
-    Dim pEProcess As ULONG64, lpRet As DWORD, j As Integer, k As Integer = 100
-    ReDim PID(k)
+Private Function GetPIDList3(PIDInfo() As PIDInfo) As Integer
+    Dim EProcessInfo As EProcessInfo, lpRet As DWORD, j As Integer, k As Integer = 100
+    ReDim PIDInfo(k) As PIDInfo
     For i As DWORD = 0 To &H20000 Step 4
-        pEProcess = GetEProcess(i)
+        EProcessInfo = GetEProcess(i)
         If j > k Then
             k += 100
-            ReDim Preserve PID(k)
+            ReDim Preserve PIDInfo(k) As PIDInfo
         End If
-        If pEProcess <> 0 Then
-            Print i & " 0x" & Hex(pEProcess)
-            PID(j) = i
-            j += 1
-        End If
+        PIDInfo(j).PID = i
+        If EProcessInfo.bExited Then Print "PIDInfo(" & j & ")" & i & "Exited!"
+        PIDInfo(j).bExited = EProcessInfo.bExited
+        j += 1
         FF_DoEvents
     Next
     Return j + 1
@@ -703,6 +715,16 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
     End Select
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(ProcessId)
+        If hProcess = NULL Then
+            Dim ntPath As WString * MAX_PATH = "", dosPath As WString * MAX_PATH = ""
+            Dim dwProcessId As DWORD = ProcessId
+            If IoControl(hDrv, IOCTL_GetProcessPath, @dwProcessId, SizeOf(HANDLE), @ntPath, MAX_PATH * 2) <> 0 Then
+                NtPathToDosPathWFast @ntPath, @dosPath
+                Return dosPath
+            Else
+                Return "-"
+            End If
+        End If
     Else
         '设置要打开的进程的客户端 ID
         ClientId.UniqueProcess = Cast(HANDLE, Cast(Integer, ProcessId))
@@ -717,6 +739,7 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
             MyLog.PrintNtError "GetProcessPath", "ZwOpenProces", st, "PID=" & ProcessId
             Return ""
         End If
+        'Print ProcessId & " " & WHex(st) & " " & WHex(hProcess)
     End If
     
     If hProcess Then
@@ -729,6 +752,7 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
         End If
         Dim ProcessPath As WString * MAX_PATH
         NtPathToDosPathW @pathBuffer, @ProcessPath
+        'Print ProcessId & ":" & ProcessPath
         Return ProcessPath
     End If
     Return ""
@@ -1031,12 +1055,17 @@ Cleanup:
     If hProcess <> NULL Then CloseHandle(hProcess)
 End Function
 
-' 辅助：SID转字符串Key，用作缓存匹配
-Private Function SidToCacheKey(pSid As PVOID) As String
-    Dim sidLen As DWORD = GetLengthSid(pSid)
-    Dim buf As ZString * 512
-    ConvertSidToStringSid(pSid, @buf)
-    Return buf
+' 辅助：SID转字符串Key，用作缓存匹配（已修复宽字符接收）
+Private Function SidToCacheKey(pSid As PVOID) As StringW
+    Dim pStringSid As WString Ptr = NULL
+    
+    If ConvertSidToStringSid(pSid, CPtr(LPWSTR Ptr, @pStringSid)) = 0 Then
+        Return ""
+    End If
+    
+    Dim result As StringW = *pStringSid
+    LocalFree(pStringSid)
+    Return result
 End Function
 
 ' 缓存包装入口，外部替换GetProcessUserName → GetProcessUserNameCached
@@ -1045,7 +1074,6 @@ Function GetProcessUserNameCached(ByVal dwProcessId As DWORD) As StringW
     Static cacheResult() As StringW
     Static cacheCnt As Integer = 0
     
-    ' 1. 先执行原函数内部逻辑，拿到TokenUser与SID（复用原有打开流程，不重写底层）
     Const TokenQuery As DWORD = &H0008
     Dim hProcess As HANDLE = NULL
     Dim hToken As HANDLE = NULL
@@ -1057,65 +1085,66 @@ Function GetProcessUserNameCached(ByVal dwProcessId As DWORD) As StringW
     Dim userNameLen As DWORD = 256
     Dim domainLen As DWORD = 256
     Dim useType As DWORD = 0
-    Dim errCode As DWORD = 0
     Dim finalUser As StringW = "(failed)"
     Dim sidKey As StringW
 
+    ' 打开进程
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(dwProcessId)
     Else
         hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, False, dwProcessId)
     End If
-    If hProcess = NULL Then
-        Goto Cleanup
-    End If
+    If hProcess = NULL Then Goto Cleanup
 
-    If OpenProcessToken(hProcess, TokenQuery, @hToken) = 0 Then
-        Goto Cleanup
-    End If
+    ' 打开进程令牌
+    If OpenProcessToken(hProcess, TokenQuery, @hToken) = 0 Then Goto Cleanup
 
+    ' 获取SID缓冲区大小
     GetTokenInformation(hToken, TokenUser, NULL, 0, @dwSize)
     If dwSize = 0 Then Goto Cleanup
 
     pUserBuf = Allocate(dwSize)
     If pUserBuf = NULL Then Goto Cleanup
 
-    If GetTokenInformation(hToken, TokenUser, pUserBuf, dwSize, @dwSize) = 0 Then
-        Goto Cleanup
-    End If
+    ' 读取SID
+    If GetTokenInformation(hToken, TokenUser, pUserBuf, dwSize, @dwSize) = 0 Then Goto Cleanup
 
     pTokenUser = Cast(TOKEN_USER Ptr, pUserBuf)
-    If pTokenUser->User.SID = NULL Then Goto Cleanup
+    If pTokenUser->User.Sid = NULL Then Goto Cleanup
 
-    ' 生成SID缓存Key
-    sidKey = SidToCacheKey(pTokenUser->User.SID)
+    ' 生成缓存Key（已修复宽字符）
+    sidKey = SidToCacheKey(pTokenUser->User.Sid)
+    If sidKey = "" Then Goto LookupDirect
 
-    ' 2. 查找缓存
+    ' 查找缓存
     For i As Integer = 0 To cacheCnt - 1
         If cacheKey(i) = sidKey Then
             finalUser = cacheResult(i)
-            Goto Cleanup ' 命中直接返回，跳过LookupAccountSid
+            Goto Cleanup
         End If
     Next
 
-    ' 3. 未命中，执行原LookupAccountSid逻辑
+LookupDirect:
+    ' 未命中，执行SID转用户名
     If LookupAccountSid(NULL, pTokenUser->User.Sid, @szUserName, @userNameLen, @szDomainName, @domainLen, @useType) Then
         finalUser = LeftW(szDomainName, domainLen) & "\" & LeftW(szUserName, userNameLen)
     Else
         finalUser = "(failed)"
     End If
 
-    ' 4. 写入缓存，自动扩容
-    If cacheCnt = 0 Then
-        ReDim cacheKey(0 To 15)
-        ReDim cacheResult(0 To 15)
-    ElseIf cacheCnt > UBound(cacheKey) Then
-        ReDim Preserve cacheKey(0 To cacheCnt * 2 - 1)
-        ReDim Preserve cacheResult(0 To cacheCnt * 2 - 1)
+    ' 写入缓存（先扩容再写入，修复越界）
+    If sidKey <> "" Then
+        If cacheCnt = 0 Then
+            ReDim cacheKey(0 To 15)
+            ReDim cacheResult(0 To 15)
+        ElseIf cacheCnt > UBound(cacheKey) Then
+            ReDim Preserve cacheKey(0 To cacheCnt * 2 - 1)
+            ReDim Preserve cacheResult(0 To cacheCnt * 2 - 1)
+        End If
+        cacheKey(cacheCnt) = sidKey
+        cacheResult(cacheCnt) = finalUser
+        cacheCnt += 1
     End If
-    cacheKey(cacheCnt) = sidKey
-    cacheResult(cacheCnt) = finalUser
-    cacheCnt += 1
 
 Cleanup:
     If pUserBuf <> NULL Then Deallocate(pUserBuf)
@@ -1290,171 +1319,8 @@ Function GetProcessOtherInfo(ByVal PID As DWORD, txtInfo As Class_TextBox) As Pr
     Return info
 End Function
 
-Public Function GetProcessList1(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
-    Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
-    Dim ProcessCount As Integer = 0
-    Dim dwPID As DWORD
-    Dim strPID As StringW
-    Dim strEProcess As StringW
-    Dim dwParentPID As DWORD
-    Dim strParentPID As StringW
-    Dim strPath As StringW
-    Dim strPath1 As StringW
-    Dim strName As StringW
-    Dim strSessionId As StringW
-    Dim strUserName As StringW
-    Dim strCommandLine As StringW
-    Dim strCompany As StringW
-    Dim errCode As Long
-    
-    ' 全局阶段计时变量
-    Dim tStartAll As Double = Timer()
-    Dim tStartEnumPID As Double, tEndEnumPID As Double
-    Dim tStartLoopCollect As Double, tEndLoopCollect As Double
-    Dim tStartListViewFill As Double, tEndListViewFill As Double
-    Dim tStartSignCheck As Double, tEndSignCheck As Double
-    Dim tStartCommit As Double, tEndCommit As Double
-
-    'lvwProcess.ReDraw = False
-    InitListViewData lvwProcess
-    
-    ' ========== 阶段1：枚举PID与进程路径数组 ==========
-    tStartEnumPID = Timer()
-    GetAllPID ProcessPath(), PID1(), 0
-    tEndEnumPID = Timer()
-    MyLog.PrintLog LOG_INFO,,,"【阶段1 GetAllPID总耗时】：" & tEndEnumPID - tStartEnumPID & " 秒"
-    
-    If IsCheckHideProcess Then
-        ' 原有隐藏进程逻辑保持不变，本次只修改False分支，省略不贴
-    Else
-        ' ========== 阶段2：批量采集进程信息循环 ==========
-        tStartLoopCollect = Timer()
-        
-        ' 各子函数累计计时变量
-        Dim tGetParent As Double = 0
-        Dim tGetPath As Double = 0
-        Dim tGetSession As Double = 0
-        Dim tGetUserName As Double = 0
-        Dim tGetCmdLine As Double = 0
-        Dim tGetCompany As Double = 0
-        Dim tGetIcon As Double = 0
-        Dim tDoEvents As Double = 0
-        Dim tTemp As Double ' 临时计时变量
-        
-        For i As Integer = 0 To UBound(PID1) - 1
-            Dim ForeColor As COLORREF = FB_Black
-            Dim BackColor As COLORREF = FB_White
-            
-            dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
-            
-            dwPID = PID1(i + 1)
-            
-            ' 1. 父进程ID
-            tTemp = Timer()
-            If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
-            tGetParent += Timer() - tTemp
-            
-            ' 驱动模式EProcess地址
-            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
-            
-            ' 2. 进程路径（快照返回值 + 二次读取对比）
-            tTemp = Timer()
-            strPath = ProcessPath(i + 1)
-            strPath1 = GetProcessPath(dwPID)
-            tGetPath += Timer() - tTemp
-            
-            ' 路径一致性判断
-            If InStr(strPath, ":") = 0 Then
-                If InStr(strPath1, ":") = 0 Then
-                    strName = ProcessPath(i + 1)
-                Else
-                    strPath = strPath1
-                End If
-            Else
-                If strPath1 <> "" AndAlso strPath <> strPath1 Then
-                    ForeColor = FB_LightRed
-                End If
-            End If
-            strName = GetNameByPath(strPath)
-            
-            ' 3. 文件公司名
-            tTemp = Timer()
-            strCompany = GetFileCompanyCached(strPath)
-            tGetCompany += Timer() - tTemp
-            
-            ' 4. 会话ID
-            tTemp = Timer()
-            Dim dwSessionId As DWORD = 0
-            If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
-            tGetSession += Timer() - tTemp
-            
-            ' 5. 用户名
-            tTemp = Timer()
-            strUserName = GetProcessUserNameCached(dwPID)
-            tGetUserName += Timer() - tTemp
-            
-            ' 6. 命令行
-            tTemp = Timer()
-            strCommandLine = GetProcessCommandLine(dwPID)
-            tGetCmdLine += Timer() - tTemp
-            
-            ' ========== 阶段3：虚拟列表行填充 ==========
-            tStartListViewFill = Timer()
-            Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
-            
-            ' 7. 图标索引
-            tTemp = Timer()
-            SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
-            tGetIcon += Timer() - tTemp
-            tEndListViewFill = Timer()
-            
-            ' ========== 阶段4：异步文件签名校验调用 ==========
-            tStartSignCheck = Timer()
-            VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
-            tEndSignCheck = Timer()
-
-            SetItemColor lvwProcess, ItemIndex, ForeColor, BackColor
-            ProcessCount += 1
-            
-            ' 8. 消息循环
-            tTemp = Timer()
-            ' 原代码：FF_DoEvents
-            If (i + 1) Mod 20 = 0 Then FF_DoEvents
-            tDoEvents += Timer() - tTemp
-        Next
-        tEndLoopCollect = Timer()
-        
-        ' 输出各函数细分耗时统计
-        Dim procTotal As Double = tEndLoopCollect - tStartLoopCollect
-        MyLog.PrintLog LOG_INFO,,,"===== 阶段2 子函数细分耗时统计 ====="
-        MyLog.PrintLog LOG_INFO,,,"阶段2总耗时：" & procTotal & " 秒，进程总数：" & ProcessCount
-        MyLog.PrintLog LOG_INFO,,,"1. GetParentProcessId 总耗时：" & tGetParent & " 秒，占比：" & Format(tGetParent/procTotal*100, "0.0") & "%，单进程平均：" & tGetParent/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"2. GetProcessPath 总耗时：" & tGetPath & " 秒，占比：" & Format(tGetPath/procTotal*100, "0.0") & "%，单进程平均：" & tGetPath/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"3. GetProcessSessionId 总耗时：" & tGetSession & " 秒，占比：" & Format(tGetSession/procTotal*100, "0.0") & "%，单进程平均：" & tGetSession/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"4. GetProcessUserNameCached 总耗时：" & tGetUserName & " 秒，占比：" & Format(tGetUserName/procTotal*100, "0.0") & "%，单进程平均：" & tGetUserName/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"5. GetProcessCommandLine 总耗时：" & tGetCmdLine & " 秒，占比：" & Format(tGetCmdLine/procTotal*100, "0.0") & "%，单进程平均：" & tGetCmdLine/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"6. GetFileCompanyCached 总耗时：" & tGetCompany & " 秒，占比：" & Format(tGetCompany/procTotal*100, "0.0") & "%，单进程平均：" & tGetCompany/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"7. GetFileIconIndexCached 总耗时：" & tGetIcon & " 秒，占比：" & Format(tGetIcon/procTotal*100, "0.0") & "%，单进程平均：" & tGetIcon/ProcessCount & " 秒"
-        MyLog.PrintLog LOG_INFO,,,"8. FF_DoEvents 总耗时：" & tDoEvents & " 秒，占比：" & Format(tDoEvents/procTotal*100, "0.0") & "%，单进程平均：" & tDoEvents/ProcessCount & " 秒"
-    End If
-    
-    ' ========== 阶段5：虚拟列表统一提交渲染 ==========
-    tStartCommit = Timer()
-    CommitListViewView lvwProcess
-    tEndCommit = Timer()
-    MyLog.PrintLog LOG_INFO,,,"【阶段5 CommitListViewView总耗时】：" & tEndCommit - tStartCommit & " 秒"
-
-    ' 全流程总耗时汇总
-    Dim totalAll As Double = Timer() - tStartAll
-    MyLog.PrintLog LOG_INFO,,,"==== GetProcessList(IsCheckHideProcess=False) 完整总耗时 ===="
-    MyLog.PrintLog LOG_INFO,,,"总耗时：" & totalAll & " 秒，进程总数：" & ProcessCount & "，全局单进程平均：" & totalAll / ProcessCount & " 秒"
-    
-    'lvwProcess.ReDraw = True
-    Return ProcessCount
-End Function
-
 Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHideProcess As Boolean) As Integer
-    Dim PID1() As DWORD, ProcessPath() As String, PID2() As DWORD, k As Integer
+    Dim PID1() As DWORD, ProcessPath() As String, PID2() As PIDInfo, k As Integer
     Dim ProcessCount As Integer = 0
     Dim dwPID As DWORD
     Dim strPID As StringW
@@ -1473,10 +1339,12 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
     'lvwProcess.ReDraw = False
     
     InitListViewData lvwProcess
+    'ListView_SetImageList(lvwProcess.hWnd, hSysImageList, LVSIL_SMALL)
     
     GetAllPID ProcessPath(), PID1(), 0
     
     If IsCheckHideProcess Then
+        Dim EProcessInfo As EProcessInfo
         If IsDriverLoaded Then GetPIDList3 PID2() Else GetPIDList1 PID2()' GetPIDList2 PID2()
         For i As Integer = 0 To UBound(PID1) - 1
             Dim ForeColor As COLORREF = FB_Black
@@ -1484,10 +1352,13 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             
             dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
             
-            dwPID = PID1(i + 1)
+            dwPID = PID1(i)
             strPID = WStr(dwPID)
             If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
-            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
+            If IsDriverLoaded Then
+                EProcessInfo = GetEProcess(dwPID)
+                strEProcess = "0x" & WHex(EProcessInfo.EProcess)
+            End If
             strPath = ProcessPath(i + 1)
             strPath1 = GetProcessPath(dwPID)
             If InStr(strPath, ":") = 0 Then
@@ -1502,7 +1373,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                     ForeColor = FB_LightRed
                 End If
             End If
-            Print dwPID & ":" & strPath
+            'Print dwPID & ":" & strPath
             strName = GetNameByPath(strPath)
             strCompany = GetFileCompanyCached(strPath)
             Dim dwSessionId As DWORD = 0
@@ -1511,6 +1382,9 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
+            Dim Index2 As DWORD = GetDWORDInArray(dwPID, PID2())
+            'Print dwPID & " " & Index2 & " " & PID2(Index2).bExited
+            If Index2 >= 0 AndAlso PID2(Index2).bExited Then SetItemColor lvwProcess, ItemIndex, FB_LightPinkRed, FB_White
             SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
             ProcessCount += 1
@@ -1518,19 +1392,22 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
         
         For i As Integer = 0 To UBound(PID2)
             For j As Integer = 1 To UBound(PID1)
-                If PID2(i) = PID1(j) Then Continue For, For ' 如果找到了证明不是隐藏进程
+                If PID2(i).PID = PID1(j) Then Continue For, For ' 如果找到了证明不是隐藏进程
             Next
             
             dwParentPID = 0 : strEProcess = "" : dwParentPID = 0 : strParentPID = "" : strPath = "" : strName = "" : strSessionId = "" : strUserName = "" : strCommandLine = "" : strCompany = ""
             
-            dwPID = PID2(i)
-            If Not IsProcessAlive(dwPID) Then Continue For
-            Print "隐藏进程:" & dwPID
+            dwPID = PID2(i).PID
+            If (Not PID2(i).bExited) AndAlso (Not IsProcessAlive(dwPID)) Then Continue For
+            'Print "隐藏进程:" & dwPID
             If GetParentProcessId(dwPID, dwParentPID) Then strParentPID = WStr(dwParentPID)
-            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
+            If IsDriverLoaded Then
+                EProcessInfo = GetEProcess(dwPID)
+                strEProcess = "0x" & WHex(EProcessInfo.EProcess)
+            End If
             strPath = GetProcessPath(dwPID)
             If InStr(strPath, ":") = 0 Then
-                strName = ProcessPath(i + 1)
+                strName = "-"
             Else
                 strName = GetNameByPath(strPath)
                 strCompany = GetFileCompanyCached(strPath)
@@ -1541,12 +1418,19 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
-            SetItemColor lvwProcess, ItemIndex, FB_Red, FB_White
+            'Print PID2(i).PID & " " & PID2(i).bExited
+            If PID2(i).bExited Then
+                SetItemTextEx lvwProcess, ItemIndex, 3, "(Exited)" & strName
+                'SetItemColor lvwProcess, ItemIndex, FB_LightPinkRed, FB_White
+            Else
+                SetItemColor lvwProcess, ItemIndex, FB_Red, FB_White
+            End If
             SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
             ProcessCount += 1
         Next
     Else
+        Dim EProcessInfo As EProcessInfo
         For i As Integer = 0 To UBound(PID1) - 1
             Dim ForeColor As COLORREF = FB_Black
             Dim BackColor As COLORREF = FB_White
@@ -1555,7 +1439,10 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             
             dwPID = PID1(i + 1)
             If GetParentProcessId(PID1(i + 1), dwParentPID) Then strParentPID = WStr(dwParentPID)
-            If IsDriverLoaded Then strEProcess = "0x" & WHex(GetEProcess(dwPID))
+            If IsDriverLoaded Then
+                EProcessInfo = GetEProcess(dwPID)
+                strEProcess = "0x" & WHex(EProcessInfo.EProcess)
+            End If
             strPath = ProcessPath(i + 1)
             strPath1 = GetProcessPathCached(dwPID)
             If InStr(strPath, ":") = 0 Then

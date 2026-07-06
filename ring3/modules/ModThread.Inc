@@ -20,43 +20,51 @@ Type TEB
     TlsExpansionSlots As PVOID
 End Type
 Type PTEB As TEB Ptr
-    
-Private Enum THREADINFOCLASS
-    ThreadBasicInformation
-    ThreadTimes
-    ThreadPriority
-    ThreadBasePriority
-    ThreadAffinityMask
-    ThreadImpersonationToken
-    ThreadDescriptorTableEntry
-    ThreadEnableAlignmentFaultFixup
-    ThreadEventPair_Reusable
-    ThreadQuerySetWin32StartAddress
-    ThreadZeroTlsCell
-    ThreadPerformanceCount
-    ThreadAmILastThread
-    ThreadIdealProcessor
-    ThreadPriorityBoost
-    ThreadSetTlsArrayAddress                                                    ' Obsolete
-    ThreadIsIoPending
-    ThreadHideFromDebugger
-    ThreadBreakOnTermination
-    ThreadSwitchLegacyState
-    ThreadIsTerminated
-    ThreadLastSystemCall
-    ThreadIoPriority
-    ThreadCycleTime
-    ThreadPagePriority
-    ThreadActualBasePriority
-    ThreadTebInformation
-    ThreadCSwitchMon                                                            ' Obsolete
-    ThreadCSwitchPmu
-    ThreadWow64Context
-    ThreadGroupInformation
-    ThreadUmsInformation                                                        ' UMS
-    ThreadCounterProfiling
-    ThreadIdealProcessorEx
-    MaxThreadInfoClass
+
+Enum THREADINFOCLASS
+    ThreadBasicInformation          = 0
+    ThreadTimes                     = 1
+    ThreadPriority                  = 2
+    ThreadBasePriority              = 3
+    ThreadAffinityMask              = 4
+    ThreadImpersonationToken        = 5
+    ThreadDescriptorTableEntry      = 6
+    ThreadEnableAlignmentFaultFixup = 7
+    ThreadEventPair_Reusable        = 8
+    ThreadQuerySetWin32StartAddress = 9
+    ThreadZeroTlsCell               = 10
+    ThreadPerformanceCount          = 11
+    ThreadAmILastThread             = 12
+    ThreadIdealProcessor            = 13
+    ThreadPriorityBoost             = 14
+    ThreadSetTlsArrayAddress        = 15   ' Obsolete
+    ThreadIsIoPending               = 16
+    ThreadHideFromDebugger          = 17
+    ThreadBreakOnTermination        = 18
+    ThreadSwitchLegacyState         = 19
+    ThreadIsTerminated              = 20
+    ThreadLastSystemCall            = 21
+    ThreadIoPriority                = 22
+    ThreadCycleTime                 = 23
+    ThreadPagePriority              = 24
+    ThreadActualBasePriority        = 25
+    ThreadTebInformation            = 26
+    ThreadCSwitchMon                = 27   ' Obsolete
+    ThreadCSwitchPmu                = 28
+    ThreadWow64Context              = 29
+    ThreadGroupInformation          = 30
+    ThreadUmsInformation            = 31   ' UMS
+    ThreadCounterProfiling          = 32
+    ThreadIdealProcessorEx          = 33
+    ThreadCpuAccountingInformation  = 34
+    ThreadSuspendCount = 35
+    ThreadNameInformation = 38
+    ThreadSystemThreadInformation = 40
+    ThreadActualGroupAffinity       = 41
+    ThreadDynamicCodePolicyInfo     = 42
+    ThreadSubsystemInformation      = 45
+
+    MaxThreadInfoClass              = 51
 End Enum
 
 ' 线程状态枚举（Windows内核未公开，需准确匹配）
@@ -110,6 +118,61 @@ Type WORKER_THREAD_INFO Field = 8
     PoolType As Wstring * 8    ' 队列类型: ExPool/IoPool
     QueueAddress As PVOID ' 工作队列 EX_WORK_QUEUE 地址
     StartAddress As PVOID ' 线程入口地址
+End Type
+
+'===============================================================================
+' THREAD_SYSTEM_THREAD_INFORMATION (ThreadSystemThreadInformation = 40)
+' 大小: 80 字节
+'===============================================================================
+Type THREAD_SYSTEM_THREAD_INFORMATION
+    KernelTime      As ULONGLONG      ' +0x00
+    UserTime        As ULONGLONG      ' +0x08
+    CreateTime      As ULONGLONG      ' +0x10
+    WaitTime        As ULong          ' +0x18
+    Reserved1       As ULONG          ' +0x1C (WaitTime后的自然填充)
+    StartAddress    As ULONGLONG      ' +0x20
+    UniqueProcess   As ULONGLONG      ' +0x28
+    UniqueThread    As ULONGLONG      ' +0x30
+    Priority        As LONG           ' +0x38
+    BasePriority    As LONG           ' +0x3C
+    ContextSwitches As ULong          ' +0x40
+    ThreadState     As ULONG          ' +0x44  ← 修正到这里
+    WaitReason      As ULONG          ' +0x48
+End Type
+
+'===============================================================================
+' THREAD_NAME_INFORMATION (ThreadNameInformation = 38)
+' 这是一个自包含的 UNICODE_STRING，Buffer 指向结构体内部
+' 结构头 16 字节 + 变长字符串数据
+'===============================================================================
+Type THREAD_NAME_INFORMATION
+    Length          As UShort         ' +0x00: 字符串长度（字节，含终止符）
+    MaximumLength   As USHORT         ' +0x02: 最大长度
+    _Padding1       As ULONG          ' +0x04: 对齐填充（4字节）
+    Buffer          As WString Ptr    ' +0x08: 指向结构体内部的字符串缓冲区
+    ' 字符串数据紧跟在结构体之后，偏移 0x10 处
+    ' 实际使用时需要分配足够内存：SizeOf(THREAD_NAME_INFORMATION) + 字符串长度
+End Type
+
+Type ThreadInfo
+    TID              As DWORD
+    ThreadState      As StringW
+    WaitReason       As StringW
+    Priority         As LONG
+    BasePriority     As Long
+    StartAddress     As StringW
+    KernelTimeSec    As Double
+    UserTimeSec      As Double
+    CreateTimeStr    As StringW
+    ContextSwitches  As ULONG
+    ThreadName       As StringW
+    CycleTime        As ULONGLONG
+    IoPriority       As StringW
+    PagePriority     As ULONG
+    SuspendCount     As ULONG
+    Win32StartAddr   As StringW
+    IsHiddenFromDebugger As Boolean
+    BreakOnTermination   As Boolean
 End Type
 
 #define STILL_ALIVE 259
@@ -462,7 +525,7 @@ Private Function GetTeb(ByVal dwThreadId As DWORD) As Any Ptr
     End If
     Dim tbi As THREAD_BASIC_INFORMATION, ret As DWORD, st As NTSTATUS
     st = ZwQueryInformationThread(hThread, ThreadBasicInformation, @tbi, SizeOf(tbi), ret)
-    MyLog.PrintNtError "GetTeb", "ZwQueryInformationThread", st, "dwThreadId=" & dwThreadId
+    If Not NT_SUCCESS(st) Then MyLog.PrintNtError "GetTeb", "ZwQueryInformationThread", st, "dwThreadId=" & dwThreadId
     Return tbi.TebBaseAddress
 End Function
 
@@ -513,57 +576,58 @@ Function WaitReasonToString(ByVal reason As KWAIT_REASON) As String
     End Select
 End Function
 
-Function ThreadStateToString(ByVal threadInfo As SYSTEM_THREAD_INFORMATION Ptr) As StringW
+Function ThreadStateToString(ByVal dwThreadId As DWORD, ByVal ThreadState As Long, ByVal WaitReason As Long) As StringW
     Dim stateStr As StringW
     Dim suspendCount As ULONG = 0
     Dim threadHandle As HANDLE = NULL
-    Dim ntStatus As NTSTATUS
-    
+    Dim st As NTSTATUS
+    Print dwThreadId & " " & ThreadState & " " & WaitReason
     ' 第一步：转换基础状态
-    Select Case threadInfo->ThreadState
+    Select Case ThreadState
         Case StateInitialized: stateStr = "Initialized"
-        Case StateReady: stateStr = "Ready"
-        Case StateRunning: stateStr = "Running"
-        Case StateStandby: stateStr = "Standby"
+        Case StateReady:      stateStr = "Ready"
+        Case StateRunning:    stateStr = "Running"
+        Case StateStandby:    stateStr = "Standby"
         Case StateTerminated: stateStr = "Terminated"
         Case StateWait: 
-            stateStr = "Wait (" & WaitReasonToString(threadInfo->WaitReason) & ")"
+            stateStr = "Wait (" & WaitReasonToString(WaitReason) & ")"
         Case StateTransition: stateStr = "Transition"
-        Case Else: stateStr = "UnknownState(" & WStr(threadInfo->ThreadState) & ")"
+        Case Else: stateStr = "UnknownState(" & WStr(ThreadState) & ")"
     End Select
     
-    ' 第二步：处理挂起状态（获取挂起次数）
-    ' 仅当等待原因为Suspended/WrSuspended，或状态为Wait且关联挂起时处理
-    If (threadInfo->WaitReason = WaitReasonSuspended) Or (threadInfo->WaitReason = WaitReasonWrSuspended) Then
-        ' 打开线程句柄（需要THREAD_SUSPEND_RESUME权限）
+    ' 第二步：处理挂起状态
+    If (WaitReason = WaitReasonSuspended) Or (WaitReason = WaitReasonWrSuspended) Then
+        ' ████████████████████████████████████████████████
+        ' 关键改动：只需要 THREAD_QUERY_INFORMATION，不需要 SUSPEND_RESUME
+        ' ████████████████████████████████████████████████
         If IsDriverLoaded Then
-            threadHandle = SnowSword_OpenThread(Cast(DWORD, Cast(UInteger, threadInfo->ClientId.UniqueThread)))
-            If threadHandle <> NULL Then
-                MyLog.PrintLog LOG_ERROR, "ThreadStateToString",, "打开线程失败,dwThreadId=" & threadInfo->ClientID.UniqueThread
-                stateStr &= " [Suspended x?]"
-                Return stateStr
-            End If
+            threadHandle = SnowSword_OpenThread(dwThreadId)
         Else
-            threadHandle = OpenThread(THREAD_SUSPEND_RESUME, False, Cast(DWORD, Cast(UInteger, threadInfo->ClientId.UniqueThread)))
-            If threadHandle <> NULL Then
-                MyLog.PrintWin32Error "ThreadStateToString", "OpenThread", "dwThreadId=" & threadInfo->ClientID.UniqueThread
-                stateStr &= " [Suspended x?]"
-                Return stateStr
-            End If
+            threadHandle = OpenThread(THREAD_QUERY_INFORMATION, False, dwThreadId)
         End If
         
-        ' 调用ZwResumeThread获取挂起计数（此调用会减少挂起计数1）
-        ntStatus = ZwResumeThread(threadHandle, @suspendCount)
-        If NT_SUCCESS(ntStatus) Then ' NTSTATUS_SUCCESS = 0
-            ' 重新挂起线程，恢复原有挂起状态
-            ZwSuspendThread threadHandle, @suspendCount
-            ' 拼接挂起次数（注意：suspendCount是调用Resume前的计数）
-            stateStr &= " [Suspended x" & Str(suspendCount) & "]"
+        If threadHandle = NULL Then
+            MyLog.PrintWin32Error "ThreadStateToString", "OpenThread", "dwThreadId=" & dwThreadId
+            stateStr &= " [Suspended x?]"
+            Return stateStr
+        End If
+        
+        ' 零副作用查询挂起计数（不会恢复/挂起线程）
+        st = ZwQueryInformationThread(threadHandle, ThreadSuspendCount, @suspendCount, SizeOf(ULong), NULL)
+        
+        If NT_SUCCESS(st) Then
+            If suspendCount > 0 Then
+                stateStr &= " [Suspended x" & WStr(suspendCount) & "]"
+            Else
+                ' WaitReason 显示 Suspended 但实际计数为 0：
+                ' 线程已被恢复，SYSTEM_THREAD_INFORMATION 快照有延迟
+                stateStr &= " [Suspended x0/已恢复]"
+            End If
         Else
             stateStr &= " [Suspended x?]"
-            MyLog.PrintNtError "ThreadStateToString", "ZwResumeThread", ntStatus, "dwThreadId=" & threadInfo->ClientID.UniqueThread
+            MyLog.PrintNtError "ThreadStateToString", "NtQueryInformationThread", st, "dwThreadId=" & dwThreadId
         End If
-        ' 关闭线程句柄
+        
         CloseHandle threadHandle
     End If
     
@@ -615,40 +679,375 @@ Function NtPathToDosPathW(ByVal FullNtPath As LPWSTR, ByVal FullDosPath As LPWST
 End Function
 
 Private Function GetThreadState(ByVal dwThreadId As DWORD) As StringW
-    Dim hThread As HANDLE, SuspendCount As Long, lpExitCode As DWORD, ThreadState As StringW, st As NTSTATUS
+#define STATUS_BUFFER_TOO_SMALL Cast(NTSTATUS, &HC0000023)
+    Dim hThread As HANDLE
+    Dim sti As THREAD_SYSTEM_THREAD_INFORMATION
+    Dim st As NTSTATUS
+    Dim lpExitCode As DWORD
+    
     If dwThreadId = GetCurrentThreadId Then
         Function = "Running"
         Exit Function
     End If
+    
     If IsDriverLoaded Then
         hThread = SnowSword_OpenThread(dwThreadId)
     Else
-        hThread = OpenThread(THREAD_QUERY_INFORMATION Or THREAD_SUSPEND_RESUME, False, dwThreadId)
+        hThread = OpenThread(THREAD_QUERY_INFORMATION, False, dwThreadId)
     End If
-    If GetExitCodeThread(hThread, @lpExitCode) = 0 Then
+    
+    If hThread = NULL Then
+        MyLog.PrintWin32Error "GetThreadState", "OpenThread", "dwThreadId=" & dwThreadId
         Function = "Unknown"
+        Exit Function
+    End If
+    
+    ' 先判断是否已终止（Win32 API 最可靠）
+    If GetExitCodeThread(hThread, @lpExitCode) = 0 Then
+        CloseHandle hThread
+        Function = "Unknown"
+        Exit Function
+    End If
+    
+    If lpExitCode <> STILL_ALIVE Then
+        CloseHandle hThread
+        Function = "Terminated"
+        Exit Function
+    End If
+    
+    ' █████████████████████████████████████████████████████████████████████████
+    ' 改用 ThreadSystemThreadInformation (40) - 零副作用
+    ' █████████████████████████████████████████████████████████████████████████
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadSystemThreadInformation, _
+                                  @sti, _
+                                  SizeOf(THREAD_SYSTEM_THREAD_INFORMATION), _
+                                  NULL)
+    CloseHandle hThread
+    
+    If NT_SUCCESS(st) Then
+        Select Case sti.ThreadState
+        Case 2  ' Running
+            Function = "Running"
+        Case 5  ' Waiting
+            If sti.WaitReason = 5 Or sti.WaitReason = 12 Then  ' Suspended / WrSuspended
+                Function = "Suspended(Reason:" & WaitReasonToString(sti.WaitReason) & ")"
+            Else
+                Function = "Waiting(" & WaitReasonToString(sti.WaitReason) & ")"
+            End If
+        Case 4:  Function = "Terminated"
+        Case 1:  Function = "Ready"
+        Case 3:  Function = "Standby"
+        Case 6:  Function = "Transition"
+        Case 7:  Function = "DeferredReady"
+        Case Else
+            Function = ThreadStateToString(dwThreadId, sti.ThreadState, sti.WaitReason)
+        End Select
+    Else
+        MyLog.PrintNtError "GetThreadState", "NtQueryInformationThread", st, "dwThreadId=" & dwThreadId
+        Function = "Unknown"
+    End If
+End Function
+
+Private Function GetThreadName(ByVal dwThreadId As DWORD) As WString Ptr
+    Dim hThread As HANDLE
+    Dim st As NTSTATUS
+    Dim returnedLen As ULONG
+    
+    Function = NULL  ' 默认返回空
+    
+    ' --- 打开线程 ---
+    If IsDriverLoaded Then
+        hThread = SnowSword_OpenThread(dwThreadId)
+    Else
+        hThread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, False, dwThreadId)
+    End If
+    
+    If hThread = NULL Then
+        MyLog.PrintWin32Error "GetThreadName", "OpenThread", "dwThreadId=" & dwThreadId
+        Exit Function
+    End If
+    
+    ' --- 第一次查询：获取所需大小 ---
+    ' 分配一个最小缓冲区（只有结构头，无字符串空间）
+    Dim minBufSize As ULONG = SizeOf(THREAD_NAME_INFORMATION)
+    Dim pMinBuf As Byte Ptr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, minBufSize)
+    If pMinBuf = NULL Then
         CloseHandle hThread
         Exit Function
     End If
-    If lpExitCode = STILL_ALIVE Then
-        st = ZwResumeThread(hThread, @SuspendCount)
-        If NT_SUCCESS(st) Then ' 我真是逆天,如果用这个函数查询自身线程状态,那把自己线程挂起了谁来恢复[捂脸],应该先ZwResumeThread
-            If SuspendCount = 0 Then
-                CloseHandle hThread
-                Function = "Running"
-                Exit Function
-            Else
-                Function = "Suspended(Count:" & SuspendCount & ")"'(Waiting?)
-            End If
-        Else
-            MyLog.PrintNtError "GetThreadState", "ZwResumeThread", st, "dwThreadId=" & dwThreadId
-            Function = "Unknown"
+    
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadNameInformation, _
+                                  pMinBuf, _
+                                  minBufSize, _
+                                  returnedLen)
+    
+    ' 如果返回成功但长度为0，说明线程没有名字
+    If NT_SUCCESS(st) Then
+        Dim nLen As UShort = *Cast(UShort Ptr, pMinBuf)
+        If nLen = 0 Then
+            ' 线程没有设置名字，这是正常情况
+            HeapFree GetProcessHeap(), 0, pMinBuf
+            CloseHandle hThread
+            Exit Function
         End If
-    Else
-        Function = "Terminated"
     End If
-    ZwSuspendThread hThread, 0 '666, 之前挂起线程之后忘记恢复了,我说怎么看一下explorer的线程列表桌面就挂了[捂脸]
+    
+    HeapFree GetProcessHeap(), 0, pMinBuf
+    
+    ' 如果返回 STATUS_BUFFER_TOO_SMALL 或其他错误，但 returnedLen 告诉我们需要多大
+    ' 注意：returnedLen 是内核报告的总大小（结构头 + 字符串）
+    If returnedLen < minBufSize Then returnedLen = minBufSize
+    
+    ' --- 第二次查询：使用正确大小的缓冲区 ---
+    Dim bufSize As ULONG = returnedLen
+    ' 额外多分配一些空间，防止边界问题
+    If bufSize < minBufSize + 520 Then bufSize = minBufSize + 520
+    
+    Dim pBuffer As Byte Ptr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bufSize)
+    If pBuffer = NULL Then
+        CloseHandle hThread
+        Exit Function
+    End If
+    
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadNameInformation, _
+                                  pBuffer, _
+                                  bufSize, _
+                                  returnedLen)
+    
+    If NT_SUCCESS(st) Then
+        ' 解析返回的结构体
+        Dim nLen As UShort = *Cast(UShort Ptr, pBuffer)           ' +0x00 Length
+        Dim maxLen As UShort = *Cast(UShort Ptr, pBuffer + 2)    ' +0x02 MaximumLength
+        ' +0x04 是 Padding (ULONG)
+        
+        Dim pName As WString Ptr = *Cast(WString Ptr Ptr, pBuffer + 8)   ' +0x08 Buffer (64位)
+        
+        ' 安全检查：确保 Buffer 指向结构体内部（内核应该这样设置）
+        ' 如果内核没有名字，pName 可能为 NULL 或指向空字符串
+        If nLen > 0 And pName <> NULL Then
+            ' 计算字符数（Length 是字节数，除以2得到宽字符数）
+            ' 减去终止符（如果 Length 包含它）
+            Dim nameChars As Integer = nLen \ 2
+            If nameChars > 0 Then
+                ' 确保不越界
+                If nameChars > 260 Then nameChars = 260
+                
+                ' 分配返回字符串
+                Dim retStr As WString Ptr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (nameChars + 1) * SizeOf(WString))
+                If retStr <> NULL Then
+                    ' 使用 lstrcpynW 安全复制
+                    lstrcpynW(retStr, pName, nameChars + 1)
+                    Function = retStr
+                End If
+            End If
+        End If
+    ElseIf st = STATUS_BUFFER_TOO_SMALL Then
+        ' 缓冲区仍然不够，这不应该发生，但记录错误
+        MyLog.PrintNtError "GetThreadName", "NtQueryInformationThread(2nd)", st, _
+            "dwThreadId=" & dwThreadId & ", returnedLen=" & returnedLen & ", bufSize=" & bufSize
+    Else
+        MyLog.PrintNtError "GetThreadName", "NtQueryInformationThread", st, "dwThreadId=" & dwThreadId
+    End If
+    
+    HeapFree GetProcessHeap(), 0, pBuffer
     CloseHandle hThread
+End Function
+
+Function GetThreadOtherInfo(ByVal TID As DWORD, txtInfo As Class_TextBox) As ThreadInfo
+    Dim info As ThreadInfo
+    info.TID = TID
+    Dim outStr As String = ""
+    
+    Dim hThread As HANDLE = NULL
+    If IsDriverLoaded Then
+        hThread = SnowSword_OpenThread(TID)
+    Else
+        hThread = OpenThread(THREAD_QUERY_INFORMATION, 0, TID)
+    End If
+    
+    If hThread = NULL Then
+        txtInfo.Text = "(failed)"
+        MyLog.PrintLog LOG_ERROR, "打开线程失败,TID=" & TID
+        Return info
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 1. ThreadSystemThreadInformation (40) - 综合线程信息
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim sti As THREAD_SYSTEM_THREAD_INFORMATION
+    Dim st As NTSTATUS
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadSystemThreadInformation, _
+                                  @sti, _
+                                  SizeOf(THREAD_SYSTEM_THREAD_INFORMATION), _
+                                  NULL)
+    
+    If NT_SUCCESS(st) Then
+        info.KernelTimeSec   = sti.KernelTime / 10000000.0
+        info.UserTimeSec     = sti.UserTime   / 10000000.0
+        info.Priority        = sti.Priority
+        info.BasePriority    = sti.BasePriority
+        info.ContextSwitches = sti.ContextSwitches
+        info.ThreadState     = ThreadStateToString(TID, sti.ThreadState, sti.WaitReason)
+        'info.WaitReason      = WaitReasonToString(sti.WaitReason)
+        info.StartAddress    = Hex(Cast(ULONG_PTR, sti.StartAddress))
+        
+        Dim ftCreate As FILETIME
+        ftCreate.dwLowDateTime  = Cast(DWORD, sti.CreateTime And &HFFFFFFFF)
+        ftCreate.dwHighDateTime = Cast(DWORD, sti.CreateTime Shr 32)
+        info.CreateTimeStr = FileTimeToLocalStr(ftCreate)
+        
+        outStr += "═══════════════════════════════════════" & vbCrLf
+        outStr += "  线程基本信息 (TID=" & TID & ")" & vbCrLf
+        outStr += "═══════════════════════════════════════" & vbCrLf
+        outStr += "线程状态     : " & info.ThreadState & vbCrLf
+        'outStr += "等待原因     : " & info.WaitReason & vbCrLf
+        outStr += "当前优先级   : " & info.Priority & vbCrLf
+        outStr += "基础优先级   : " & info.BasePriority & vbCrLf
+        outStr += "起始地址     : 0x" & info.StartAddress & vbCrLf
+        outStr += "创建时间     : " & info.CreateTimeStr & vbCrLf
+        outStr += "上下文切换   : " & info.ContextSwitches & " 次" & vbCrLf
+        'outStr += "周期计数     : " & info.CycleTime & vbCrLf
+        outStr += "CPU 内核态   : " & Format(info.KernelTimeSec, "0.000") & " s" & vbCrLf
+        outStr += "CPU 用户态   : " & Format(info.UserTimeSec, "0.000")   & " s" & vbCrLf
+    Else
+        outStr += "线程基本信息 : (查询失败)" & vbCrLf
+        MyLog.PrintNtError "GetThreadOtherInfo", "NtQueryInformationThread(40)", st, "TID=" & TID
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 2. ThreadNameInformation (38) - 线程名称
+    ' ═══════════════════════════════════════════════════════════════════════
+    info.ThreadName = *GetThreadName(TID)
+    outStr += "线程名称     : " & info.ThreadName & vbCrLf
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 3. ThreadTimes (1) - 交叉验证
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim threadTimeArray(3) As LONGLONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadTimes, _
+                                  @threadTimeArray(0), _
+                                  32, _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        outStr += "───────────────────────────────────────" & vbCrLf
+        outStr += "  [ThreadTimes 验证]" & vbCrLf
+        outStr += "  创建时间    : " & FileTimeToLocalStr(*Cast(FILETIME Ptr, @threadTimeArray(0))) & vbCrLf
+        outStr += "  退出时间    : " & IIf(threadTimeArray(1) = 0, "(未退出)", FileTimeToLocalStr(*Cast(FILETIME Ptr, @threadTimeArray(1)))) & vbCrLf
+        outStr += "  内核时间    : " & Format(threadTimeArray(2) / 10000000.0, "0.000") & " s" & vbCrLf
+        outStr += "  用户时间    : " & Format(threadTimeArray(3) / 10000000.0, "0.000") & " s" & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 4. ThreadQuerySetWin32StartAddress (9)
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim win32StartAddr As PVOID
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadQuerySetWin32StartAddress, _
+                                  @win32StartAddr, _
+                                  SizeOf(PVOID), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        info.Win32StartAddr = Hex(Cast(ULONG_PTR, win32StartAddr))
+        outStr += "Win32起始地址: 0x" & info.Win32StartAddr & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 5. ThreadSuspendCount (35)
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim suspendCount As ULONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadSuspendCount, _
+                                  @suspendCount, _
+                                  SizeOf(ULONG), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        info.SuspendCount = suspendCount
+        outStr += "挂起计数     : " & suspendCount & IIf(suspendCount > 0, " (含Frozen)", "") & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 6. ThreadIoPriority (22) / ThreadPagePriority (24)
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim ioPriority As ULONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadIoPriority, _
+                                  @ioPriority, _
+                                  SizeOf(ULONG), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        Select Case ioPriority
+        Case 0: info.IoPriority = "Very Low"
+        Case 1: info.IoPriority = "Low"
+        Case 2: info.IoPriority = "Normal"
+        Case 3: info.IoPriority = "High"
+        Case 4: info.IoPriority = "Critical"
+        Case Else: info.IoPriority = "Unknown(" & ioPriority & ")"
+        End Select
+        outStr += "I/O 优先级   : " & info.IoPriority & vbCrLf
+    End If
+    
+    Dim pagePriority As ULONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadPagePriority, _
+                                  @pagePriority, _
+                                  SizeOf(ULONG), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        info.PagePriority = pagePriority
+        outStr += "页面优先级   : " & pagePriority & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 7. ThreadCycleTime (23) - 精确周期时间
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim cycleTime As ULONGLONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadCycleTime, _
+                                  @cycleTime, _
+                                  SizeOf(ULONGLONG), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        outStr += "精确周期计数 : " & cycleTime & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 8. ThreadHideFromDebugger (17)
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim hideFromDebugger As BOOLEAN
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadHideFromDebugger, _
+                                  @hideFromDebugger, _
+                                  SizeOf(BOOLEAN), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        info.IsHiddenFromDebugger = hideFromDebugger
+        outStr += "从调试器隐藏   : " & IIf(hideFromDebugger, "是 ⚠", "否") & vbCrLf
+    End If
+    
+    ' ═══════════════════════════════════════════════════════════════════════
+    ' 9. ThreadBreakOnTermination (14)
+    ' ═══════════════════════════════════════════════════════════════════════
+    Dim breakOnTerm As ULONG
+    st = ZwQueryInformationThread(hThread, _
+                                  ThreadBreakOnTermination, _
+                                  @breakOnTerm, _
+                                  SizeOf(ULONG), _
+                                  NULL)
+    If NT_SUCCESS(st) Then
+        info.BreakOnTermination = breakOnTerm
+        outStr += "系统关键线程   : " & IIf(breakOnTerm, "是 ⚠", "否") & vbCrLf
+    End If
+    
+    outStr += "═══════════════════════════════════════" & vbCrLf
+    
+    txtInfo.Text = outStr
+    CloseHandle(hThread)
+    Return info
 End Function
 
 Function GetThreadStartAddr(ByVal dwThreadId As DWORD) As PVOID
@@ -823,7 +1222,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
                 GetModuleByAddress ProcessId, threadInfo->StartAddress, @strModulePath
                 'Print "线程ID: " & threadInfo->ClientID.UniqueThread & ", 切换次数: " & threadInfo->ContextSwitchCount & ", 起始地址:0x" & WHex(threadInfo->StartAddress)
                 Dim ItemIndex As Long = AddItemColListEx(lvwThread, 8,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
-                WStr(ThreadStateToString(threadInfo)), WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), _
+                WStr(ThreadStateToString(Cast(DWORD, Cast(UInteger, ThreadInfo->ClientID.UniqueThread)), ThreadInfo->ThreadState, ThreadInfo->WaitReason)), WStr(strEThread), WStr("0x" & WHex(ThreadInfo->StartAddress)), _
                 WStr("0x" & WHex(GetTeb(Cast(DWORD, Cast(UInteger, threadInfo->ClientID.UniqueThread))))), WStr(strModulePath), WStr(GetFileCompany(strModulePath)))
                 VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, strModulePath
                 threadInfo += 1
@@ -923,7 +1322,8 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
                 Dim strModulePath As WString * MAX_PATH
                 GetModuleByAddress 4, threadInfo->StartAddress, @strModulePath
                 'Print "线程ID: " & threadInfo->ClientID.UniqueThread & ", 切换次数: " & threadInfo->ContextSwitchCount & ", 起始地址:0x" & WHex(threadInfo->StartAddress)
-                AddItemColListEx lvwKernelThread, 6,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), WStr(ThreadStateToString(threadInfo)), _
+                AddItemColListEx lvwKernelThread, 6,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
+                WStr(ThreadStateToString(Cast(DWORD, Cast(UInteger, ThreadInfo->ClientID.UniqueThread)), ThreadInfo->ThreadState, ThreadInfo->WaitReason)), _
                 WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), WStr(strModulePath)
                 threadInfo += 1
                 FF_DoEvents
@@ -1050,165 +1450,10 @@ Public Sub GetWorkItemThreadList(lvwWorkItemThread As Class_ListView)
     ReDim WorkItemThreadArray(lpRet / SizeOf(WORKER_THREAD_INFO) - 1) As WORKER_THREAD_INFO
     IoControl hDrv, IOCTL_EnumWorkItemThread, NULL, 0, @WorkItemThreadArray(0), (UBound(WorkItemThreadArray) + 1) * SizeOf(WORKER_THREAD_INFO), @lpRet
     For i As Integer = 0 To UBound(WorkItemThreadArray)
-        AddItemColListEx lvwWorkItemThread, 6,,, WStr(WorkItemThreadArray(i).ThreadId), "0x" & WHex(WorkItemThreadArray(i).pEThread), WStr(WorkItemThreadArray(i).Priority), WStr(""), "0x" & WHex(WorkItemThreadArray(i).StartAddress), WStr(GetDriverPathByAddr(Cast(ULONG64, WorkItemThreadArray(i).StartAddress)))
+        AddItemColListEx lvwWorkItemThread, 6,,, WStr(WorkItemThreadArray(i).ThreadId), "0x" & WHex(WorkItemThreadArray(i).pEThread), WStr(WorkItemThreadArray(i).Priority), WStr(GetThreadState(WorkItemThreadArray(i).ThreadId)), "0x" & WHex(WorkItemThreadArray(i).StartAddress), WStr(GetDriverPathByAddr(Cast(ULONG64, WorkItemThreadArray(i).StartAddress)))
     Next
     CommitListViewView lvwWorkItemThread
 End Sub
-
-/'Declare Function SymInitialize Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal szSearchPath As String, ByVal bInvadeProcess As Long) As Long
-Declare Function SymGetOptions Lib "dbghelp.dll" () As Long
-Declare Function SymSetOptions Lib "dbghelp.dll" (ByVal SymOptions As Long) As Long
-Declare Function SymEnumerateSymbols Lib "dbghelp.dll" (ByVal hProcess As Long, ByVal BaseAddress As Long, ByVal EnumSymbolsCallback As Long, ByVal UserContext As Long) As Long
-Declare Function StackWalk Lib "dbghelp.dll" (ByVal MachineType As Long, ByVal hProcess As Long, ByVal hThread As Long, ByRef STACKFRAME As STACKFRAME, ByVal CONTEXT As Long, ByVal ReadMemoryRoutine As Long, ByVal FunctionTableAccessRoutine As Long, ByVal GetModuleBaseRoutine As Long, ByVal TranslateAddress As Long) As Long
-Declare Function SymCleanup Lib "dbghelp.dll" (ByVal hProcess As Long) As Long'/
-
-/'Private Type STACKFRAME
-    AddrPC As Long
-    AddrReturn As Long
-    AddrFrame As Long
-    AddrStack As Long
-    FuncTableEntry As Long
-    Params(3) As Long
-    Far As Long
-    Virtual As Long
-    Reserved(3) As Long
-    AddrBpAsAddrPC As Long
-End Type '/
-
-/'Private Type CONTEXT64
-    ContextFlags As Long
-    dr0 As Long
-    dr1 As Long
-    dr2 As Long
-    dr3 As Long
-    dr6 As Long
-    dr7 As Long
-    regFloat(0 To 79) As Byte
-    regSegGs As Long
-    regSegFs As Long
-    regSegEs As Long
-    regSegDs As Long
-    regEdi As Long
-    regEsi As Long
-    regEbx As Long
-    regEdx As Long
-    regEcx As Long
-    regEax As Long
-    regEbp As Long
-    regEip As Long
-    regSegCs As Long
-    regFlag As Long
-    regEsp As Long
-    regSegSs As Long
-End Type'/
-
-/'Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD)
-    Const MAX_STACK_FRAMES = 20
-    Dim hProcess As HANDLE = NULL
-    Dim hThread  As HANDLE = NULL
-    Dim ctx As CONTEXT
-    Dim sf As STACKFRAME64
-    Dim i As Integer
-    Dim prevSuspend As DWORD = 0
-    Dim bNeedResume As Boolean = False
-    
-    ' ---------- 1. 打开进程句柄 ----------
-    If IsDriverLoaded Then
-        hProcess = SnowSword_OpenProcess(PID)
-    Else
-        ' StackWalk64 必须读取目标进程内存，VM_READ 不可少，不能降级到 LIMITED
-        hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, PID)
-    End If
-    
-    If hProcess = NULL Then
-        MyLog.PrintLog LOG_ERROR, "GetCallStack", "OpenProcess failed, PID=" & PID
-        Exit Sub
-    End If
-    
-    ' ---------- 2. 打开线程句柄 ----------
-    If IsDriverLoaded Then
-        ' 若驱动未导出 SnowSword_OpenThread，需自行在驱动层实现
-        ' 对 PP/PPL 进程，R3 的 OpenThread 同样会失败，必须走驱动
-        hThread = SnowSword_OpenThread(TID)
-    Else
-        hThread = OpenThread(THREAD_GET_CONTEXT Or THREAD_SUSPEND_RESUME Or THREAD_QUERY_INFORMATION, 0, TID)
-    End If
-    
-    If hThread = NULL Then
-        MyLog.PrintLog LOG_ERROR, "GetCallStack", "OpenThread failed, TID=" & TID
-        GoTo cleanup
-    End If
-    
-    ' ---------- 3. 挂起线程 ----------
-    prevSuspend = SuspendThread(hThread)
-    If prevSuspend = Cast(DWORD, -1) Then
-        MyLog.PrintWin32Error "GetCallStack", "SuspendThread"
-        GoTo cleanup
-    End If
-    bNeedResume = True
-    
-    ' ---------- 4. 获取上下文 ----------
-    ctx.ContextFlags = CONTEXT_FULL
-    If GetThreadContext(hThread, @ctx) = 0 Then
-        MyLog.PrintWin32Error "GetCallStack", "GetThreadContext"
-        GoTo cleanup
-    End If
-    
-    ' ---------- 5. 初始化 STACKFRAME64 ----------
-    sf.AddrPC.Offset    = ctx.Rip
-    sf.AddrPC.Mode      = AddrModeFlat
-    sf.AddrFrame.Offset = ctx.Rbp
-    sf.AddrFrame.Mode   = AddrModeFlat
-    sf.AddrStack.Offset = ctx.Rsp
-    sf.AddrStack.Mode   = AddrModeFlat
-    
-    ' ---------- 6. 栈回溯 ----------
-    For i = 1 To MAX_STACK_FRAMES
-        If StackWalk64(IMAGE_FILE_MACHINE_AMD64, _
-                       hProcess, _
-                       hThread, _
-                       @sf, _
-                       @ctx, _
-                       CPtr(PREAD_PROCESS_MEMORY_ROUTINE64, @ReadProcessMemory), _
-                       @SymFunctionTableAccess64, _
-                       @SymGetModuleBase64, _
-                       0) = 0 Then Exit For
-        
-        If sf.AddrPC.Offset = 0 Then Exit For
-        MyLog.PrintLog LOG_INFO,,, "栈帧 " & i & ": 0x" & Hex(sf.AddrPC.Offset)
-    Next
-
-cleanup:
-    If bNeedResume Then ResumeThread(hThread)
-    If hThread  <> NULL Then CloseHandle(hThread)
-    If hProcess <> NULL Then CloseHandle(hProcess)
-End Sub '/
-
-/'Function GetDescriptionByAddr(ByVal hProcess As HANDLE_INFO, ByVal Addr As UInteger) As StringW
-    Dim ModuleCount As Long
-    Dim ModuleInformation() As MODULE_INFORMATION
-    If IsDriverLoaded Then
-        hProcess = SnowSword_OpenProcess(ProcessId)
-    Else
-        hProcess = OpenProcess(PROCESS_VM_READ Or PROCESS_QUERY_INFORMATION, False, ProcessId)
-    End If
-    If hProcess = NULL Then Return 0
-    
-    ModuleCount = EnumModuleListEx(hProcess, ModuleInformation())
-    If ModuleCount = 0 Then Return "(failed)"
-    
-    For i As Integer = 0 To ModuleCount - 1
-        If ModuleInformation(i).BaseAddr = NULL Then Continue For
-        
-        Dim img As RemotePeImageEx
-        img.hProc = hProcess
-        img.baseAddr = ModuleInformation(i).BaseAddr
-        img.arch = IIf(IsProcessWow64_Ex(hProcess), PE_ARCH_X86, PE_ARCH_X64)
-        Dim strAddr As StringW = GetProxyDescription(img, sf.AddrPC.Offset)
-        
-        FF_DoEvents
-    Next
-End Function'/
 
 Const CONTEXT_SIZE_X64 = 1232
 

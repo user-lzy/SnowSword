@@ -432,14 +432,14 @@ End Function
 Private Function CloseProcessHandle(ByVal ProcessId As DWORD, ByVal HandleValue As HANDLE) As Boolean
     Dim hProcess As HANDLE = OpenProcess(PROCESS_DUP_HANDLE, False, ProcessId)
     If (hProcess <= 0) Then
-        Print "OpenProcess Failed!" & " " & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "CloseProcessHandle", "OpenProcess", "ProcessId=" & ProcessId & " Handle=0x" & WHex(HandleValue)
         Return False
     End If
     Dim hTargetHandle As HANDLE, st As WINBOOL
     '调用 DuplicateHandle 复制句柄
     st = DuplicateHandle(hProcess, HandleValue, GetCurrentProcess, @hTargetHandle, 0, False, DUPLICATE_SAME_ACCESS Or DUPLICATE_CLOSE_SOURCE)
     If (hTargetHandle = 0) Then
-        Print "DuplicateHandle Failed!" & " " & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "CloseProcessHandle", "DuplicateHandle", "ProcessId=" & ProcessId & " Handle=0x" & WHex(HandleValue)
         CloseHandle hProcess
         Return False
     Else
@@ -969,6 +969,7 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
         If pHandleEntry->Handles(i).UniqueProcessId <> ProcessId Then Continue For
         Dim MyHandleInfo As HANDLE_INFO
         Dim DosPath As WString * 260
+        strHandleName = ""
         If IsDriverLoaded Then
             MyHandleInfo.dwHandle = Cast(HANDLE, Cast(UInteger, pHandleEntry->Handles(i).HandleValue))
             MyHandleInfo.dwProcessId = Cast(HANDLE, Cast(Integer, pHandleEntry->Handles(i).UniqueProcessId))
@@ -986,9 +987,12 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
         Else
             If Not GetHandleType(ProcessId, Cast(HANDLE, Cast(ULONG_PTR, pHandleEntry->Handles(i).HandleValue)), @MyHandleInfo.strType) Then MyLog.PrintLog LOG_WARN, "GetHandleList", "GetHandleType", "HANDLE=0x" & WHex(pHandleEntry->Handles(i).HandleValue)
         End If
+        'Print "Value:0x" & WHex(pHandleEntry->Handles(i).HandleValue) & " Type:" & MyHandleInfo.strType & " Name:" & MyHandleInfo.strName
         Dim ProcessName As StringW, ProcessPath As StringW
         Dim dwProcessId As DWORD, dwThreadId As DWORD
+        'strHandleName = ""
         If MyHandleInfo.strType = "Process" Then
+            'Print "Value:0x" & WHex(pHandleEntry->Handles(i).HandleValue) & " Type:" & MyHandleInfo.strType
             If GetProcessIdOfProcessHandle(pHandleEntry->Handles(i).UniqueProcessId, Cast(HANDLE, CLngInt(pHandleEntry->Handles(i).HandleValue)), dwProcessId) Then
                 ProcessPath = GetProcessPath(dwProcessId)
                 If InStrW(ProcessPath, ":") <= 0 Then
@@ -999,6 +1003,7 @@ Sub GetHandleList(ByVal ProcessId As DWORD, lvwHandle As Class_ListView)
                 strHandleName = ProcessName & "(" & dwProcessId & ")"
             End If
         ElseIf MyHandleInfo.strType = "Thread" Then
+            'Print "Value:0x" & WHex(pHandleEntry->Handles(i).HandleValue) & " Type:" & MyHandleInfo.strType
             If GetThreadIdOfThreadHandle(pHandleEntry->Handles(i).UniqueProcessId, Cast(HANDLE, CLngInt(pHandleEntry->Handles(i).HandleValue)), dwThreadId, dwProcessId) Then
                 ProcessPath = GetProcessPath(dwProcessId)
                 If InStrW(ProcessPath, ":") <= 0 Then

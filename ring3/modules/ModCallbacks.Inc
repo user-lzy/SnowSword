@@ -231,6 +231,7 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
                 SetItemTextEx lvwCallbacks, NewIndex, 3, "0x" & WHex(CallbackArray(i).TheContext)
                 SetItemTextEx lvwCallbacks, NewIndex, 4, "无"
             End If
+            SetItemIconEx lvwCallbacks, NewIndex, ICON_SYSTEM_COMPONENT
             VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", NewIndex, DriverPath
         End If
         FF_DoEvents
@@ -258,16 +259,18 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
             ' SystemTimers(i).uFlag
             SetItemTextEx lvwKernelTimer, NewIndex, 4, WStr(SystemTimers(i).uType)'IIf(SystemTimers(i).st, "已启动", "已停止")
             SetItemTextEx lvwKernelTimer, NewIndex, 5, GetDriverPathByAddr(SystemTimers(i).Func) 'Callbacks(i).DriverName'/
-            AddItemColListEx lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
-            WStr(""), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func))
+            Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
+            WStr(""), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func)))
+            SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
         End If
     Next
     memset @SystemTimers(0), 0, 64 * SizeOf(SYSTEM_TIMER)
     IoControl hDrv, IOCTL_EnumDpcTimers, NULL, 0, @SystemTimers(0), 64 * SizeOf(SYSTEM_TIMER)
     For i As Integer = 0 To 63
         If (SystemTimers(i).strType <> "") Then
-            AddItemColListEx lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
-            WStr(SystemTimers(i).Period), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func))
+            Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
+            WStr(SystemTimers(i).Period), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func)))
+            SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
         End If
     Next
     CommitListViewView lvwKernelTimer
@@ -325,13 +328,14 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
     InitListViewData lvwCallouts
 
     For i As Integer = 0 To count - 1
-        AddItemColListEx lvwCallouts, 6,,, _
+        Dim ItemIndex As Long = AddItemColListEx(lvwCallouts, 6,,, _
             WStr(GuidToString(pInfo[i].CalloutGuid)), _
             WStr(pInfo[i].CalloutId), _
             "0x" & WHex(pInfo[i].ClassifyFn), _
             "0x" & WHex(pInfo[i].NotifyFn), _
             "0x" & WHex(pInfo[i].FlowDeleteFn), _
-            pInfo[i].wName
+            pInfo[i].wName)
+        SetItemIconEx lvwCallouts, ItemIndex, ICON_SYSTEM_COMPONENT
         FF_DoEvents
     Next
 
@@ -379,7 +383,8 @@ Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
     InitListViewData lvwFilters   ' 清空列表
 
     For i As Integer = 0 To count - 1
-        AddItemColListEx lvwFilters, 5,,, WStr(pInfo[i].FilterId), WStr(pInfo[i].CalloutId), pInfo[i].wName, WStr(pInfo[i].ActionType), WStr(GuidToString(pInfo[i].CalloutGuid))
+        Dim ItemIndex As Long = AddItemColListEx(lvwFilters, 5,,, WStr(pInfo[i].FilterId), WStr(pInfo[i].CalloutId), pInfo[i].wName, WStr(pInfo[i].ActionType), WStr(GuidToString(pInfo[i].CalloutGuid)))
+        SetItemIconEx lvwFilters, ItemIndex, ICON_SYSTEM_COMPONENT
         FF_DoEvents
     Next
 

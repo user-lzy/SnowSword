@@ -81,6 +81,9 @@ Const TRUST_E_BAD_SIGNATURE As Long = &H800B010F ' 签名无效/哈希不匹配
 Const TRUST_E_EXPIRED As Long = &H800B0101       ' 证书过期/未生效
 Const TRUST_E_CERT_SUSPENDED As Long = &H800B010C ' 证书被吊销
 
+' 系统驱动/内核模块 → 用齿轮/系统组件图标
+Const ICON_SYSTEM_COMPONENT = 188   ' DLL/系统文件图标
+
 ' ===============================
 ' 全局变量
 ' ===============================
@@ -90,24 +93,102 @@ Dim Shared TaskEvent As HANDLE
 Dim Shared Threads() As HANDLE
 Const ThreadCount As Integer = 4
 
-Public Sub GetDriveList(treFolder As Class_TreeView)
-    treFolder.DeleteAllItems
-    Dim i As Integer, CurrentNode As HTREEITEM, DiskName As StringW
-    If g_CuiMode Then SafeStdOut("驱动器名称" & vbCrlfW)
-    For i = Asc("A") To Asc("Z")
-        If (GetDriveType(Chr(i) & ":\")) <> 1 Then
-            DiskName = GetDiskLabel(Chr(i) & ":")
-            If (DiskName = "") Then
-                DiskName = "本地磁盘" & "(" & Chr(i) & ":" & ")"
-            Else
-                DiskName = DiskName & "(" & Chr(i) & ":" & ")"
-            End If
-            If g_CuiMode Then
-                SafeStdOut(DiskName & vbCrlfW)
-            Else
-                treFolder.AddItem NULL, DiskName
+' 问题:EnumerateAllDisks() 会清空 g_DiskList 并重新枚举。
+' 如果 CurrentNode 指向的是旧的磁盘节点，但 EnumerateAllDisks() 后磁盘索引可能变化（比如拔插U盘）。这会导致 targetDiskIndex 指向错误的磁盘。
+' 如果要解决，需要更复杂的磁盘标识机制（如用磁盘签名或GUID）
+Public Sub GetDriveList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, ByVal IsPhysicalAnalyze As Boolean)
+    
+    ' ======================================================================
+    ' 步骤 1：解析目标磁盘索引
+    ' ======================================================================
+    Dim targetDiskIndex As Integer = -1
+    Dim bIsDiskNode As Boolean = False
+    
+    If CurrentNode <> NULL Then
+        Dim nodeText As StringW = treFolder.Text(CurrentNode)
+        Dim posDisk As Integer = InStrW(nodeText, "磁盘")
+        If posDisk > 0 Then
+            Dim j As Integer = posDisk + 2
+            Dim diskNumStr As StringW = ""
+            While j <= LenW(nodeText) And IsNumeric(MidW(nodeText, j, 1))
+                diskNumStr &= MidW(nodeText, j, 1)
+                j += 1
+            Wend
+            If diskNumStr <> "" Then
+                targetDiskIndex = ValInt(diskNumStr)
+                bIsDiskNode = True
             End If
         End If
+        
+        ' 非磁盘节点不处理
+        If Not bIsDiskNode Then Return
+        
+        ' 删除该节点的子节点
+        DeleteChildItem treFolder, CurrentNode
+    Else
+        ' 根级别，清空全部
+        treFolder.DeleteAllItems
+    End If
+    
+    ' ======================================================================
+    ' 步骤 2：枚举磁盘数据
+    ' ======================================================================
+    EnumerateAllDisks()
+    
+    If g_CuiMode Then SafeStdOut("驱动器名称" & vbCrlfW)
+    
+    ' ======================================================================
+    ' 步骤 3：生成树节点
+    ' ======================================================================
+    Dim d As Integer
+    For d = 0 To g_DiskCount - 1
+        With g_DiskList(d)
+            ' 过滤：只处理目标磁盘
+            If targetDiskIndex >= 0 And .diskIndex <> targetDiskIndex Then Continue For
+            
+            ' 构建磁盘节点文本
+            Dim diskNodeText As String
+            If Not IsPhysicalAnalyze Then
+                diskNodeText = "磁盘" & .diskIndex
+            Else
+                diskNodeText = "磁盘" & .diskIndex & IIf(.isGPT, " [GPT]", " [MBR]")
+            End If
+            
+            ' 获取或创建磁盘节点句柄
+            Dim hDiskNode As HTREEITEM
+            If CurrentNode <> NULL Then
+                hDiskNode = CurrentNode
+            Else
+                If Not g_CuiMode Then
+                    hDiskNode = treFolder.AddItem(NULL, diskNodeText)
+                Else
+                    SafeStdOut(diskNodeText & vbCrlfW)
+                    hDiskNode = NULL
+                End If
+            End If
+            
+            ' 添加分区子节点
+            Dim p As Integer
+            For p = 0 To .partitionCount - 1
+                ' 兼容模式跳过无盘符分区
+                If Not IsPhysicalAnalyze And .partitions(p).drvLetter = "" Then Continue For
+                
+                Dim partText As String
+                If .partitions(p).drvLetter <> "" Then
+                    Dim volLabel As StringW = GetDiskLabel(.partitions(p).drvLetter & ":")
+                    If volLabel = "" Then volLabel = "本地磁盘"
+                    partText = volLabel & "(" & .partitions(p).drvLetter & ":)"
+                Else
+                    partText = .partitions(p).partitionName
+                End If
+                
+                If g_CuiMode Then
+                    SafeStdOut("  " & partText & vbCrlfW)
+                ElseIf hDiskNode <> NULL Then
+                    treFolder.AddItem(hDiskNode, partText)
+                End If
+            Next
+        End With
     Next
 End Sub
 
@@ -125,52 +206,6 @@ Private Function GetNode(ByVal szPath As LPWSTR,treFolder As Class_TreeView) As 
     Return NULL
 End Function
 
-Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
-    Dim CurrentNode As HTREEITEM = Node
-    Dim FullPath As StringW = ""  ' 初始化空路径，核心修复
-    Dim ParentNode As HTREEITEM
-    
-    Do
-        ParentNode = treFolder.GetParent(CurrentNode)
-        Dim NodeText As StringW = treFolder.Text(CurrentNode)
-        
-        ' ============== 核心修复：只有根节点(磁盘)才提取括号内的盘符 ==============
-        If ParentNode = NULL Then
-            ' 根节点(磁盘)：提取 (E:) 这种格式里的盘符
-            Dim pos1 As Integer = InStrRevW(NodeText, "(")
-            Dim pos2 As Integer = InStrRevW(NodeText, ")")
-            If pos1 > 0 And pos2 > 0 And pos2 > pos1 Then
-                NodeText = MidW(NodeText, pos1 + 1, pos2 - pos1 - 1)
-            End If
-        End If
-        
-        ' 拼接路径
-        If FullPath = "" Then
-            FullPath = NodeText
-        Else
-            FullPath = NodeText & "\" & FullPath
-        End If
-        
-        CurrentNode = ParentNode
-    Loop While CurrentNode <> NULL
-    
-    ' 最终赋值（自动补尾\）
-    FilePath = FullPath & "\"
-End Sub
-
-'Private Function PrintFileSize(ByVal FileSize As QWORD) As LPWSTR
-'    Dim rSize As Double,printSize As LPWSTR
-'    rSize = round(FileSize/1024)
-'    If rSize = 0 Then
-'        *printSize = WStr(FileSize) & "B"
-'    Else
-'        rSize = round(rSize)
-'        If rSize = 0 Then
-'            '*printSize = WStr(r)
-'        End If
-'    End If
-'End Function
-
 Public Function ReplaceW(ByVal MainString As LPWSTR,ByVal SearchString As LPWSTR,ByVal ReplaceString As LPWSTR) As LPWSTR
     Dim MidString As LPWSTR,i As Integer,SearchLen As Integer,MainLen As Integer,RetString As LPWSTR
     MainLen = Len(*MainString)
@@ -186,12 +221,11 @@ End Function
 
 Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lvwFile As Class_ListView, ByVal IsEnumFolder As Boolean, IsEnumFile As Boolean = True, ByVal IsPhysicalAnalyze As Boolean)
     Dim szPath As StringW = "", IsBeAccess As Boolean = True
-    
     If IsEnumFolder Then DeleteChildItem treFolder, CurrentNode
     InitListViewData lvwFile
     
     GetPathByNodeW CurrentNode, treFolder, szPath
-    'szPath = szPath & "*.*"
+    
     ' 方法一
     Dim fData() As WIN32_FIND_DATAW, i As ULong
     ReDim fData(10) As WIN32_FIND_DATAW
@@ -227,6 +261,7 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
                 Dim ItemIndex As Long = AddItemColListEx(lvwFile, 3,,, WStr(fData(j).cFileName), WStr(""), WStr(fData(j).nFileSizeHigh * (2 ^ 32) + fData(j).nFileSizeLow))
                 SetItemIconEx lvwFile, ItemIndex, GetFileIconIndex(fData(j).cFileName, False)
             End If
+            'FF_DoEvents
         Next
     Else
         'InitListViewData lvwFile
@@ -235,8 +270,6 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
         listCount = GetDirList(szPath, fileInfo())
         If listCount < 0 Then Exit Sub
         For j As Integer = 0 To listCount - 1
-            'Print "cFileName:" & fileInfo(j).cFileName & " dwFileSizeLow:" & fileInfo(j).dwFileSizeLow & " dwFileAttributes:" & fileInfo(j).dwFileAttributes
-            'Print "bDirectory:" & fileInfo(j).bDirectory
             If fileInfo(j).bDirectory Then
                 If IsEnumFolder Then treFolder.InsertItem CurrentNode,TVI_LAST,fileInfo(j).cFileName
             ElseIf IsEnumFile Then
@@ -256,8 +289,6 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
                 Dim ForeColor As COLORREF, BackColor As COLORREF, pos1 As Integer, szPath1 As StringW
                 pos1 = InStrW(szPath, ":")
                 szPath1 = RightW(szPath, LenW(szPath) - pos1)
-                'Print "szPath:" & szPath & " szPath1:" & szPath1
-                ' OrElse (LeftW(szPath1, 9) = "\$Extend\")
                 'Print "fileInfo(j).cFileName:" & fileInfo(j).cFileName & " fileInfo(j).bSuspicious:" & fileInfo(j).bSuspicious
                 If (fileInfo(j).mftRecordNumber >= 0 AndAlso fileInfo(j).mftRecordNumber <= 16) Then ' 是元文件(如$MFT,$Extend\$ObjId)
                     SetItemTextEx lvwFile, ItemIndex, 1, "Metafile"
@@ -412,7 +443,312 @@ Public Sub GetFileList_CLI(ByVal szPath As StringW, ByVal IsPhysicalAnalyze As B
     End If
 End Sub
 
-Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
+Sub GetPathByNodeW(Node As HTREEITEM, treFolder As Class_TreeView, ByRef FilePath As StringW)
+    Dim CurrentNode As HTREEITEM = Node
+    Dim ParentNode As HTREEITEM
+    
+    ' ========== 第一步：从叶子向上遍历，收集所有节点文本 ==========
+    Dim nodeTexts() As StringW
+    Dim nodeCount As Integer = 0
+    
+    Do
+        ParentNode = treFolder.GetParent(CurrentNode)
+        Dim NodeText As StringW = treFolder.Text(CurrentNode)
+        
+        ReDim Preserve nodeTexts(0 To nodeCount)
+        nodeTexts(nodeCount) = NodeText
+        nodeCount += 1
+        
+        CurrentNode = ParentNode
+    Loop While CurrentNode <> NULL
+    
+    ' nodeTexts(0) = 叶子节点
+    ' nodeTexts(nodeCount-1) = 根节点
+    
+    ' ========== 第二步：分析根节点，确定是否为物理模式 ==========
+    Dim rootText As StringW = nodeTexts(nodeCount - 1)
+    Dim bIsPhysicalMode As Boolean = False
+    Dim diskNumStr As StringW = ""
+    
+    ' 检查根节点是否是磁盘节点（包含 "磁盘" 字样）
+    Dim posDisk As Integer = InStrW(rootText, "磁盘")
+    If posDisk > 0 Then
+        bIsPhysicalMode = True
+        ' 提取磁盘号
+        Dim j As Integer = posDisk + 2
+        While j <= LenW(rootText)
+            Dim ch As StringW = MidW(rootText, j, 1)
+            If IsNumeric(ch) Then
+                diskNumStr &= ch
+            Else
+                Exit While
+            End If
+            j += 1
+        Wend
+    End If
+    
+    ' ========== 第三步：分析分区节点 ==========
+    Dim partitionHasDriveLetter As Boolean = False
+    Dim partitionDriveLetter As StringW = ""
+    Dim partitionPhysicalIndex As StringW = ""
+    
+    ' 分区节点索引：物理模式是 nodeCount-2，非物理模式是 nodeCount-1（根节点自身）
+    Dim partIdx As Integer
+    If bIsPhysicalMode Then
+        partIdx = nodeCount - 2
+    Else
+        partIdx = nodeCount - 1
+    End If
+    
+    If partIdx >= 0 Then
+        Dim partText As StringW = nodeTexts(partIdx)
+        Dim pos1 As Integer = InStrRevW(partText, "(")
+        Dim pos2 As Integer = InStrRevW(partText, ")")
+        
+        If pos1 > 0 And pos2 > pos1 Then
+            Dim inner As StringW = MidW(partText, pos1 + 1, pos2 - pos1 - 1)
+            If RightW(inner, 1) = ":" Then
+                partitionHasDriveLetter = True
+                partitionDriveLetter = inner
+            ElseIf IsNumeric(inner) Then
+                partitionPhysicalIndex = "Partition" & (ValInt(inner) + 1)
+            End If
+        End If
+    End If
+    
+    ' ========== 第四步：构建路径 ==========
+    Dim FullPath As StringW = ""
+    
+    If partitionHasDriveLetter Then
+        ' ========== 有盘符路径 ==========
+        FullPath = partitionDriveLetter
+        
+        ' 子目录起始索引：物理模式从 nodeCount-3，非物理模式从 nodeCount-2
+        Dim startIdx As Integer
+        If bIsPhysicalMode Then
+            startIdx = nodeCount - 3
+        Else
+            startIdx = nodeCount - 2
+        End If
+        
+        For i As Integer = startIdx To 0 Step -1
+            If nodeTexts(i) <> "" Then
+                FullPath = FullPath & "\" & nodeTexts(i)
+            End If
+        Next
+        
+    ElseIf bIsPhysicalMode And diskNumStr <> "" And partitionPhysicalIndex <> "" Then
+        ' ========== 无盘符物理路径 ==========
+        FullPath = "PhysicalDrive" & diskNumStr
+        FullPath = FullPath & "\" & partitionPhysicalIndex
+        
+        For i As Integer = nodeCount - 3 To 0 Step -1
+            If nodeTexts(i) <> "" Then
+                FullPath = FullPath & "\" & nodeTexts(i)
+            End If
+        Next
+        
+    ElseIf bIsPhysicalMode And diskNumStr <> "" Then
+        ' 只有磁盘根节点
+        FullPath = "PhysicalDrive" & diskNumStr
+        
+    Else
+        ' 异常情况，兜底
+        For i As Integer = nodeCount - 1 To 0 Step -1
+            If FullPath = "" Then
+                FullPath = nodeTexts(i)
+            Else
+                FullPath = FullPath & "\" & nodeTexts(i)
+            End If
+        Next
+    End If
+    
+    FilePath = FullPath & "\"
+End Sub
+
+' ============================================================================
+' 根据路径获取节点（支持有盘符和无盘符分区）
+' ============================================================================
+Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
+    ' 规范化路径
+    Dim sNormalizedPath As StringW = sPath
+    sNormalizedPath = YF_ReplaceW(sNormalizedPath, "/", "\")
+    If RightW(sNormalizedPath, 1) = "\" Then
+        sNormalizedPath = LeftW(sNormalizedPath, LenW(sNormalizedPath) - 1)
+    End If
+    
+    ' 分割路径
+    Dim sParts() As StringW
+    Dim iNumParts As Integer
+    iNumParts = vbSplitW(sNormalizedPath, "\", sParts())
+    
+    If iNumParts < 1 Then Return NULL
+    
+    ' ==================================================================
+    ' 第一步：判断路径类型
+    ' ==================================================================
+    Dim bIsPhysicalPath As Boolean = False
+    Dim sTargetDisk As StringW = ""
+    Dim sTargetPartition As StringW = ""
+    
+    If LeftW(sParts(0), 14) = "PhysicalDrive" Then
+        ' 无盘符物理路径: PhysicalDrive0\Partition1\...
+        bIsPhysicalPath = True
+        sTargetDisk = MidW(sParts(0), 15)
+        If iNumParts >= 2 Then sTargetPartition = sParts(1)
+    ElseIf RightW(sParts(0), 1) = ":" Then
+        ' 有盘符路径: C:\Windows\... 或 C:
+        bIsPhysicalPath = False
+        sTargetDisk = sParts(0)
+    Else
+        Return NULL
+    End If
+    
+    ' ==================================================================
+    ' 第二步：匹配根节点（磁盘或分区）
+    ' ==================================================================
+    Dim hCurrentNode As HTREEITEM = treFolder.GetRoot()
+    Dim hRootNode As HTREEITEM = NULL
+    Dim hPartitionNode As HTREEITEM = NULL
+    Dim sNodeText As StringW
+    
+    While hCurrentNode <> NULL
+        sNodeText = treFolder.Text(hCurrentNode)
+        
+        If bIsPhysicalPath Then
+            ' ========== 物理模式：匹配磁盘根节点 "磁盘0 [GPT]" ==========
+            Dim posDisk As Integer = InStrW(sNodeText, "磁盘")
+            If posDisk > 0 Then
+                Dim j As Integer = posDisk + 2
+                Dim diskNum As StringW = ""
+                While j <= LenW(sNodeText)
+                    Dim ch As StringW = MidW(sNodeText, j, 1)
+                    If IsNumeric(ch) Then
+                        diskNum &= ch
+                    Else
+                        Exit While
+                    End If
+                    j += 1
+                Wend
+                If diskNum = sTargetDisk Then
+                    hRootNode = hCurrentNode
+                    Exit While
+                End If
+            End If
+        Else
+            ' ========== 非物理模式：根节点本身就是分区，匹配盘符 ==========
+            Dim pos1 As Integer = InStrRevW(sNodeText, "(")
+            Dim pos2 As Integer = InStrRevW(sNodeText, ")")
+            If pos1 > 0 And pos2 > pos1 Then
+                Dim sDriveInNode As StringW = MidW(sNodeText, pos1 + 1, pos2 - pos1 - 1)
+                If UCaseW(sDriveInNode) = UCaseW(sTargetDisk) Then
+                    ' 非物理模式下根节点就是分区节点
+                    hRootNode = hCurrentNode
+                    hPartitionNode = hCurrentNode
+                    Exit While
+                End If
+            End If
+        End If
+        
+        hCurrentNode = treFolder.GetNextSiblin(hCurrentNode)
+    Wend
+    
+    If hRootNode = NULL Then Return NULL
+    
+    ' ==================================================================
+    ' 第三步：物理模式下需要额外匹配分区节点
+    ' ==================================================================
+    If bIsPhysicalPath Then
+        hPartitionNode = NULL
+        hCurrentNode = treFolder.GetChild(hRootNode)
+        
+        While hCurrentNode <> NULL
+            sNodeText = treFolder.Text(hCurrentNode)
+            
+            ' 无盘符：匹配 Partition1 → 找节点中包含 (0) 的
+            If LeftW(sTargetPartition, 9) = "Partition" Then
+                Dim targetPartIdx As Integer = ValInt(MidW(sTargetPartition, 10)) - 1
+                Dim pos1 As Integer = InStrRevW(sNodeText, "(")
+                Dim pos2 As Integer = InStrRevW(sNodeText, ")")
+                If pos1 > 0 And pos2 > pos1 Then
+                    Dim partIdxStr As StringW = MidW(sNodeText, pos1 + 1, pos2 - pos1 - 1)
+                    If IsNumeric(partIdxStr) And ValInt(partIdxStr) = targetPartIdx Then
+                        hPartitionNode = hCurrentNode
+                        Exit While
+                    End If
+                End If
+            End If
+            
+            hCurrentNode = treFolder.GetNextSiblin(hCurrentNode)
+        Wend
+        
+        If hPartitionNode = NULL Then Return NULL
+        
+        ' 只有两级（PhysicalDrive0\Partition1），返回分区节点
+        If iNumParts = 2 Then Return hPartitionNode
+    Else
+        ' 非物理模式下只有一级（C:），直接返回分区节点
+        If iNumParts = 1 Then Return hPartitionNode
+    End If
+    
+    ' ==================================================================
+    ' 第四步：逐级匹配子目录
+    ' ==================================================================
+    hCurrentNode = hPartitionNode
+    
+    ' 确定子目录起始索引
+    Dim startIdx As Integer
+    If bIsPhysicalPath Then
+        startIdx = 2  ' PhysicalDrive0\Partition1\子目录1\...
+    Else
+        startIdx = 1  ' C:\子目录1\...（有盘符时第二部分就是子目录）
+    End If
+    
+    ' 先展开分区节点
+    GetFileList hCurrentNode, treFolder, lvwFile, True, False, _
+        GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+    treFolder.ExpandEx hCurrentNode, TVE_EXPAND
+    
+    Dim i As Integer
+    Dim hChildNode As HTREEITEM
+    Dim bFound As Boolean
+    
+    For i = startIdx To iNumParts - 1
+        If sParts(i) = "" Then Continue For
+        
+        bFound = False
+        hChildNode = treFolder.GetChild(hCurrentNode)
+        
+        While hChildNode <> NULL
+            sNodeText = treFolder.Text(hChildNode)
+            
+            If UCaseW(sNodeText) = UCaseW(sParts(i)) Then
+                bFound = True
+                hCurrentNode = hChildNode
+                
+                If i < iNumParts - 1 Then
+                    If Not treFolder.Expand(hCurrentNode) Then
+                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, _
+                            GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+                        treFolder.ExpandEx hCurrentNode, TVE_EXPAND
+                    End If
+                End If
+                Exit While
+            End If
+            
+            hChildNode = treFolder.GetNextSiblin(hChildNode)
+        Wend
+        
+        If Not bFound Then
+            Print "Not found: " & sParts(i)
+            Return NULL
+        End If
+    Next
+    
+    Return hCurrentNode
+End Function
+
+/'Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
     ' 规范化路径：替换斜杠、去除末尾分隔符
     Dim sNormalizedPath As StringW = sPath
     If RightW(sNormalizedPath, 1) = "\" Then
@@ -444,7 +780,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
             Dim sDriveLetter As StringW = MidW(sNodeText, pos1 + 1, pos2 - pos1 - 1)
             
             ' 比较提取的驱动器号与路径的第一部分
-            If UCase(sDriveLetter) = UCase(sParts(0)) Then
+            If UCaseW(sDriveLetter) = UCaseW(sParts(0)) Then
                 hRootNode = hCurrentNode
                 'Print sDriveLetter
                 If iNumParts > 1 Then
@@ -493,7 +829,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
             'Print "Comparing: " & sNodeText & " with " & sParts(i)
             
             ' 比较节点文本与当前路径部分（子目录节点通常没有卷标，直接比较）
-            If UCase(sNodeText) = UCase(sParts(i)) Then
+            If UCaseW(sNodeText) = UCaseW(sParts(i)) Then
                 bFound = True
                 hCurrentNode = hChildNode
                 
@@ -522,7 +858,7 @@ Public Function GetNodeByFilePathW(sPath As StringW, treFolder As Class_TreeView
     Next
     
     Return hCurrentNode
-End Function
+End Function'/
 
 Function MyDeleteFile(ByVal lpFilePath As LPCWSTR) As NTSTATUS
     Dim ObjectAttributes As OBJECT_ATTRIBUTES, unicodeFilePath As UNICODE_STRING, st As NTSTATUS
@@ -553,6 +889,36 @@ Function ForceDeleteFile(ByVal lpFilePath As LPCWSTR) As Boolean
     End If
     Deallocate strFile
     Return True
+End Function
+
+Function LocateFilePath(ByVal lpFilePath As StringW) As Boolean
+    If Not FileExists(Str(lpFilePath)) Then Return False
+    Dim pos1 As Integer = InStrRevW(lpFilePath, "\")
+    Dim FileName As StringW = UCaseW(RightW(lpFilePath, LenW(lpFilePath) - pos1))
+    Dim FolderPath As StringW = UCaseW(LeftW(lpFilePath, pos1 - 1))
+    'Print "FolderPath:" & FolderPath & " FileName:" & FileName
+    If InStrW(lpFilePath, "PhysicalDrive") = 1 Then
+        Print "无盘符"
+        SetMenuCheckState FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, True
+    End If
+    SwitchToModule "文件"
+    Dim FolderNode As HTREEITEM = GetNodeByFolderPathW(FolderPath, FrmMain.TreeView, FrmMain.ListView1)
+    'SendMessage TreeView.hWnd, TVM_SELECTITEM, TVGN_CARET, Cast(lParam, FolderNode) ' 选中这项
+    'Print "FolderNode:" & FolderNode
+    GetFileList FolderNode, FrmMain.TreeView, FrmMain.ListView1, False, True, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+    'FF_DoEvents
+    For i As Integer = 0 To FrmMain.ListView1.ItemCount - 1
+        If UCaseW(FrmMain.ListView1.GetItemText(i, 0)) = FileName Then
+            FrmMain.ListView1.SelectedItem = i
+            ListView_EnsureVisible(FrmMain.ListView1.hWnd, i, False)
+            'Print "找到"
+            SetMenuCheckState FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, False
+            Return True
+        End If
+    Next
+    
+    SetMenuCheckState FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, False
+    Return False
 End Function
 
 Function LocateFilePathByExplorer(ByVal lpFilePath As LPCWSTR) As Boolean
@@ -626,317 +992,11 @@ Function GetVerifyErrorString(ByVal errorCode As Long) As String
     End Select
 End Function
 
-'Function VerifyFileByCatalog(ByVal pwszFilePath As LPCWSTR) As BOOL
-'    Dim hCatAdmin As Any Ptr = NULL
-'    Dim hCatInfo As Any Ptr = NULL
-'    Dim hFile As HANDLE = INVALID_HANDLE_VALUE
-'    Dim fVerified As BOOL = FALSE
-'    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE}) 
-'    
-'    Dim rgbHash(0 To 99) As Byte ' 预留100字节的哈希缓冲区
-'    Dim cbHash As DWORD = SizeOf(Byte) * 100
-'    
-'    Dim catalogInfo As CATALOG_INFO
-'    Dim pszMemberTag As WString Ptr = NULL
-'    
-'    ' 1. 获取目录管理员上下文
-'    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = False Then
-'        Print "CryptCATAdminAcquireContext failed: " & WinErrorMsg(GetLastError) & GetLastError
-'        Return False
-'    End If
-'    
-'    ' 2. 打开文件并计算哈希
-'    hFile = CreateFileW(pwszFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-'    If hFile = INVALID_HANDLE_VALUE Then
-'        Print "CreateFile failed: " & WinErrorMsg(GetLastError) & GetLastError
-'        Goto cleanup
-'    End If
-'    
-'    If CryptCATAdminCalcHashFromFileHandle(hFile, @cbHash, @rgbHash(0), 0) = False Then
-'        Print "CryptCATAdminCalcHashFromFileHandle failed: " & WinErrorMsg(GetLastError) & GetLastError
-'        Goto cleanup
-'    End If
-'    
-'    pszMemberTag = malloc(cbHash * 2 + 1)
-'    For dw As DWORD = 0 To cbHash - 1
-'        wsprintfW(@pszMemberTag[dw * 2], StrPtrW("%02X"), rgbHash(dw))
-'    Next
-'    
-'    CloseHandle(hFile)
-'    hFile = INVALID_HANDLE_VALUE
-'    
-'    ' 3. 根据哈希查找目录
-'    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @rgbHash(0), cbHash, 0, NULL)
-'    If hCatInfo = NULL Then
-'        Print "CryptCATAdminEnumCatalogFromHash failed. No catalog found for the file." & WinErrorMsg(GetLastError) & GetLastError
-'        Goto cleanup
-'    End If
-'    
-'    ' 4. 获取目录文件信息
-'    'memset @catalogInfo, 0, SizeOf(CATALOG_INFO)
-'    catalogInfo.cbStruct = SizeOf(catalogInfo)
-'    /'Print "WINTRUST_CATALOG_INFO size: " & SizeOf(WINTRUST_CATALOG_INFO)
-'    Print "CATALOG_INFO size: " & SizeOf(CATALOG_INFO)
-'    Print "cbHash: " & cbHash'/
-'    If CryptCATCatalogInfoFromContext(hCatInfo, @catalogInfo, 0) Then
-'        Print catalogInfo.wszCatalogFile
-'        ' 准备WINTRUST_CATALOG_INFO结构
-'        Dim wti As WINTRUST_CATALOG_INFO
-'        'memset @wti, 0, SizeOf(WINTRUST_CATALOG_INFO)
-'        wti.cbStruct = SizeOf(wti)
-'        'wti.dwCatalogVersion = 0 ' 使用默认值
-'        
-'        wti.pcwszMemberTag = pszMemberTag
-'        wti.pcwszMemberFilePath = pwszFilePath
-'        wti.pcwszCatalogFilePath = @catalogInfo.wszCatalogFile
-'        wti.pbCalculatedFileHash = @rgbHash(0)
-'        wti.cbCalculatedFileHash = cbHash
-'        'wti.hMemberFile = 0 ' INVALID_HANDLE_VALUE
-'        
-'        ' 准备WINTRUST_DATA结构
-'        Dim wtd As WINTRUST_DATA
-'        'memset @wtd, 0, SizeOf(WINTRUST_DATA)
-'        wtd.cbStruct = SizeOf(wtd)
-'        wtd.dwUIChoice = WTD_UI_NONE
-'        wtd.fdwRevocationChecks = WTD_REVOKE_NONE
-'        wtd.dwUnionChoice = WTD_CHOICE_CATALOG
-'        wtd.pCatalog = @wti
-'        wtd.dwStateAction = WTD_STATEACTION_IGNORE ' WTD_STATEACTION_VERIFY
-'        'wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-'        wtd.dwProvFlags = WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-'        
-'        ' 5. 调用WinVerifyTrust验证目录签名
-'        Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
-'        fVerified = (Status = ERROR_SUCCESS)
-'        Print wtd.fdwRevocationChecks & " " & wtd.dwStateAction & " " & wtd.dwProvFlags
-'        If Status = ERROR_SUCCESS Then Print "有效!" Else Print "WinVerifyTrust失败:" & Hex(Status)
-'        
-'        ' 关闭验证状态
-'        wtd.dwStateAction = WTD_STATEACTION_CLOSE
-'        WinVerifyTrust(NULL, @wvtGUID, @wtd)
-'    Else
-'        Print "CryptCATCatalogInfoFromContext failed: " & WinErrorMsg(GetLastError) & GetLastError
-'    End If
-'    
-'cleanup:
-'    ' 6. 清理资源
-'    If hCatInfo Then
-'        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
-'    End If
-'    If hCatAdmin Then
-'        CryptCATAdminReleaseContext(hCatAdmin, 0)
-'    End If
-'    If hFile <> INVALID_HANDLE_VALUE Then
-'        CloseHandle(hFile)
-'    End If
-'    If pszMemberTag <> NULL Then
-'        free pszMemberTag
-'    End If
-'    
-'    Return fVerified
-'End Function
-'
-'Function CheckFileTrust(ByVal lpFileName As LPCWSTR) As Integer
-'    ' 初始化返回值（默认失败）
-'    Dim bRet As Integer = FALSE
-'    
-'    ' 初始化所有结构体和句柄
-'    Dim wd As WINTRUST_DATA = Any
-'    Dim wfi As WINTRUST_FILE_INFO = Any
-'    Dim wci As WINTRUST_CATALOG_INFO = Any
-'    Dim ci As CATALOG_INFO = Any
-'    
-'    Dim hCatAdmin As Any Ptr = NULL
-'    Dim hFile As Any Ptr = NULL
-'    Dim hCatInfo As Any Ptr = NULL
-'    Dim pszMemberTag As WString Ptr = NULL ' 哈希的十六进制字符串（动态分配）
-'    
-'    Dim wvtGUID As GUID = Type < GUID > (&H00AAC56B, &HCD44, &H11D0, {&H8C, &HC2, &H00, &HC0, &H4F, &HC2, &H95, &HEE})
-'    
-'    Dim dwCnt As ULong = 100
-'    Dim byHash(0 To 99) As Byte ' 哈希缓冲区（100字节）
-'    
-'    Dim hr As Long
-'    
-'    ' ==========================================================================
-'    ' 步骤1：获取CAT目录管理员上下文
-'    ' ==========================================================================
-'    If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = 0 Then
-'        Print "CryptCATAdminAcquireContext failed:" & WinErrorMsg(GetLastError) & GetLastError
-'        Goto Cleanup ' 获取失败，直接清理资源
-'    End If
-'    
-'    ' ==========================================================================
-'    ' 步骤2：打开文件（只读模式，共享读）
-'    ' ==========================================================================
-'    hFile = CreateFileW(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
-'    If hFile = INVALID_HANDLE_VALUE Then
-'        Print "CreateFileW failed:" & WinErrorMsg(GetLastError) & GetLastError
-'        Goto Cleanup ' 打开失败，清理资源
-'    End If
-'    
-'    ' ==========================================================================
-'    ' 步骤3：计算文件哈希（缓冲区大小100字节，与原C++一致）
-'    ' ==========================================================================
-'    ' 调用API计算哈希（忽略返回值，原C++未判断此处失败）
-'    CryptCATAdminCalcHashFromFileHandle(hFile, @dwCnt, @byHash(0), 0)
-'    CloseHandle(hFile) ' 计算完成后关闭文件句柄
-'    hFile = INVALID_HANDLE_VALUE ' 标记句柄已关闭
-'    
-'    ' ==========================================================================
-'    ' 步骤4：将哈希字节数组转换为十六进制宽字符串（pszMemberTag）
-'    ' ==========================================================================
-'    If dwCnt > 0 Then
-'        ' 分配字符串内存：每个字节占2个字符 + 1个终止符（\0）
-'        pszMemberTag = malloc((dwCnt * 2 + 1) * SizeOf(Wstring * 1))
-'        If pszMemberTag = NULL Then
-'            Print "Allocate failed"
-'            Goto Cleanup ' 内存分配失败，清理资源
-'        End If
-'        
-'        ' 逐个字节转换为十六进制（%02X格式）
-'        For dw As ULong = 0 To dwCnt - 1
-'            wsprintfW(@pszMemberTag[dw * 2], !"\%02X", byHash(dw))
-'        Next
-'        pszMemberTag[dwCnt * 2] = 0 ' 手动添加字符串终止符
-'        Print *pszMemberTag
-'    End If
-'    
-'    ' ==========================================================================
-'    ' 步骤5：根据哈希查找CAT目录
-'    ' ==========================================================================
-'    hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @byHash(0), dwCnt, 0, NULL)
-'    
-'    ' ==========================================================================
-'    ' 步骤6：初始化验证参数（分两种情况：有CAT目录 / 无CAT目录）
-'    ' ==========================================================================
-'    If hCatInfo = NULL Then
-'        ' 情况1：无CAT目录 → 直接验证文件（WTD_CHOICE_FILE）
-'        With wfi
-'            .cbStruct = SizeOf(WINTRUST_FILE_INFO) ' 必须初始化结构体大小
-'            .pcwszFilePath = lpFileName            ' 待验证文件路径
-'            .hFile = NULL                          ' 不使用文件句柄
-'            .pgKnownSubject = NULL                 ' 无已知主题
-'        End With
-'        
-'        With wd
-'            .cbStruct = SizeOf(WINTRUST_DATA)      ' 必须初始化结构体大小
-'            .dwUnionChoice = WTD_CHOICE_FILE       ' 验证类型：文件
-'            .pFile = @wfi                          ' 关联文件验证结构体
-'            .dwUIChoice = WTD_UI_NONE              ' 不显示UI
-'            .fdwRevocationChecks = WTD_REVOKE_NONE ' 不检查吊销
-'            .dwStateAction = WTD_STATEACTION_VERIFY
-'            .dwProvFlags = WTD_SAFER_FLAG          ' 启用SAFER模式
-'            .hWVTStateData = NULL                  ' 无状态数据
-'            .pwszURLReference = NULL               ' 无URL参考
-'        End With
-'    Else
-'        ' 情况2：有CAT目录 → 通过CAT验证（WTD_CHOICE_CATALOG）
-'        ' 先获取CAT目录信息
-'        ci.cbStruct = SizeOf(CATALOG_INFO) ' 必须初始化结构体大小
-'        'Dim wszCatalogPath As WString * MAX_PATH ' 栈上分配260个宽字符的缓冲区
-'        'ci.wszCatalogFile = Wstring(MAX_PATH, 0)      ' 将缓冲区地址赋值给结构体指针
-'        If CryptCATCatalogInfoFromContext(hCatInfo, @ci, 0) Then
-'            Print ci.wszCatalogFile
-'            With wci
-'                .cbStruct = SizeOf(WINTRUST_CATALOG_INFO) ' 必须初始化结构体大小
-'                .pcwszCatalogFilePath = StrPtr(ci.wszCatalogFile) ' CAT文件路径
-'                .pcwszMemberFilePath = lpFileName         ' 待验证文件路径
-'                .pcwszMemberTag = pszMemberTag            ' 哈希十六进制字符串
-'                .hMemberFile = INVALID_HANDLE_VALUE                       ' 不使用文件句柄
-'            End With
-'            
-'            With wd
-'                .cbStruct = SizeOf(WINTRUST_DATA)       ' 必须初始化结构体大小
-'                .dwUnionChoice = WTD_CHOICE_CATALOG     ' 验证类型：目录
-'                .pCatalog = @wci                         ' 关联目录验证结构体
-'                .dwUIChoice = WTD_UI_NONE               ' 不显示UI
-'                .fdwRevocationChecks = WTD_REVOKE_NONE ' 原C++此处参数值（保持一致）
-'                .dwStateAction = WTD_STATEACTION_VERIFY
-'                .dwProvFlags = 0 ' WTD_REVOCATION_CHECK_NONE Or WTD_USE_DEFAULT_OSVER_CHECK
-'                .hWVTStateData = NULL                   ' 无状态数据
-'                .pwszURLReference = NULL                ' 无URL参考
-'            End With
-'        Else
-'            Print "CryptCATCatalogInfoFromContext failed: " & GetLastError
-'            Goto Cleanup '获取CAT信息失败，直接退出，避免后续崩溃
-'        End If
-'    End If
-'    ' ==========================================================================
-'    ' 步骤7：执行信任验证
-'    ' ==========================================================================
-'    For i As Integer = 0 To 1
-'        hr = WinVerifyTrust(NULL, @wvtGUID, @wd)
-'        If hr = S_OK Then Exit For
-'        Print lpFileName & " WinVerifyTrust failed:" & WinErrorMsg(GetLastError) & GetLastError
-'        bRet = (hr = S_OK) ' 验证成功的条件：HRESULT == S_OK
-'    Next
-'
-'' ==========================================================================
-'' 步骤8：清理资源（避免内存泄漏，与原C++逻辑一致）
-'' ==========================================================================
-'Cleanup : 
-'    ' 释放CAT目录上下文
-'    If hCatInfo <> NULL Then
-'        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0)
-'    End If
-'    ' 释放CAT管理员上下文
-'    If hCatAdmin <> NULL Then
-'        CryptCATAdminReleaseContext(hCatAdmin, 0)
-'    End If
-'    ' 关闭未关闭的文件句柄
-'    If hFile <> INVALID_HANDLE_VALUE Then
-'        CloseHandle(hFile)
-'    End If
-'    ' 释放哈希字符串内存（避免内存泄漏）
-'    If pszMemberTag <> NULL Then
-'        free pszMemberTag
-'    End If
-'    ' 返回验证结果
-'    Return bRet
-'End Function
-'
-'' 改进后的签名验证函数：静默模式（不弹窗），并返回具体错误码
-'Function VerifyPeSignature(ByVal filePath As StringW, ByRef outError As Long) As Boolean
-'    Dim fileInfo As WINTRUST_FILE_INFO
-'    Dim wtd As WINTRUST_DATA
-'    Dim wvtGuid As GUID = Type<GUID>(&h00AAC56B, &hCD44, &h11d0, {&h8C, &hC2, &h00, &hC0, &h4F, &hC2, &h95, &hEE}) ' WINTRUST_ACTION_GENERIC_VERIFY_V2
-'    Dim result As Long
-'    
-'    ' 初始化文件信息
-'    With fileInfo
-'        .cbStruct = SizeOf(WINTRUST_FILE_INFO)
-'        .pcwszFilePath = filePath.WstrPtr
-'        .hFile = NULL
-'        .pgKnownSubject = NULL
-'    End With
-'    
-'    ' 初始化信任数据（关键：配置UI策略为静默模式）
-'    ZeroMemory(@wtd, SizeOf(WINTRUST_DATA))  ' 清空结构
-'    With wtd
-'        .cbStruct = SizeOf(WINTRUST_DATA)
-'        .pPolicyCallbackData = NULL
-'        .pSIPClientData = NULL
-'        .dwUIChoice = WTD_UI_NONE  ' 静默验证，不弹窗
-'        .fdwRevocationChecks = WTD_REVOKE_NONE  ' 不检查证书吊销（可选）
-'        .dwUnionChoice = WTD_CHOICE_FILE  ' 验证文件
-'        .pFile = @fileInfo  ' 关联文件信息
-'        .dwStateAction = 0
-'        .hWVTStateData = NULL
-'        .pwszURLReference = NULL
-'        .dwProvFlags = WTD_USE_DEFAULT_OSVER_CHECK' Or 
-'        .dwUIContext = 0
-'    End With
-'    
-'    ' 执行验证
-'    result = WinVerifyTrust(NULL, @wvtGuid, @wtd)
-'    outError = result ' 传出具体错误码
-'    ' 检查结果（仅ERROR_SUCCESS表示完全有效）
-'    Return (result = ERROR_SUCCESS)
-'End Function
-
 '040904B0
-Function GetFileCompany(FileName As StringW) As StringW
+' ============================================
+' 通用函数：获取文件版本信息中的任意字符串值
+' ============================================
+Function GetFileVersionString(FileName As StringW, ByRef szKey As WString) As StringW
     Dim dwSize As DWORD
     Dim pBuffer As PVOID
     Dim dwDummy As DWORD
@@ -947,59 +1007,67 @@ Function GetFileCompany(FileName As StringW) As StringW
     Dim nQuerySize As DWORD
     Dim langCharset As DWORD
     Dim subBlock As StringW
-    Dim i As Integer ' 声明循环变量
     
-    'If FileExists(Str(FileName)) = 0 Then Return "-"
-
-    ' 获取文件版本信息的大小
     dwSize = GetFileVersionInfoSizeW(FileName, @dwDummy)
-    If dwSize = 0 Then
-        'Print "GetFileVersionInfoSizeW 失败, 错误代码: " & GetLastError
-        Return ""
-    End If
+    If dwSize = 0 Then Return ""
 
-    ' 分配缓冲区
     pBuffer = Allocate(dwSize)
-    If pBuffer = 0 Then
-        Print "内存分配失败"
-        Return ""
-    End If
+    If pBuffer = 0 Then Return ""
 
     If GetFileVersionInfoW(FileName, 0, dwSize, pBuffer) Then
-        ' 获取翻译表（包含支持的语言和代码页）
         If VerQueryValueW(pBuffer, StrPtrW("\VarFileInfo\Translation"), @pTransTable, @nQuerySize) Then
-            ' 遍历所有支持的语言/代码页组合（每个条目4字节）
-            'For i = 0 To (nQuerySize \ 4) - 1
-            ' 计算语言代码页组合（格式: wLanguage(2字节) + wCodePage(2字节)）
             langCharset = (pTransTable[0].wLanguage Shl 16) Or pTransTable[0].wCodePage
-            ' 构建查询路径（使用当前语言代码页）
-            subBlock = "\StringFileInfo\" & Hex(langCharset, 8) & "\CompanyName"
+            subBlock = "\StringFileInfo\" & Hex(langCharset, 8) & "\" & szKey
             
-            ' 查询公司名称
             If VerQueryValueW(pBuffer, StrPtrW(subBlock), @lpBuffer, @dwLen) Then
-                ' 确保获取到有效数据（宽字符串长度至少为1）
                 If dwLen >= 2 Then
-                    'lpData = Wstring(dwLen - 1, 0)  ' 预留字符串空间（减去终止符）
-                    CopyMemory(StrPtr(lpData), lpBuffer, dwLen * 2)  ' 不复制终止符
+                    CopyMemory(StrPtr(lpData), lpBuffer, dwLen * 2)
                     Deallocate pBuffer
-                    'Print FileName & " " & lpData
                     Return lpData
                 End If
             End If
-            'Next
-            ' 遍历所有语言后仍未找到
-            MyLog.PrintLog LOG_INFO, "GetFileCompany", "VerQueryValueW", "未找到有效的CompanyName信息, Path=" & FileName
+            MyLog.PrintLog LOG_INFO, "GetFileVersionString", "VerQueryValueW", "未找到 " & szKey & ", Path=" & FileName
             Return ""
         Else
-            MyLog.PrintWin32Error "GetFileCompany", "VerQueryValueW", "Translation失败, Path=" & FileName
+            MyLog.PrintWin32Error "GetFileVersionString", "VerQueryValueW", "Translation失败, Path=" & FileName
         End If
     Else
-            MyLog.PrintWin32Error "GetFileCompany", "GetFileVersionInfoW", "Path=" & FileName
+        MyLog.PrintWin32Error "GetFileVersionString", "GetFileVersionInfoW", "Path=" & FileName
     End If
 
-    ' 释放缓冲区
     Deallocate pBuffer
     Return "-"
+End Function
+
+' ============================================
+' 包装函数：保持原有调用方式不变
+' ============================================
+Function GetFileCompany(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "CompanyName")
+End Function
+
+Function GetFileDescription(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "FileDescription")
+End Function
+
+Function GetFileVersion(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "FileVersion")
+End Function
+
+Function GetProductName(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "ProductName")
+End Function
+
+Function GetProductVersion(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "ProductVersion")
+End Function
+
+Function GetOriginalFilename(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "OriginalFilename")
+End Function
+
+Function GetLegalCopyright(FileName As StringW) As StringW
+    Return GetFileVersionString(FileName, "LegalCopyright")
 End Function
 
 Function GetFileCompany_Opt(ByVal FileName As StringW) As StringW

@@ -105,6 +105,9 @@ Sub FrmOtherInfo_Shown(hWndForm As hWnd, UserData As Integer)
         Case ProcessOtherInfo
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 其他信息"
             GetProcessOtherInfo CurrentPID, txtOtherInfo
+        Case ThreadAllInfo
+            Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & " TID:" & CurrentTID & "]" & " 完整信息"
+            GetThreadOtherInfo CurrentTID, txtOtherInfo
     End Select
 End Sub
 

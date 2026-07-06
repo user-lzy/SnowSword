@@ -202,7 +202,7 @@ Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_List
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(ProcessId)
     Else
-        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, ProcessId)
+        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ProcessId)
     End If
     If (hProcess <= 0) Then
         Print "OpenProcess " & ProcessId & " Failed!"

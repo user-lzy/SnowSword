@@ -259,20 +259,29 @@ Enum MEMORY_SCAN_RESULT
     UnknownCode
 End Enum
 
-' 定义线程参数结构
-Type ScanThreadParam
-    lvwSuspectKernelMemory As Class_ListView
-    StartAddr As UInteger
-    EndAddr As UInteger
-    hMutex As Any Ptr      ' 互斥锁用于同步访问共享资源
-    ScannedPages As UInteger Ptr  ' 共享进度计数器
-    ThreadIndex As Integer  ' 线程索引
-    SuspectCount As Integer Ptr ' 发现的可疑内存计数
-    bFinish As Boolean ' 结束标志
+Type KernelModuleInfo
+    DriverName As WString * 260
+    BaseAddr As UInteger
+    DriverPath As WString * 260
+    result As MEMORY_SCAN_RESULT
 End Type
 
-Const NUM_THREADS As Integer = 8 ' 可根据CPU核心数调整
-Const PAGE_SIZE As DWORD = &H1000 ' (4KB大小)
+' 定义线程参数结构
+Type ScanThreadParam
+    StartAddr As UInteger
+    EndAddr As UInteger
+    hMutex As Any Ptr
+    ScannedPages As UInteger Ptr
+    ThreadIndex As Integer
+    bFinish As Boolean
+End Type
+
+Const NUM_THREADS As Integer = 8
+Const PAGE_SIZE As DWORD = &H1000
+
+' 全局扫描结果数组（线程共享）
+Dim Shared g_ScanResults() As KernelModuleInfo
+Dim Shared g_ScanResultCount As Integer = 0
 
 Const STATUS_INFO_LENGTH_MISMATCH = Cast(NTSTATUS, &HC0000004)
 Const STATUS_SUCCESS = Cast(NTSTATUS, &H00000000)
@@ -298,164 +307,6 @@ Private Function GetMemoryScanType(ByVal MemoryScanType As MEMORY_SCAN_RESULT) A
             Return "UnknownCode"
     End Select
 End Function
-
-' 线程工作函数
-Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
-    Dim p As ScanThreadParam Ptr = Cast(ScanThreadParam Ptr, userdata)
-    Dim stMemory As MemoryStruct
-    Dim result As MEMORY_SCAN_RESULT
-    Dim localScanCount As UInteger = 0
-    
-    ' 遍历分配的内存范围
-    For Addr As UInteger = p->StartAddr To p->EndAddr Step PAGE_SIZE
-        stMemory.Addr = Cast(PVOID, Addr)
-        stMemory.dwSize = PAGE_SIZE
-        
-        ' 调用驱动扫描内存
-        If IoControl(hDrv, IOCTL_ScanKernelMemory, @stMemory, SizeOf(MemoryStruct), @result, SizeOf(MEMORY_SCAN_RESULT)) <> 0 Then
-            If result <> Normal Then
-                ' 发现可疑内存，需要同步添加到列表
-                ' 增加可疑计数
-                Dim SuspectIndex As Integer = 0
-                MutexLock(p->hMutex)
-                SuspectIndex = *p->SuspectCount
-                'Print SuspectIndex & " 0x" & WHex(Addr)
-                Dim DriverPath As StringW = GetDriverPathByAddr(Addr)
-                Dim ItemIndex As Long = AddItemColListEx(p->lvwSuspectKernelMemory, 4,,, WStr(SuspectIndex), WStr(GetMemoryScanType(result)), "0x" & WHex(Addr), WStr(DriverPath))
-                If result <> HideDriver OrElse LenW(DriverPath) = 0 Then SetItemColor p->lvwSuspectKernelMemory, ItemIndex, FB_Red, FB_White
-                *p->SuspectCount += 1
-                MutexUnlock(p->hMutex)
-            End If
-        End If
-        
-        ' 增加扫描页数计数器
-        MutexLock(p->hMutex)
-        *p->ScannedPages += 1
-        MutexUnlock(p->hMutex)
-        
-        localScanCount += 1
-        
-        ' 定期让出CPU时间给其他线程和UI
-        If (localScanCount Mod 20) = 0 Then
-            FF_DoEvents
-        End If
-    Next
-    Print "扫描起始地址0x" & WHex(p->StartAddr) & "的线程退出"
-    p->bFinish = True
-End Sub
-
-' 主函数中的多线程扫描实现
-Sub ScanKernelMemoryMultiThread(lvwSuspectKernelMemory As Class_ListView)
-    Dim threads(NUM_THREADS - 1) As Any Ptr
-    ' 循环内为每个线程单独分配堆内存（核心修复）
-    Dim pParam As ScanThreadParam Ptr
-    Dim hMutex As Any Ptr
-    Dim totalPages As UInteger
-    Dim scannedPages As UInteger = 0
-    Dim suspectCount As Integer = 0
-    Dim i As Integer
-    
-    Dim ModuleSize As ULong
-    Dim EndAddr As UInteger = Cast(UInteger, GetKernelModuleBase("ntoskrnl.exe", ModuleSize)) '&HFFFFF90000000000ULL
-    Dim StartAddr As UInteger = EndAddr - &H70000000 ' &HFFFFF80300000000ULL
-    
-    Dim result As MEMORY_SCAN_RESULT
-    If AfxMsg("是否扫描?",, MB_YESNO) = IDNO Then Exit Sub
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-    End If
-    
-    InitListViewData lvwSuspectKernelMemory
-    
-    ' 计算总页数
-    totalPages = ((EndAddr - StartAddr) \ PAGE_SIZE) + 1
-    
-    ' 创建互斥锁
-    hMutex = MutexCreate()
-    If hMutex = 0 Then
-        AfxMsg "无法创建互斥锁"
-        Exit Sub
-    End If
-    
-    ' 设置进度标签初始值
-    FrmMain.lblNum.Caption = "进度: 0%"
-    FF_DoEvents
-    
-    pParam = CAllocate(Len(ScanThreadParam) * NUM_THREADS)  ' 堆内存，生命周期跨线程，不会失效
-    
-    ' 创建并启动线程
-    For i = 0 To NUM_THREADS - 1
-        ' 计算每个线程的地址范围（确保地址对齐）
-        Dim addrRange As UInteger = (EndAddr - StartAddr) \ NUM_THREADS
-        pParam[i].StartAddr = StartAddr + i * addrRange
-        Print "为线程" & i & "分配扫描地址0x" & Hex(pParam[i].StartAddr) & "的任务"
-        ' 最后一个线程处理剩余所有范围
-        If i = NUM_THREADS - 1 Then
-            pParam[i].EndAddr = EndAddr
-        Else
-            pParam[i].EndAddr = pParam[i].StartAddr + addrRange - 1
-        End If
-        
-        pParam[i].lvwSuspectKernelMemory = lvwSuspectKernelMemory
-        
-        ' 确保地址是PAGE_SIZE对齐
-        pParam[i].StartAddr = (pParam[i].StartAddr \ PAGE_SIZE) * PAGE_SIZE
-        pParam[i].EndAddr = ((pParam[i].EndAddr + PAGE_SIZE - 1) \ PAGE_SIZE) * PAGE_SIZE
-        
-        ' 设置同步参数
-        pParam[i].hMutex = hMutex
-        pParam[i].scannedPages = @scannedPages
-        pParam[i].suspectCount = @suspectCount
-        pParam[i].bFinish = False
-        
-        ' 创建线程
-        Threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
-        If threads(i) = 0 Then
-            AfxMsg "线程 " & i & " 创建失败"
-        End If
-    Next
-    
-    ' 等待线程完成并更新进度
-    Dim lastProgress As Integer = -1
-    
-    Print "正在等待所有线程结束..."
-
-    Do While True
-        ' 检查线程状态
-        Dim activeThreadCount As Integer = NUM_THREADS
-        'Print "activeThreadCount:" & activeThreadCount
-        For i As Integer = 0 To NUM_THREADS - 1
-            If pParam[i].bFinish = True Then activeThreadCount -= 1
-        Next
-        If activeThreadCount = 0 Then
-            Print "线程已全部退出!"
-            Exit Do
-        End If
-        
-        ' 获取并更新进度
-        'MutexLock(hMutex)
-        Dim currentProgress As Integer = (scannedPages * 100) \ totalPages
-        'MutexUnlock(hMutex)
-        
-        ' 只在进度变化时更新UI（减少闪烁）
-        If currentProgress <> lastProgress Then
-            lastProgress = currentProgress
-            FrmMain.lblNum.Caption = "进度:" & WStr(currentProgress) & "%"
-            'FrmMain.lblNum.Refresh  ' 强制立即刷新
-        End If
-        
-        FF_DoEvents
-        'Sleep(1)  ' 避免CPU占用过高
-    Loop
-    
-    ' 清理
-    MutexDestroy(hMutex)
-    Deallocate(pParam)
-    
-    ' 扫描完成
-    AfxMsg "扫描完成，发现 " & suspectCount & " 处可疑内存"
-    CommitListViewView lvwSuspectKernelMemory
-End Sub
 
 Function IRP_MJ_ToString(value As UInteger) As String
     Select Case value
@@ -629,51 +480,276 @@ Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath A
     CommitListViewView lvwIOFunction
 End Sub
 
-Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView)
+' 线程工作函数 - 扫描内核内存，将结果写入共享数组
+Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
+    Dim p As ScanThreadParam Ptr = Cast(ScanThreadParam Ptr, userdata)
+    Dim stMemory As MemoryStruct
+    Dim result As MEMORY_SCAN_RESULT
+    Dim localScanCount As UInteger = 0
+    
+    For Addr As UInteger = p->StartAddr To p->EndAddr Step PAGE_SIZE
+        stMemory.Addr = Cast(PVOID, Addr)
+        stMemory.dwSize = PAGE_SIZE
+        
+        If IoControl(hDrv, IOCTL_ScanKernelMemory, @stMemory, SizeOf(MemoryStruct), @result, SizeOf(MEMORY_SCAN_RESULT)) <> 0 Then
+            If result <> Normal Then
+                Dim DriverPath As StringW = GetDriverPathByAddr(Addr)
+                
+                MutexLock(p->hMutex)
+                
+                ' 动态扩展数组
+                Dim currentCount As Integer = g_ScanResultCount
+                g_ScanResultCount += 1
+                ReDim Preserve g_ScanResults(g_ScanResultCount - 1)
+                
+                g_ScanResults(currentCount).BaseAddr = Addr
+                g_ScanResults(currentCount).result = result
+                
+                If result = HideDriver AndAlso LenW(DriverPath) > 0 Then
+                    g_ScanResults(currentCount).DriverPath = DriverPath
+                    Dim lastSlash As Integer = InStrRev(DriverPath, "\")
+                    If lastSlash > 0 Then
+                        g_ScanResults(currentCount).DriverName = Mid(DriverPath, lastSlash + 1)
+                    Else
+                        g_ScanResults(currentCount).DriverName = DriverPath
+                    End If
+                Else
+                    g_ScanResults(currentCount).DriverName = GetMemoryScanType(result)
+                    g_ScanResults(currentCount).DriverPath = ""
+                End If
+                
+                MutexUnlock(p->hMutex)
+            End If
+        End If
+        
+        MutexLock(p->hMutex)
+        *p->ScannedPages += 1
+        MutexUnlock(p->hMutex)
+        
+        localScanCount += 1
+        If (localScanCount Mod 20) = 0 Then
+            FF_DoEvents
+        End If
+    Next
+    
+    Print "扫描起始地址0x" & WHex(p->StartAddr) & "的线程退出"
+    p->bFinish = True
+End Sub
+
+' 多线程扫描内核内存，填充结构体数组
+Function GetKernelModuleList1(modules() As KernelModuleInfo) As Integer
+    Dim threads(NUM_THREADS - 1) As Any Ptr
+    Dim pParam As ScanThreadParam Ptr
+    Dim hMutex As Any Ptr
+    Dim totalPages As UInteger
+    Dim scannedPages As UInteger = 0
+    Dim i As Integer
+    
+    Dim ModuleSize As ULong
+    Dim EndAddr As UInteger = Cast(UInteger, GetKernelModuleBase("ntoskrnl.exe", ModuleSize))
+    Dim StartAddr As UInteger = EndAddr - &H70000000
+    
+    ' 初始化全局结果数组
+    g_ScanResultCount = 0
+    ReDim g_ScanResults(0)
+    
+    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
+        If Not InitDriver Then
+            AfxMsg "加载失败!"
+            Return 0
+        End If
+    End If
+    
+    If Not IsDriverLoaded Then
+        Return 0
+    End If
+    
+    ' 计算总页数
+    totalPages = ((EndAddr - StartAddr) \ PAGE_SIZE) + 1
+    
+    ' 创建互斥锁
+    hMutex = MutexCreate()
+    If hMutex = 0 Then
+        AfxMsg "无法创建互斥锁"
+        Return 0
+    End If
+    
+    pParam = CAllocate(Len(ScanThreadParam) * NUM_THREADS)
+    
+    ' 创建并启动线程
+    For i = 0 To NUM_THREADS - 1
+        Dim addrRange As UInteger = (EndAddr - StartAddr) \ NUM_THREADS
+        pParam[i].StartAddr = StartAddr + i * addrRange
+        
+        If i = NUM_THREADS - 1 Then
+            pParam[i].EndAddr = EndAddr
+        Else
+            pParam[i].EndAddr = pParam[i].StartAddr + addrRange - 1
+        End If
+        
+        ' 确保地址是PAGE_SIZE对齐
+        pParam[i].StartAddr = (pParam[i].StartAddr \ PAGE_SIZE) * PAGE_SIZE
+        pParam[i].EndAddr = ((pParam[i].EndAddr + PAGE_SIZE - 1) \ PAGE_SIZE) * PAGE_SIZE
+        
+        pParam[i].hMutex = hMutex
+        pParam[i].scannedPages = @scannedPages
+        pParam[i].bFinish = False
+        
+        threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
+        If threads(i) = 0 Then
+            Print "线程 " & i & " 创建失败"
+        End If
+    Next
+    
+    ' 等待线程完成
+    Do While True
+        Dim activeThreadCount As Integer = NUM_THREADS
+        For i As Integer = 0 To NUM_THREADS - 1
+            If pParam[i].bFinish = True Then activeThreadCount -= 1
+        Next
+        If activeThreadCount = 0 Then Exit Do
+        FF_DoEvents
+    Loop
+    
+    ' 清理
+    MutexDestroy(hMutex)
+    Deallocate(pParam)
+    
+    ' 复制结果到调用者数组
+    If g_ScanResultCount > 0 Then
+        ReDim modules(g_ScanResultCount - 1)
+        For i = 0 To g_ScanResultCount - 1
+            modules(i) = g_ScanResults(i)
+        Next
+    End If
+    
+    Dim returnCount As Integer = g_ScanResultCount
+    
+    ' 清理全局数组
+    Erase g_ScanResults
+    g_ScanResultCount = 0
+    
+    Return returnCount
+End Function
+
+' 在官方模块数组中查找指定基地址（线性查找）
+Private Function IsAddrInOfficialModules(ByVal baseAddr As UInteger, officialBases() As UInteger, officialCount As Integer) As Boolean
+    For i As Integer = 0 To officialCount - 1
+        If officialBases(i) = baseAddr Then
+            Return True
+        End If
+    Next
+    Return False
+End Function
+
+' 主函数：获取内核模块列表，可选检测隐藏模块
+Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHideKernelModule As Boolean = False)
     Dim st As NTSTATUS
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
-    If (buffer = NULL) Then
+    
+    If buffer = NULL Then
         Print "Failed to allocate memory."
         Exit Sub
     End If
     
     InitListViewData lvwKernelModule
+    'ListView_SetImageList(lvwKernelModule.hWnd, NULL, LVSIL_SMALL)
     
-    'First Call To Get the required buffer SIZE
+    ' 如果需要检测隐藏模块，先执行扫描
+    Dim scanModules() As KernelModuleInfo
+    Dim scanCount As Integer = 0
+    
+    If bCheckHideKernelModule Then
+        scanCount = GetKernelModuleList1(scanModules())
+    End If
+    
+    ' 第一次调用获取缓冲区大小
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, @bufferSize)
-    If (st = STATUS_INFO_LENGTH_MISMATCH) Then
+    If st = STATUS_INFO_LENGTH_MISMATCH Then
         buffer = Reallocate(buffer, bufferSize)
-        If (buffer = NULL) Then
+        If buffer = NULL Then
             Print "Failed to allocate memory."
             Exit Sub
         End If
     End If
-
-    'Second call to get the actual data
+    
+    ' 第二次调用获取实际数据
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
-    If (st < 0) Then
+    If st < 0 Then
         Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
         Deallocate buffer
         Exit Sub
     End If
-
+    
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
-    For i As Integer = 0 To smi->Count - 1
-        Dim DriverName As WString * 20, DriverPath As ZString * MAX_PATH = smi->Modules(i).ImageName
+    Dim officialCount As Integer = smi->Count
+    
+    ' 提取官方模块基地址数组，用于后续对比
+    Dim officialBases(0 To officialCount - 1) As UInteger
+    For i As Integer = 0 To officialCount - 1
+        officialBases(i) = Cast(UInteger, smi->Modules(i).dwBase)
+    Next
+    
+    ' 先添加官方模块列表
+    For i As Integer = 0 To officialCount - 1
+        Dim DriverName As WString * 260
+        Dim DriverPath As ZString * MAX_PATH = smi->Modules(i).ImageName
         Dim DriverObject As Integer
         
         DriverPath = GetCorrectPath(DriverPath)
         DriverName = Right(DriverPath, Len(DriverPath) - InStrRev(DriverPath, "\"))
         If IsDriverLoaded Then DriverObject = GetDriverObjectAddr(smi->Modules(i).dwBase)
         
-        Dim ItemIndex As Long = AddItemColListEx(lvwKernelModule, 6,,, WStr(i), WStr(DriverName), "0x" & WHex(smi->Modules(i).dwBase), "0x" & WHex(smi->Modules(i).dwSize), _
+        Dim ItemIndex As Long = AddItemColListEx(lvwKernelModule, 6,,, WStr(i), WStr(DriverName), _
+        "0x" & WHex(smi->Modules(i).dwBase), "0x" & WHex(smi->Modules(i).dwSize), _
         WStr(DriverPath), "0x" & WHex(DriverObject))
+        'Dim IconIndex As Long = GetFileIconIndexCached(DriverPath, False)
+        'Print "IconIndex:" & IconIndex
+        SetItemIconEx lvwKernelModule, ItemIndex, ICON_SYSTEM_COMPONENT
+        'SetItemIconEx lvwKernelModule, ItemIndex, 188 ' ICON_SYSTEM_COMPONENT
         VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, DriverPath
         FF_DoEvents
     Next
+    
+    ' 如果启用隐藏检测，添加扫描发现但不在官方列表中的模块
+    If bCheckHideKernelModule Then
+        Dim addedCount As Integer = 0
+        For i As Integer = 0 To scanCount - 1
+            Dim isHidden As Boolean = False
+            
+            Select Case scanModules(i).result
+                Case HideDriver
+                    ' HideDriver需要确认是否不在官方列表中
+                    If Not IsAddrInOfficialModules(scanModules(i).BaseAddr, officialBases(), officialCount) Then
+                        isHidden = True
+                    End If
+                Case ShellCode, UnknownCode
+                    ' ShellCode和UnknownCode直接判定为可疑
+                    isHidden = True
+            End Select
+            
+            If isHidden Then
+                Dim ItemIndex As Long = AddItemColListEx(lvwKernelModule, 6,,, _
+                    WStr(officialCount + addedCount), _
+                    WStr(scanModules(i).DriverName), _
+                    "0x" & WHex(scanModules(i).BaseAddr), _
+                    "0x" & WHex(PAGE_SIZE), _
+                    WStr(scanModules(i).DriverPath), _
+                    "0x0")
+                
+                SetItemColor lvwKernelModule, ItemIndex, FB_Red, FB_White
+                addedCount += 1
+            End If
+        Next
+    End If
+    
     Deallocate buffer
     CommitListViewView lvwKernelModule
+    
+    /'If bCheckHideKernelModule Then
+        AfxMsg "扫描完成，官方模块: " & officialCount & " 个，发现可疑/隐藏项"
+    End If'/
 End Sub
 
 Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize As ULong) As PVOID
@@ -1103,6 +1179,7 @@ Function GetSSDT(lvwSSDT As Class_ListView) As ULong
         Else
             Dim ItemIndex As Long = AddItemColListEx(lvwSSDT, 5,,, WStr(Count), WHex(Index), WStr(FindFunctionNameBySyscallIndex("ntdll.dll", Index)), _
             WStr("0x" & WHex(SSDTFuncAddr)), WStr(GetDriverPathByAddr(SSDTFuncAddr)))
+            SetItemIconEx lvwSSDT, ItemIndex, ICON_SYSTEM_COMPONENT
             If SSDTFuncAddr < ntBase OrElse SSDTFuncAddr > ntEnd Then ' 被hook
                 SetItemColor lvwSSDT, ItemIndex, FB_Red, FB_White
             End If
@@ -1130,6 +1207,7 @@ Function GetSSSDT(lvwSSSDT As Class_ListView) As ULong
             'Print FindFunctionNameBySyscallIndex("win32u.dll", Index)
             Dim ItemIndex As Long = AddItemColListEx(lvwSSSDT, 5,,, WStr(Count), WHex(Index + &H1000), WStr(FindFunctionNameBySyscallIndex("win32u.dll", Index + &H1000)), _
             "0x" & WHex(SSSDTFuncAddr), WStr(GetDriverPathByAddr(SSSDTFuncAddr)))
+            SetItemIconEx lvwSSSDT, ItemIndex, ICON_SYSTEM_COMPONENT
             If SSSDTFuncAddr < win32kBase OrElse SSSDTFuncAddr > win32kEnd Then ' 被hook
                 SetItemColor lvwSSSDT, ItemIndex, FB_Red, FB_White
             End If
@@ -1171,6 +1249,7 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
         If IoControl(hDrv, IOCTL_GetHalDispatchByIndex, @Index, SizeOf(DWORD), @HalDispatchAddr, SizeOf(PVOID)) <> 0 Then
             'Print HalDispatchName(Index) & ":" & "0x" & WHex(HalDispatchAddr)
             Dim ItemIndex As Long = AddItemColListEx(lvwHalDistapch, 4,,, WStr(Index), HalDispatchName(Index), "0x" & WHex(HalDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalDispatchAddr))))
+            SetItemIconEx lvwHalDistapch, ItemIndex, ICON_SYSTEM_COMPONENT
             If HalDispatchAddr <> NULL AndAlso (HalDispatchAddr < ntBase OrElse HalDispatchAddr > ntEnd) Then ' 被hook
                 SetItemColor lvwHalDistapch, ItemIndex, FB_Red, FB_White
             End If
@@ -1350,6 +1429,7 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
         If IoControl(hDrv, IOCTL_GetHalPrivateDispatchByIndex, @Index, SizeOf(DWORD), @HalPrivateDispatchAddr, SizeOf(ULONG64)) <> 0 Then
             'Print HalPrivateDispatchName(Index) & ":" & "0x" & WHex(HalPrivateDispatchAddr)
             Dim ItemIndex As Long = AddItemColListEx(lvwHalPrivateDistapch, 4,,, WStr(Index), HalPrivateDispatchName(Index), "0x" & WHex(HalPrivateDispatchAddr), WStr(GetDriverPathByAddr(Cast(ULONG64, HalPrivateDispatchAddr))))
+            SetItemIconEx lvwHalPrivateDistapch, ItemIndex, ICON_SYSTEM_COMPONENT
             If HalPrivateDispatchAddr <> NULL AndAlso (HalPrivateDispatchAddr < ntBase OrElse HalPrivateDispatchAddr > ntEnd) Then ' 被hook
                 SetItemColor lvwHalPrivateDistapch, ItemIndex, FB_Red, FB_White
             End If
@@ -1389,9 +1469,7 @@ End Type
     
     ' 初始化
     If IsEnumSubDir Then DeleteChildItem treObjectDirectory, CurrentNode
-    AfxMsg "0"
     InitListViewData lvwObject
-    AfxMsg "1"
     
     GetPathByNodeW CurrentNode, treObjectDirectory, szPath
     ' 对象目录路径格式如 "\" 或 "\Devices\"，需要去掉末尾的\
@@ -1571,6 +1649,7 @@ End Type
             
             ' 添加到ListView: 对象名 | 对象类型 | 链接目标(仅SymbolicLink)
             Dim ItemIndex As Long = AddItemColListEx(lvwObject, 3,,, WStr(objNames(j)), WStr(displayType), WStr(displayTarget))
+            SetItemIconEx lvwObject, ItemIndex, ICON_SYSTEM_COMPONENT
             
             ' 根据对象类型设置图标或颜色
             /'Select Case objTypes(j)

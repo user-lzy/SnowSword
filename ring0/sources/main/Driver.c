@@ -19,6 +19,11 @@
 #include "Thread.h"
 #include "Window.h"
 
+typedef struct _EProcessInfo {
+	ULONG64 EProcess;
+    BOOLEAN bExited;
+}EProcessInfo, * PEProcessInfo;
+
 //设备与设备之间通信
 #define DEVICE_OBJECT_NAME  L"\\Device\\SnowSword"
 //设备与Ring3之间通信
@@ -439,13 +444,16 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     case IOCTL_GetEProcess:
         if (pInputData != NULL && InputDataLength > 0)
         {
+			EProcessInfo EProcessInfo = { 0 };
             dwProcessId = *(PHANDLE)pInputData;
-            PEPROCESS pEProcess = GetEProcess(dwProcessId);
-            if (pEProcess == NULL)
-                DbgPrint("GetEProcess Failed!");
-            ULONG64 pEProcessAddr = (ULONG64)pEProcess;
-            memcpy(pOutputData, &pEProcessAddr, sizeof(pEProcessAddr));
-            Information = sizeof(pEProcessAddr);
+            PEPROCESS pEProcess = NULL;
+            status = GetEProcess(dwProcessId, &pEProcess);
+            //ULONG64 pEProcessAddr = (ULONG64)pEProcess;
+			EProcessInfo.EProcess = (ULONG64)pEProcess;
+			EProcessInfo.bExited = (status == STATUS_PROCESS_IS_TERMINATING);
+            memcpy(pOutputData, &EProcessInfo, sizeof(EProcessInfo));
+            Information = sizeof(EProcessInfo);
+            status = STATUS_SUCCESS;
         }
         break;
     case IOCTL_GetEThread:
@@ -490,45 +498,54 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             dwProcessId = *(PHANDLE)pInputData;
 
             // 声明一个 LPWSTR 用于存储进程路径
-            LPWSTR pProcessPath = NULL;
-            DWORD dwProcessPathLength = 260;
-            pProcessPath = (LPWSTR)ExAllocatePool2(POOL_FLAG_NON_PAGED, dwProcessPathLength, 'cbin');
+            LPWSTR pProcessPath;
+            UNICODE_STRING usImage;
+
+            pProcessPath = ExAllocatePool2(
+                POOL_FLAG_NON_PAGED,
+                260 * sizeof(WCHAR),
+                'cbin');
+
             if (!pProcessPath)
             {
-                DbgPrint("Failed to allocate memory for pProcessPath\n");
                 status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
 
-            // 调用 GetProcessImageName 获取进程路径
-            status = GetProcessImageName(dwProcessId, pProcessPath);
+            RtlZeroMemory(pProcessPath, 260 * sizeof(WCHAR));
+
+            usImage.Buffer = pProcessPath;
+            usImage.Length = 0;
+            usImage.MaximumLength = 260 * sizeof(WCHAR);
+
+            status = GetProcessImageName(
+                dwProcessId,
+                &usImage);
+
             if (NT_SUCCESS(status))
             {
-                //DbgPrint("GetProcessPath %lld Success!", (ULONG_PTR)dwProcessId);
+                size_t actualLength =
+                    usImage.Length + sizeof(WCHAR);
 
-                // 计算实际字符串长度（字节）
-                size_t actualLength = (wcslen(pProcessPath) + 1) * sizeof(WCHAR);
-
-                // 确保输出缓冲区足够大
                 if (OutputDataLength >= actualLength)
                 {
-                    memcpy(pOutputData, pProcessPath, actualLength);
-                    Information = actualLength;
+                    memcpy(
+                        pOutputData,
+                        usImage.Buffer,
+                        actualLength);
+
+                    Information = (ULONG)actualLength;
                 }
                 else
                 {
-                    // 输出缓冲区不足
                     status = STATUS_BUFFER_OVERFLOW;
-                    Information = actualLength;
+                    Information = (ULONG)actualLength;
                 }
             }
-            else
-            {
-                DbgPrint("GetProcessPath %Iu Failed! %X", (ULONG_PTR)dwProcessId, status);
-            }
 
-            // 释放分配的内存
-            ExFreePoolWithTag(pProcessPath, 'cbin');
+            ExFreePoolWithTag(
+                pProcessPath,
+                'cbin');
         }
         break;
     case IOCTL_SetProcessProtectStatus:
@@ -695,7 +712,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         __try {
             stMemory = *(PMemoryStruct)pInputData;
             //ProbeForRead((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
-            SIZE_T BytesTransferred = 0;
             status = ReadProcessMemory(stMemory.dwProcessId, (PVOID)stMemory.Addr, stMemory.pData, stMemory.Size, &BytesTransferred);
             Information = BytesTransferred;
         }
@@ -708,7 +724,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         __try {
             stMemory = *(PMemoryStruct)pInputData;
             //ProbeForWrite((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
-            SIZE_T BytesTransferred = 0;
             status = WriteProcessMemory(stMemory.dwProcessId, stMemory.pData, (PVOID)stMemory.Addr, stMemory.Size, &BytesTransferred);
             Information = BytesTransferred;
         }
@@ -1844,12 +1859,10 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 		}
         break;
 
-    case IOCTL_ReadDiskSector:
-        status = HandleVolumeSectorRead(pIrp, IoStackLocation);
-        break;
-    case IOCTL_WriteDiskSector:
-		status = HandleVolumeSectorWrite(pIrp, IoStackLocation);
-        break;
+    case IOCTL_SectorIo_Read:
+        return HandleVolumeSectorRead(pIrp, IoStackLocation);
+    case IOCTL_SectorIo_Write:
+		return HandleVolumeSectorWrite(pIrp, IoStackLocation);
 
     default: 
         break;

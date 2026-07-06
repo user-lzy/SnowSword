@@ -109,10 +109,34 @@ Sub QuickSortWrapper(arr() As DWORD)
     End If
 End Sub
 
-Function IsDWORDInArray(ByVal Element As DWORD, Array() As DWORD) As Boolean
+Function IsDWORDInArray Overload(ByVal Element As DWORD, Array() As DWORD) As Boolean
     Dim i As Integer
-    For i = LBound(Array) To UBound(Array)
-        If (Array(i) = Element) Then Return True
+    For i = LBound(array) To UBound(array)
+        If (array(i) = Element) Then Return True
+    Next
+    Return False
+End Function
+
+Function GetDWORDInArray Overload(ByVal Element As DWORD, Array() As DWORD) As DWORD
+    Dim i As Integer
+    For i = LBound(array) To UBound(array)
+        If (array(i) = Element) Then Return i
+    Next
+    Return -1
+End Function
+
+Function GetDWORDInArray Overload(ByVal Element As DWORD, Array() As PIDInfo) As DWORD
+    Dim i As Integer
+    For i = LBound(array) To UBound(array)
+        If (array(i).PID = Element) Then Return i
+    Next
+    Return -1
+End Function
+
+Function IsDWORDInArray Overload(ByVal Element As DWORD, Array() As PIDInfo) As Boolean
+    Dim i As Integer
+    For i = LBound(array) To UBound(array)
+        If (array(i).PID = Element) Then Return True
     Next
     Return False
 End Function
@@ -189,3 +213,7 @@ Sub InsertDwordToSortedArray(arr() As DWORD, ByVal newValue As DWORD)
     ' 插入新值
     arr(insertPos) = newValue
 End Sub
+
+Function IsNumeric(str1 As StringW) As Boolean
+    Return (str1 = "0") OrElse (ValUInt(str1) <> 0)
+End Function

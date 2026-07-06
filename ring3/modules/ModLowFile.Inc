@@ -1,13 +1,7 @@
-﻿Type VOLUME_SECTOR_IO
-    VolumeName As Wstring * 8          ' DOS 卷名，例如 L"C:"，必须以 null 结尾
-    ByteOffset As LARGE_INTEGER     ' 卷内字节偏移（扇区对齐）
-    Length As ULong                ' 字节长度（扇区对齐）
-End Type
-
-Type NTFS_BOOT_SECTOR Field = 1
+﻿Type NTFS_BOOT_SECTOR Field = 1
     jump(0 To 2)       As UByte
     oemID(0 To 7)      As UByte
-    BytesPerSector     As Short
+    bytesPerSector     As Short
     SectorsPerCluster  As Byte
     reservedSectors    As Short
     zeros1(0 To 2)     As Byte
@@ -135,6 +129,12 @@ Type ATTR_HEADER_GENERIC Field = 1
     attrID      As UShort
 End Type
 
+Type REPARSE_DATA_HEADER Field = 1
+    reparseTag        As ULong
+    reparseDataLength As UShort
+    reserved          As UShort
+End Type
+
 ' Index Entry Header
 Type NTFS_INDEX_ENTRY Field = 1
     fileRef     As ULongLong   ' 8
@@ -221,34 +221,47 @@ Type WIN32_FILE_DATAEX2W
     bHasAlternateStream As Boolean ' 新字段：是否包含附加数据流
     bSuspicious As Boolean           ' 新增：存在多个数据流（含未命名流）
     bDirectory As Boolean
+    ' === 新增：重解析点信息 ===
+    bReparsePoint       As Boolean   ' 是否为重解析点
+    reparseTag          As ULong     ' 重解析标签（如 0xA000000C）
 End Type
 
-'======================================================================
-' 内部上下文结构（原全局变量全部移入此处）
-'======================================================================
+' ============================================================================
+' 统一的磁盘 IO 上下文（物理磁盘模式）
+' ============================================================================
+Type DISK_IO_CONTEXT
+    hVol                    As HANDLE       ' 卷/磁盘句柄（回退模式用）
+    VolName                 As WString * 64 ' 用于错误信息
+    partitionStartOffset    As ULongLong   ' 分区在物理磁盘上的起始字节偏移
+    bytesPerSector          As ULong
+    diskIndex               As Integer      ' 物理磁盘号（0-based）
+    lastError               As ULong
+End Type
+
+' ============================================================================
+' NTFS 上下文
+' ============================================================================
 Type NTFS_CONTEXT
-    ' 卷句柄与基础参数
-    VolName As Wstring * 8
-    hVol As HANDLE
-    bytesPerSector As ULong
-    sectorsPerCluster As ULong
-    clusterSize As ULong
-    mftRecordSize As ULong
-    mftStartLCN As ULongLong
-    volumeTotalClusters As ULONGLONG
+    io                      As DISK_IO_CONTEXT   ' 统一磁盘 IO
     
-    ' MFT 片段信息（原全局 mftFragments）
-    mftFragments(Any) As MFT_FRAGMENT
-    mftFragmentCount As Integer
+    ' NTFS 解析结果
+    sectorsPerCluster       As ULong
+    clusterSize             As ULong
+    mftRecordSize           As ULong
+    mftStartLCN             As ULongLong
+    volumeTotalClusters     As ULONGLONG
     
-    ' 缓存（原全局 dirCache/pathCache）
-    dirCache(Any) As DIR_CACHE_ENTRY
-    dirCacheCount As Integer
-    pathCache(Any) As PATH_CACHE_ENTRY
-    pathCacheCount As Integer
+    ' MFT 片段
+    mftFragments(Any)       As MFT_FRAGMENT
+    mftFragmentCount        As Integer
     
-    ' 错误跟踪
-    lastError As DWORD
+    ' 缓存
+    dirCache(Any)           As DIR_CACHE_ENTRY
+    dirCacheCount           As Integer
+    pathCache(Any)          As PATH_CACHE_ENTRY
+    pathCacheCount          As Integer
+    
+    lastError               As DWORD
 End Type
 
 '========================================================
@@ -271,6 +284,22 @@ Const ATTR_TYPE_EA_INFORMATION      = &HD0
 Const ATTR_TYPE_EA                  = &HE0
 Const ATTR_TYPE_LOGGED_UTILITY_STREAM = &H100
 
+' NTFS 属性标志
+Const ATTR_FLAG_COMPRESSED       = &H0001
+Const ATTR_FLAG_SPARSE           = &H8000
+Const ATTR_FLAG_ENCRYPTED        = &H4000
+
+' 重解析点标签（常见）
+Const IO_REPARSE_TAG_MOUNT_POINT = &HA0000003
+Const IO_REPARSE_TAG_SYMLINK     = &HA000000C
+Const IO_REPARSE_TAG_DEDUP       = &H80000013
+Const IO_REPARSE_TAG_NFS         = &H80000014
+
+' Win32 文件属性
+Const FILE_ATTRIBUTE_REPARSE_POINT = &H00000400
+Const FILE_ATTRIBUTE_COMPRESSED  = &H00000800
+Const FILE_ATTRIBUTE_SPARSE_FILE   = &H00000200
+
 Const NTFS_MFT_RECORD_MAGIC = &H454C4946
 Const INDEX_BLOCK_MAGIC = &H58444E49 ' 'INDX' little-endian
 
@@ -286,128 +315,21 @@ Const INDEX_ENTRY_SPACE_FILLER = &H8000 ' 填充条目
 Const MFT_RECORD_IN_USE    = &H1
 Const MFT_RECORD_IS_DIR = &H2
 
-' 内部全局管理器（26个盘符 A-Z）
-Dim Shared g_VolCtx(0 To 25) As NTFS_CONTEXT Ptr
-Dim Shared g_Initialized As Boolean = False
-
-'======================================================================
-' 底层 IO 函数（新增 ctx 参数）
-'======================================================================
-Private Function ReadAtOffset(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
-    ' 驱动模式下也无需关心扇区对齐
-    /'If IsDriverLoaded Then
-        Dim SectorIo As VOLUME_SECTOR_IO
-
-        SectorIo.VolumeName = ctx->VolName
-        SectorIo.ByteOffset.QuadPart = offset
-        SectorIo.Length = size
-
-        SetLastError 0
-        If IoControl(hDrv, IOCTL_ReadDiskSector, @SectorIo, SizeOf(SectorIo), buf, size) = 0 Then
-            MyLog.PrintWin32Error "ReadAtOffset", "IOCTL_ReadDiskSector", _
-                "vol=" & SectorIo.VolumeName & " offset=" & SectorIo.ByteOffset.QuadPart & " Length=" & SectorIo.Length
-            Return False
-        End If
-        Return True
-    Else'/
-        ' 普通文件系统路径
-        Dim li As LARGE_INTEGER
-        li.QuadPart = offset
-        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Dim bytesRead As DWORD
-        If ReadFile(ctx->hVol, buf, size, @bytesRead, NULL) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Return (bytesRead = size)
-    'End If
+' ============================================================================
+' NTFS 适配：内部调用统一 DiskIO
+' ============================================================================
+Private Function ReadAtOffset(ctx As NTFS_CONTEXT Ptr, _
+                              ByVal offset As ULongLong, _
+                              ByVal buf As Any Ptr, _
+                              ByVal size As ULong) As Boolean
+    Return DiskIO_Read(@ctx->io, offset, buf, size)
 End Function
 
-Private Function WriteAtOffset(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
-    If IsDriverLoaded Then
-        ' 写入数据必须扇区对齐且长度为扇区倍数
-        If (offset Mod ctx->bytesPerSector) <> 0 Or (size Mod ctx->bytesPerSector) <> 0 Then
-            MyLog.PrintLog LOG_ERROR, "WriteAtOffset",  "offset or size not sector-aligned"
-            ctx->lastError = ERROR_INVALID_PARAMETER
-            Return False
-        End If
-
-        Dim SectorIo As VOLUME_SECTOR_IO
-        SectorIo.VolumeName = ctx->VolName
-        SectorIo.ByteOffset.QuadPart = offset
-        SectorIo.Length = size
-
-        SetLastError 0
-        If IoControl(hDrv, IOCTL_WriteDiskSector, @SectorIo, SizeOf(SectorIo), buf, size) = 0 Then
-            MyLog.PrintWin32Error "WriteAtOffset", "IOCTL_WriteDiskSector", _
-                "vol=" & SectorIo.VolumeName & " offset=" & SectorIo.ByteOffset.QuadPart & " Length=" & SectorIo.Length
-            Return False
-        End If
-        Return True
-    Else
-        Dim li As LARGE_INTEGER
-        li.QuadPart = offset
-        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Dim bytesWritten As DWORD
-        If WriteFile(ctx->hVol, buf, size, @bytesWritten, NULL) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Return (bytesWritten = size)
-    End If
-End Function
-
-Private Function WriteAtOffset_Advanced(ctx As NTFS_CONTEXT Ptr, ByVal offset As ULongLong, ByVal buf As Any Ptr, ByVal size As ULong) As Boolean
-    If IsDriverLoaded Then
-        ' 计算需要操作的扇区
-        Dim firstSectorOffset As ULongLong = (offset \ ctx->bytesPerSector) * ctx->bytesPerSector
-        Dim lastByteOffset As ULongLong = offset + size - 1
-        Dim lastSectorOffset As ULongLong = (lastByteOffset \ ctx->bytesPerSector) * ctx->bytesPerSector
-        Dim alignedSize As ULongLong = lastSectorOffset - firstSectorOffset + ctx->bytesPerSector
-
-        If firstSectorOffset = offset And alignedSize = size Then
-            ' 完美对齐，直接写
-            Return WriteAtOffset(ctx, offset, buf, size)
-        End If
-
-        ' 分配临时缓冲区存放完整的扇区数据
-        Dim tempBuf As Any Ptr = Allocate(alignedSize)
-        If tempBuf = NULL Then Return False
-
-        ' 先读取原始数据
-        If Not ReadAtOffset(ctx, firstSectorOffset, tempBuf, alignedSize) Then
-            Deallocate tempBuf
-            Return False
-        End If
-
-        ' 修改需要改写的部分
-        Dim startOffsetInBuf As ULong = CUInt(offset - firstSectorOffset)
-        memcpy (CPtr(PUCHAR, tempBuf) + startOffsetInBuf), buf, size
-
-        ' 写入整个扇区
-        Dim result As Boolean = WriteAtOffset(ctx, firstSectorOffset, tempBuf, alignedSize)
-        Deallocate tempBuf
-        Return result
-    Else
-        Dim li As LARGE_INTEGER
-        li.QuadPart = offset
-        If SetFilePointerEx(ctx->hVol, li, NULL, FILE_BEGIN) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Dim bytesWritten As DWORD
-        If WriteFile(ctx->hVol, buf, size, @bytesWritten, NULL) = 0 Then
-            ctx->lastError = GetLastError()
-            Return False
-        End If
-        Return (bytesWritten = size)
-    End If
+Private Function WriteAtOffset(ctx As NTFS_CONTEXT Ptr, _
+                               ByVal offset As ULongLong, _
+                               ByVal buf As Any Ptr, _
+                               ByVal size As ULong) As Boolean
+    Return DiskIO_Write(@ctx->io, offset, buf, size)
 End Function
 
 Private Function ReadClusters(ctx As NTFS_CONTEXT Ptr, ByVal startCluster As ULongLong, ByVal numClusters As ULong, ByVal buf As Any Ptr) As Boolean
@@ -446,9 +368,9 @@ Private Function ParseBoot(ctx As NTFS_CONTEXT Ptr, ByVal bootBuf As Any Ptr) As
     Next
     If s <> "NTFS    " Then Return False
     
-    ctx->bytesPerSector = bs->BytesPerSector
-    ctx->sectorsPerCluster = bs->SectorsPerCluster
-    ctx->clusterSize = ctx->bytesPerSector * ctx->sectorsPerCluster
+    ctx->io.bytesPerSector = bs->bytesPerSector
+    ctx->sectorsPerCluster = bs->sectorsPerCluster
+    ctx->clusterSize = ctx->io.bytesPerSector * ctx->sectorsPerCluster
     ctx->mftStartLCN = bs->mftLCN
     ctx->volumeTotalClusters = bs->totalSectors \ ctx->sectorsPerCluster
     
@@ -472,12 +394,12 @@ Private Function FixupMFTRecord(ctx As NTFS_CONTEXT Ptr, ByVal recBufPtr As UByt
     
     Dim usaPtr As UShort Ptr = Cast(UShort Ptr, recBufPtr + usaOffset)
     Dim usn As UShort = usaPtr[0]
-    Dim sectorsPerRec As Integer = recordSize \ ctx->bytesPerSector
+    Dim sectorsPerRec As Integer = recordSize \ ctx->io.bytesPerSector
     
     If CULng(usaOffset) + usaCount * 2 > recordSize Then Return False
     
     For i As Integer = 1 To usaCount - 1
-        Dim sectorEndOff As ULong = i * ctx->bytesPerSector - 2
+        Dim sectorEndOff As ULong = i * ctx->io.bytesPerSector - 2
         If sectorEndOff >= recordSize Then Return False
         Dim lastWordPtr As UShort Ptr = Cast(UShort Ptr, recBufPtr + sectorEndOff)
         If lastWordPtr[0] <> usn Then Return False
@@ -486,7 +408,12 @@ Private Function FixupMFTRecord(ctx As NTFS_CONTEXT Ptr, ByVal recBufPtr As UByt
     Return True
 End Function
 
-Private Function ParseRunList(ctx As NTFS_CONTEXT Ptr, ByVal runPtr As UByte Ptr, ByRef currentCluster As ULongLong, ByRef runLength As ULongLong) As UByte Ptr
+Private Function ParseRunList(ctx As NTFS_CONTEXT Ptr, _
+                              ByVal runPtr As UByte Ptr, _
+                              ByRef currentCluster As ULongLong, _
+                              ByRef runLength As ULongLong, _
+                              ByRef isSparse As Boolean = False) As UByte Ptr
+    
     Dim p As UByte Ptr = runPtr
     Dim header As UByte = p[0]
     If header = 0 Then Return NULL
@@ -520,29 +447,31 @@ Private Function ParseRunList(ctx As NTFS_CONTEXT Ptr, ByVal runPtr As UByte Ptr
         End If
     End If
     
+    ' === 核心修复：稀疏运行不得重置 currentCluster ===
     If offSize > 0 Then
         currentCluster += offsetDelta
+        isSparse = False
     Else
-        currentCluster = 0
+        ' 稀疏运行：VCN 继续推进，但物理 LCN 不变（保持上一个值）
+        isSparse = True
     End If
     
     Return p + 1 + lenSize + offSize
 End Function
 
 Private Function ParseMFTDataAttribute(ctx As NTFS_CONTEXT Ptr) As Boolean
-    Dim mftBuf() As UByte
-    ReDim mftBuf(0 To ctx->mftRecordSize - 1)
+    Dim pMftBuf As UByte Ptr = Allocate(ctx->mftRecordSize)
     
     ' 读取 $MFT 记录（使用简化方式，假设前几个记录连续）
     Dim recOffset As ULongLong = ctx->mftStartLCN * ctx->clusterSize
-    If Not ReadAtOffset(ctx, recOffset, @mftBuf(0), ctx->mftRecordSize) Then Return False
-    If Not FixupMFTRecord(ctx, @mftBuf(0), ctx->mftRecordSize) Then Return False
+    If Not ReadAtOffset(ctx, recOffset, pMftBuf, ctx->mftRecordSize) Then Print "[ParseMFTDataAttribute]ReadAtOffset failed" : Return False
+    If Not FixupMFTRecord(ctx, pMftBuf, ctx->mftRecordSize) Then Return False
     
-    Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, @mftBuf(0))
+    Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, pMftBuf)
     Dim attrOff As ULong = mrh->attrOffset
     
     While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
-        Dim g As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @mftBuf(0) + attrOff)
+        Dim g As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, pMftBuf + attrOff)
         
         If g->typeID = &HFFFFFFFF Then Exit While
         If g->typeID = ATTR_TYPE_DATA Then
@@ -566,11 +495,13 @@ Private Function ParseMFTDataAttribute(ctx As NTFS_CONTEXT Ptr) As Boolean
                 Wend
                 Return ctx->mftFragmentCount > 0
             Else
+                Deallocate pMftBuf
                 Return False ' $MFT 不可能是常驻属性
             End If
         End If
         attrOff += g->totalLen
     Wend
+    Deallocate pMftBuf
     Return False
 End Function
 
@@ -581,42 +512,6 @@ Function GetSystemFileName(ByVal recNo As ULong) As String
     "$Extend", "Reserved1", "$Extend\$UsnJrnl", "Reserved2", "Reserved3"}
     If recNo <=16 Then Return SysFileName(recNo) Else Return ""
 End Function
-
-'======================================================================
-' 卷生命周期管理（内部使用）
-'======================================================================
-Private Function OpenVolumeInternal(ctx As NTFS_CONTEXT Ptr, strDrive As String) As Boolean
-    ctx->hVol = CreateFile("\\.\" & strDrive, GENERIC_READ Or GENERIC_WRITE, _
-                      FILE_SHARE_READ Or FILE_SHARE_WRITE, _
-                      NULL, OPEN_EXISTING, 0, NULL)
-    
-    If ctx->hVol = INVALID_HANDLE_VALUE Then Return False
-    Print "strDrive:" & strDrive
-    ctx->VolName = strDrive
-    Print "ctx->VolName:" & ctx->VolName
-    
-    Dim bootBuf(0 To 511) As UByte
-    If Not ReadAtOffset(ctx, 0, @bootBuf(0), 512) Then Goto Cleanup
-    If Not ParseBoot(ctx, @bootBuf(0)) Then Goto Cleanup
-    If Not ParseMFTDataAttribute(ctx) Then Goto Cleanup
-    
-    Return True
-    
-Cleanup:
-    CloseHandle(ctx->hVol)
-    ctx->hVol = INVALID_HANDLE_VALUE
-    Return False
-End Function
-
-Private Sub CloseVolumeInternal(ctx As NTFS_CONTEXT Ptr)
-    If ctx->hVol <> INVALID_HANDLE_VALUE And ctx->hVol <> NULL Then
-        CloseHandle(ctx->hVol)
-        ctx->hVol = INVALID_HANDLE_VALUE
-    End If
-    Erase ctx->mftFragments
-    Erase ctx->dirCache
-    Erase ctx->pathCache
-End Sub
 
 ' 从路径提取盘符索引（A=0, B=1...）
 Private Function GetDriveIndex(ByVal path As String) As Integer
@@ -629,56 +524,146 @@ Private Function GetDriveIndex(ByVal path As String) As Integer
     Return -1
 End Function
 
-' 获取或创建卷上下文（自动打开卷）
-Private Function OpenNTFSVolumeContext(ByVal path As String) As NTFS_CONTEXT Ptr
-    Dim idx As Integer = GetDriveIndex(path)
-    If idx < 0 Then Return NULL
+' ============================================================================
+' 核心：打开卷并自动获取物理磁盘号和分区偏移
+' ============================================================================
+Private Function OpenVolumeInternal(ctx As NTFS_CONTEXT Ptr, _
+                                    ByVal path As Wstring Ptr, _
+                                    ByVal partitionStartOffset As ULongLong, _
+                                    ByVal bytesPerSec As ULong, _
+                                    ByVal diskIdx As Integer) As Boolean
     
-    ' 首次使用自动初始化
-    If Not g_Initialized Then
-        memset(@g_VolCtx(0), 0, SizeOf(g_VolCtx))
-        g_Initialized = True
+    ctx->io.hVol = CreateFile(path, GENERIC_READ Or GENERIC_WRITE, _
+                      FILE_SHARE_READ Or FILE_SHARE_WRITE, _
+                      NULL, OPEN_EXISTING, 0, NULL)
+    
+    If ctx->io.hVol = INVALID_HANDLE_VALUE Then Return False
+    
+    ctx->io.bytesPerSector = bytesPerSec
+    ctx->io.partitionStartOffset = partitionStartOffset
+    ctx->io.diskIndex = diskIdx
+    
+    ' 提取 VolName 用于错误信息
+    Dim p As WString Ptr = path
+    Dim lenPath As Integer = LenW(*p)
+    If lenPath >= 2 Then
+        ctx->io.VolName = MidW(*p, lenPath - 1, 2)
     End If
     
-    ' 已存在且有效，直接返回
-    If g_VolCtx(idx) <> NULL Then
-        ' 可选：检查句柄是否仍然有效（卷是否被移除）
-        Return g_VolCtx(idx)
+    Dim pBootBuf As UByte Ptr = Allocate(512)
+    If Not ReadAtOffset(ctx, 0, pBootBuf, 512) Then 
+        Print "[OpenVolumeInternal] ReadAtOffset failed"
+        Goto Cleanup
+    End If
+    If Not ParseBoot(ctx, pBootBuf) Then 
+        Print "[OpenVolumeInternal] ParseBoot failed"
+        Goto Cleanup
+    End If
+    If Not ParseMFTDataAttribute(ctx) Then 
+        Print "[OpenVolumeInternal] ParseMFTDataAttribute failed"
+        Goto Cleanup
     End If
     
-    ' 创建新上下文
-    Dim ctx As NTFS_CONTEXT Ptr = Allocate(SizeOf(NTFS_CONTEXT))
+    Deallocate pBootBuf
+    Return True
+    
+Cleanup:
+    If pBootBuf <> NULL Then Deallocate pBootBuf
+    CloseHandle(ctx->io.hVol)
+    ctx->io.hVol = INVALID_HANDLE_VALUE
+    Return False
+End Function
+
+' ============================================================================
+' 通过物理磁盘号 + 起始LBA 打开（保留原签名）
+' ============================================================================
+Public Function OpenNTFSVolumePhysical(ByVal diskIndex As Integer, _
+                                       ByVal startLBA As ULongLong, _
+                                       ByVal bytesPerSec As ULong) As NTFS_CONTEXT Ptr
+    
+    Dim ctx As NTFS_CONTEXT Ptr = New NTFS_CONTEXT
     If ctx = NULL Then Return NULL
-    memset(ctx, 0, SizeOf(NTFS_CONTEXT))
     
-    ' 打开卷并解析（修改后的 OpenVolume 接受 ctx 指针）
-    Dim drive As String = Chr(Asc("A") + idx) & ":"
-    If Not OpenVolumeInternal(ctx, drive) Then
-        Deallocate(ctx)
+    Dim wpath As WString * 64 = "\\.\PhysicalDrive" & diskIndex
+    Dim startOffset As ULongLong = startLBA * bytesPerSec
+    
+    If OpenVolumeInternal(ctx, @wpath, startOffset, bytesPerSec, diskIndex) Then
+        Return ctx
+    End If
+    
+    Deallocate(ctx)
+    Return NULL
+End Function
+
+' ============================================================================
+' 通过盘符路径打开（内部自动转换为物理磁盘操作）
+' ============================================================================
+Public Function OpenNTFSVolumeContext(ByVal path As String) As NTFS_CONTEXT Ptr
+    ' 先转换为物理路径
+    Dim physPath As String = ConvertToPhysicalPath(path)
+    If physPath = "" Then
+        Print "[OpenNTFSVolumeContext] 无法将路径转换为物理路径: " & path
         Return NULL
     End If
     
-    g_VolCtx(idx) = ctx
-    Return ctx
-End Function
-
-' 清理特定卷的上下文（供程序退出或手动重置使用）
-Public Sub CloseNTFSVolumeContext(ByVal drive As String)
-    Dim idx As Integer = GetDriveIndex(drive & "\")
-    If idx < 0 Or g_VolCtx(idx) = NULL Then Exit Sub
+    ' 解析物理路径
+    Dim parsed As PARSED_PATH_INFO
+    If Not ParsePath(physPath, parsed) Then Return NULL
     
-    CloseVolumeInternal(g_VolCtx(idx))
-    Deallocate(g_VolCtx(idx))
-    g_VolCtx(idx) = NULL
-End Sub
-
-' 清理所有卷（程序退出时调用）
-Public Sub CleanupAllNTFSVolumes()
-    For i As Integer = 0 To 25
-        If g_VolCtx(i) <> NULL Then
-            CloseNTFSVolumeContext(Chr(Asc("A") + i) & ":")
+    ' 查分区信息获取 startLBA 和 bytesPerSector
+    Dim startLBA As ULongLong = 0
+    Dim bytesPerSec As ULong = 512
+    
+    ' 优先查 g_HiddenParts
+    For i As Integer = 0 To g_HiddenPartCount - 1
+        If g_HiddenParts(i).diskIndex = parsed.diskIndex AndAlso _
+           g_HiddenParts(i).partitionIndex = parsed.partitionIndex Then
+            startLBA = g_HiddenParts(i).startLBA
+            bytesPerSec = g_HiddenParts(i).bytesPerSector
+            Exit For
         End If
     Next
+    
+    ' 再查 g_DiskList
+    If startLBA = 0 Then
+        For d As Integer = 0 To g_DiskCount - 1
+            If g_DiskList(d).diskIndex <> parsed.diskIndex Then Continue For
+            For p As Integer = 0 To g_DiskList(d).partitionCount - 1
+                Dim part As PARTITION_INFO Ptr = @g_DiskList(d).partitions(p)
+                If part->partitionIndex = parsed.partitionIndex Then
+                    startLBA = part->startLBA
+                    bytesPerSec = part->bytesPerSector
+                    Exit For, For
+                End If
+            Next
+        Next
+    End If
+    
+    If startLBA = 0 Then
+        Print "[OpenNTFSVolumeContext] 未找到分区信息: " & physPath
+        Return NULL
+    End If
+    
+    ' 统一走物理磁盘打开
+    Return OpenNTFSVolumePhysical(parsed.diskIndex, startLBA, bytesPerSec)
+End Function
+
+' ============================================================================
+' 清理上下文
+' ============================================================================
+Public Sub CloseNTFSVolumeContext(ctx As NTFS_CONTEXT Ptr)
+    If ctx = NULL Then Exit Sub
+    
+    If ctx->io.hVol <> INVALID_HANDLE_VALUE And ctx->io.hVol <> NULL Then
+        CloseHandle(ctx->io.hVol)
+        ctx->io.hVol = INVALID_HANDLE_VALUE
+    End If
+    
+    Erase ctx->mftFragments
+    Erase ctx->dirCache
+    Erase ctx->pathCache
+    
+    Deallocate(ctx)
 End Sub
 
 '======================================================================
@@ -892,12 +877,16 @@ Private Function FindAttributeInRecord(ctx As NTFS_CONTEXT Ptr, ByVal mftHeader 
     Return NULL
 End Function
 
-Private Function ReadNonResidentAttributeData(ctx As NTFS_CONTEXT Ptr, ByVal nonResAttr As ATTR_HEADER_NONRESIDENT Ptr, ByVal buffer As UByte Ptr, ByVal bufferSize As ULong) As Boolean
+Private Function ReadNonResidentAttributeData(ctx As NTFS_CONTEXT Ptr, _
+                                              ByVal nonResAttr As ATTR_HEADER_NONRESIDENT Ptr, _
+                                              ByVal buffer As UByte Ptr, _
+                                              ByVal bufferSize As ULong) As Boolean
     If nonResAttr = NULL Or buffer = NULL Then Return False
     
     Dim runPtr As UByte Ptr = Cast(UByte Ptr, nonResAttr) + nonResAttr->runOff
-    Dim currentVCN As ULongLong = 0
+    Dim currentLCN As ULongLong = 0      ' 物理 LCN 累积值（修复）
     Dim bufOffset As ULong = 0
+    Dim isSparse As Boolean = False
     
     While *runPtr <> 0 And bufOffset < bufferSize
         Dim runHeader As UByte = *runPtr
@@ -924,16 +913,168 @@ Private Function ReadNonResidentAttributeData(ctx As NTFS_CONTEXT Ptr, ByVal non
             End If
         End If
         
-        Dim startLCN As ULongLong = currentVCN + runOffset
-        Dim bytesToRead As ULong = runLen * ctx->clusterSize
-        If bufOffset + bytesToRead > bufferSize Then bytesToRead = bufferSize - bufOffset
+        ' 更新物理 LCN（稀疏运行时不更新）
+        If runOffsetBytes > 0 Then
+            currentLCN += runOffset
+        End If
         
-        If Not ReadClusters(ctx, startLCN, runLen, buffer + bufOffset) Then Return False
+        Dim bytesToProcess As ULong = runLen * ctx->clusterSize
+        If bufOffset + bytesToProcess > bufferSize Then bytesToProcess = bufferSize - bufOffset
         
-        bufOffset += bytesToRead
-        currentVCN += runLen
+        If runOffsetBytes = 0 Then
+            ' === 稀疏运行：填充 0 ===
+            memset(buffer + bufOffset, 0, bytesToProcess)
+        Else
+            ' === 正常读取 ===
+            If Not ReadClusters(ctx, currentLCN, runLen, buffer + bufOffset) Then Return False
+        End If
+        
+        bufOffset += bytesToProcess
         runPtr += 1 + runLenBytes + runOffsetBytes
     Wend
+    Return True
+End Function
+
+' ============================================================================
+' LZNT1 解压单个块
+' 参数：
+'   inBuf     - 输入缓冲区（已包含 2 字节头部）
+'   inSize    - 输入缓冲区有效大小
+'   outBuf    - 输出缓冲区
+'   outSize   - 输出缓冲区大小
+'   consumed  - 返回实际消耗了多少输入字节（含头部，已 2 字节对齐）
+' 返回：实际解压出的字节数
+' ============================================================================
+Private Function LZNT1Decompress(ByVal inBuf As UByte Ptr, _
+                                 ByVal inSize As ULong, _
+                                 ByVal outBuf As UByte Ptr, _
+                                 ByVal outSize As ULong, _
+                                 ByRef consumed As ULong) As ULong
+    If inSize < 2 Then Return 0
+    
+    Dim header As UShort = *Cast(UShort Ptr, inBuf)
+    Dim chunkSize As ULong = (header And &H0FFF) + 1
+    Dim isCompressed As Boolean = (header And &H8000) <> 0
+    
+    consumed = 2
+    
+    If isCompressed = False Then
+        ' 未压缩块：头部后直接复制 chunkSize 字节
+        Dim dataSize As ULong = chunkSize
+        If consumed + dataSize > inSize Then dataSize = inSize - consumed
+        If dataSize > outSize Then dataSize = outSize
+        memcpy(outBuf, inBuf + consumed, dataSize)
+        consumed += dataSize
+        If (consumed And 1) <> 0 Then consumed += 1
+        Return dataSize
+    End If
+    
+    ' 压缩块：flag byte + token 组
+    Dim srcPos As ULong = 2
+    Dim dstPos As ULong = 0
+    
+    Do While srcPos < inSize And dstPos < outSize And dstPos < chunkSize
+        If srcPos >= inSize Then Exit Do
+        Dim flags As UByte = inBuf[srcPos]
+        srcPos += 1
+        
+        For byt1 As Integer = 0 To 7
+            If srcPos >= inSize Or dstPos >= outSize Or dstPos >= chunkSize Then Exit Do
+            
+            If (flags And (1 Shl byt1)) = 0 Then
+                ' Literal
+                outBuf[dstPos] = inBuf[srcPos]
+                srcPos += 1
+                dstPos += 1
+            Else
+                ' 2-byte pointer: 12-bit offset + 4-bit length
+                If srcPos + 1 > inSize Then Exit Do
+                Dim token As UShort = *Cast(UShort Ptr, inBuf + srcPos)
+                srcPos += 2
+                
+                Dim offset As ULong = (token And &H0FFF) + 1
+                Dim length As ULong = ((token Shr 12) And &H0F) + 3
+                
+                ' 安全回退（offset 不应超过已输出长度）
+                Dim actualOffset As ULong = offset
+                If actualOffset > dstPos Then actualOffset = dstPos
+                
+                For j As ULong = 0 To length - 1
+                    If dstPos >= outSize Or dstPos >= chunkSize Then Exit For
+                    outBuf[dstPos] = outBuf[dstPos - actualOffset]
+                    dstPos += 1
+                Next
+            End If
+        Next
+    Loop
+    
+    consumed = srcPos
+    If (consumed And 1) <> 0 Then consumed += 1
+    Return dstPos
+End Function
+
+' ============================================================================
+' 读取并解压 NTFS 压缩属性
+' 策略：先按 Run 读取全部原始压缩字节到临时缓冲区，再逐个压缩单元解压
+' ============================================================================
+Private Function ReadCompressedAttributeData(ctx As NTFS_CONTEXT Ptr, _
+                                             ByVal nonResAttr As ATTR_HEADER_NONRESIDENT Ptr, _
+                                             ByVal buffer As UByte Ptr, _
+                                             ByVal bufferSize As ULong) As Boolean
+    If nonResAttr = NULL Or buffer = NULL Or bufferSize = 0 Then Return False
+    
+    ' 压缩单元大小（簇数），compUnit 通常是 4，即 16 个簇
+    Dim compUnitClusters As ULong = 1 Shl nonResAttr->compUnit
+    Dim compUnitSize As ULong = compUnitClusters * ctx->clusterSize
+    
+    Dim allocSize As ULongLong = nonResAttr->allocSize
+    If allocSize = 0 Then Return True
+    
+    ' 一次性读取磁盘上的压缩原始数据
+    Dim compressedBuf() As UByte
+    ReDim compressedBuf(0 To allocSize - 1)
+    
+    Dim runPtr As UByte Ptr = Cast(UByte Ptr, nonResAttr) + nonResAttr->runOff
+    Dim currentLCN As ULongLong = 0
+    Dim compOffset As ULongLong = 0
+    Dim isSparse As Boolean
+    
+    Do While runPtr <> NULL And runPtr[0] <> 0 And compOffset < allocSize
+        Dim runLen As ULongLong
+        runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen, isSparse)
+        If runPtr = NULL Then Exit Do
+        
+        Dim bytesToProc As ULong = runLen * ctx->clusterSize
+        If compOffset + bytesToProc > allocSize Then bytesToProc = allocSize - compOffset
+        
+        If isSparse Then
+            memset(@compressedBuf(compOffset), 0, bytesToProc)
+        Else
+            If Not ReadClusters(ctx, currentLCN, runLen, @compressedBuf(compOffset)) Then Return False
+        End If
+        compOffset += bytesToProc
+    Loop
+    
+    ' 逐压缩单元解压
+    Dim srcOffset As ULong = 0
+    Dim dstOffset As ULong = 0
+    
+    Do While srcOffset < compOffset And dstOffset < bufferSize
+        Dim consumed As ULong = 0
+        Dim outAvail As ULong = compUnitSize
+        If dstOffset + outAvail > bufferSize Then outAvail = bufferSize - dstOffset
+        
+        Dim decompressed As ULong = LZNT1Decompress(@compressedBuf(srcOffset), _
+                                                     compOffset - srcOffset, _
+                                                     buffer + dstOffset, _
+                                                     outAvail, _
+                                                     consumed)
+        If decompressed = 0 And consumed = 0 Then Exit Do
+        
+        dstOffset += decompressed
+        srcOffset += consumed
+    Loop
+    
     Return True
 End Function
 
@@ -953,7 +1094,7 @@ Private Function FixupIndexBlock(ctx As NTFS_CONTEXT Ptr, ByVal buf As UByte Ptr
     Dim usn As UShort = usaPtr[0]
     
     For i As Integer = 1 To usaCount - 1
-        Dim sectorEndOff As ULong = i * ctx->bytesPerSector - 2
+        Dim sectorEndOff As ULong = i * ctx->io.bytesPerSector - 2
         If sectorEndOff + 2 > blockSize Then Return False
         Dim lastWordPtr As UShort Ptr = Cast(UShort Ptr, buf + sectorEndOff)
         If lastWordPtr[0] <> usn Then Return False
@@ -1225,7 +1366,16 @@ Private Sub FillFileInfo(ctx As NTFS_CONTEXT Ptr, ByVal recordNum As ULongLong, 
             ConvertToFileTime standardInfo->creationTime, fileInfo.ftCreationTime
             ConvertToFileTime standardInfo->lastAccessTime, fileInfo.ftLastAccessTime
             ConvertToFileTime standardInfo->lastWriteTime, fileInfo.ftLastWriteTime
-            
+        Case ATTR_TYPE_REPARSE_POINT
+            fileInfo.bReparsePoint = True
+            If g->nonResident = 0 Then
+                Dim resR As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, g)
+                Dim rph As REPARSE_DATA_HEADER Ptr = Cast(REPARSE_DATA_HEADER Ptr, _
+                    Cast(UByte Ptr, resR) + resR->dataOff)
+                fileInfo.reparseTag = rph->reparseTag
+            End If
+            ' 同时设置 Win32 风格属性标志
+            fileInfo.dwFileAttributes Or= FILE_ATTRIBUTE_REPARSE_POINT
         Case ATTR_TYPE_DATA
             dataStreamCount += 1
             Dim streamName As String = GetAttributeName(g)
@@ -1261,13 +1411,13 @@ End Function
 '======================================================================
 ' 对外接口 Internal 实现（供包装层调用）
 '======================================================================
-Private Function GetDirList_Internal(ctx As NTFS_CONTEXT Ptr, lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) As Long
+Function NTFS_GetDirList_Internal(ctx As NTFS_CONTEXT Ptr, lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) As Long
     Dim fileCount As Long = 0
     Dim parts() As String
     vbSplit lpDirPath, "\", parts()
     
     If ctx = NULL Then Return -1
-    
+    Print "[NTFS_GetDirList_Internal]lpDirPath:" & lpDirPath
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
     Dim recordNum As ULONGLONG = 5
@@ -1400,7 +1550,7 @@ Private Function GetMFTRecordByPath(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
     fileName = Mid(lpFilePath, InStrRev(lpFilePath, "\") + 1)
     'Print "dirPath:" & dirPath
     ' 调用你现有GetDirList遍历目录，获取文件列表
-    listCount = GetDirList_Internal(ctx, dirPath, fileInfoList()) ' 假设GetDirList返回文件数量，并填充fileInfoList
+    listCount = NTFS_GetDirList_Internal(ctx, dirPath, fileInfoList()) ' 假设GetDirList返回文件数量，并填充fileInfoList
     If listCount <= 0 Then Return 0
     
     'Print "fileName:" & fileName
@@ -1566,160 +1716,127 @@ ContinueDo:
     Print "[!] 错误：未找到 $DATA 属性 (0x80)"
     Return False
     
-ProcessFoundDataAttr : 
-    ' 区分常驻/非常驻属性（大部分文件是非常驻）
-    Dim dataSize As ULong = 0
-   If gAttr->nonResident = 1 Then
+ProcessFoundDataAttr:
+    ' ========== 先扫描重解析点（0xC0）==========
+    Dim hasReparsePoint As Boolean = False
+    Dim reparseTag As ULong = 0
+    Dim attrOff2 As ULong = mrh->attrOffset
+    Do While attrOff2 + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
+        Dim g2 As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff2)
+        If g2->typeID = &HFFFFFFFF Or g2->totalLen = 0 Then Exit Do
+        If g2->typeID = ATTR_TYPE_REPARSE_POINT Then
+            hasReparsePoint = True
+            If g2->nonResident = 0 Then
+                Dim resR As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, g2)
+                Dim rph As REPARSE_DATA_HEADER Ptr = Cast(REPARSE_DATA_HEADER Ptr, _
+                    Cast(UByte Ptr, resR) + resR->dataOff)
+                reparseTag = rph->reparseTag
+            End If
+            Exit Do
+        End If
+        attrOff2 += g2->totalLen
+    Loop
+    
+    If hasReparsePoint Then
+        Print "警告：目标文件是重解析点 (Tag=0x" & Hex(reparseTag, 8) & _
+              ")，读取的是重解析原始数据而非文件内容"
+        ' 继续执行，调用方可根据 bReparsePoint 判断
+    End If
+    
+    ' ========== 区分常驻 / 非常驻 / 压缩 ==========
+    If gAttr->nonResident = 1 Then
         Dim nr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
-        /'Print ">>> [调试] 非常驻 DATA 属性详情:"
-        Print "      LowVCN: " & nr->lowVCN
-        Print "      HighVCN: " & nr->highVCN
-        Print "      DataSize: " & nr->dataSize
-        Print "      AllocSize: " & nr->allocSize
-        Print "      RunOff: " & nr->runOff'/
-        dataSize = nr->dataSize
-        Dim allocatedSize As ULongLong = nr->allocSize ' 已分配大小
         
-        /'Print "    找到非驻留DATA属性："
-        Print "      文件大小: " & fileSize & " 字节"
-        Print "      分配大小: " & allocatedSize & " 字节"'/
-        
-        ' 防御性检查
-        If dataSize = 0 Or dataSize > 256*1024*1024 Then
-            Print "    [!] 非驻留数据大小异常: " & dataSize
-            Goto ContinueDo
-        End If
-        
-        Dim pfileData As UByte Ptr = Allocate(dataSize)
-        If pfileData = NULL Then
-            Print "    [!] 内存分配失败: " & dataSize & " 字节"
-            Goto ContinueDo
-        End If
-        
-        ' 初始化内存为零（处理稀疏运行）
-        memset(pfileData, 0, dataSize)
-        
-        Dim runPtr As UByte Ptr = Cast(UByte Ptr, nr) + nr->runOff
-        Dim currentLCN As ULongLong = 0
-        Dim vcn As ULongLong = nr->lowVCN
-        Dim bytesWritten As ULongLong = 0
+        ' === 声明 clusterBuffer（必须在非常驻分支的最开始）===
         Dim clusterBuffer As UByte Ptr = Allocate(ctx->clusterSize)
-        
         If clusterBuffer = NULL Then
             Print "    [!] 簇缓冲区分配失败"
-            Deallocate(pfileData)
-            Goto ContinueDo
+            Return False
         End If
         
-        'Print "    开始解析RunList..."
-        Dim runIndex As Integer = 0
-        Dim baseVCN As ULongLong = nr->lowVCN  ' 新增：保存该属性的起始 VCN
-
-        While runPtr <> NULL And runPtr[0] <> 0
-            Dim runLen As ULongLong
-            runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen)
-            
-            If runPtr = NULL Then Exit While
-            
-            'Print "      Run " & runIndex & ": VCN=" & vcn & " LCN=" & currentLCN & " 长度=" & runLen & " 簇"
-            
-            If runLen = 0 Or runLen > 1000000 Then
-                Print "    [!] 无效的run长度: " & runLen
-                Exit While
+        ' 防御：dataSize 改用 ULongLong，防止 >4GB 截断
+        Dim dataSize As ULongLong = nr->dataSize
+        If dataSize = 0 Then Return True
+        If dataSize > 256*1024*1024 Then
+            Print "    [!] 文件过大，限制读取 256MB"
+            dataSize = 256*1024*1024
+        End If
+        
+        ' 检查压缩标志
+        Dim isCompressed As Boolean = (nr->flags And ATTR_FLAG_COMPRESSED) <> 0
+        
+        ReDim bytData(dataSize - 1) As UByte
+        
+        If isCompressed Then
+            ' === 压缩属性：使用新的解压读取 ===
+            If Not ReadCompressedAttributeData(ctx, nr, @bytData(0), dataSize) Then
+                Print "    [!] 读取压缩数据失败"
+                Return False
             End If
+            Print "    压缩文件读取并解压完成"
+            result = True
+        Else
+            ' === 非压缩：原有逻辑，但使用 isSparse 修复 ===
+            Dim pfileData As UByte Ptr = Allocate(dataSize)
+            If pfileData = NULL Then Return False
+            memset(pfileData, 0, dataSize)
             
-            For i As ULong = 0 To runLen - 1
-                Dim lcn As ULongLong = currentLCN + i
+            Dim runPtr As UByte Ptr = Cast(UByte Ptr, nr) + nr->runOff
+            Dim currentLCN As ULongLong = 0
+            Dim vcn As ULongLong = nr->lowVCN
+            Dim bytesWritten As ULongLong = 0
+            Dim baseVCN As ULongLong = nr->lowVCN
+            Dim isSparse As Boolean = False
+            
+            While runPtr <> NULL And runPtr[0] <> 0
+                Dim runLen As ULongLong
+                runPtr = ParseRunList(ctx, runPtr, currentLCN, runLen, isSparse)
+                If runPtr = NULL Then Exit While
                 
-                ' ============== 核心修改开始 ==============
-                ' 错误写法：Dim offsetInData As ULongLong = bytesWritten
-                ' 正确写法：基于 (当前VCN - 起始VCN) 计算文件偏移
-                Dim currentVCN As ULongLong = vcn + i
-                Dim offsetInData As ULongLong = (currentVCN - baseVCN) * ctx->clusterSize
-                ' ============== 核心修改结束 ==============
+                If runLen = 0 Or runLen > 1000000 Then Exit While
                 
-                ' 边界检查
-                If offsetInData >= dataSize Then 
-                    Print "      [!] 偏移超出数据大小: " & offsetInData & " >= " & dataSize
-                    Exit For
-                End If
-                
-                Dim bytesToRead As ULong = ctx->clusterSize
-                If offsetInData + bytesToRead > dataSize Then
-                    bytesToRead = dataSize - offsetInData
-                End If
-                
-                If bytesToRead = 0 Then Exit For
-                
-                If lcn = 0 Then
-                    ' 稀疏运行：保持为0（已初始化）
-                    bytesWritten += bytesToRead
-                Else
-                    ' 正常运行：读取数据
-                    If ReadClusters(ctx, lcn, 1, clusterBuffer) Then
-                        memcpy(pfileData + offsetInData, clusterBuffer, bytesToRead)
+                For i As ULong = 0 To runLen - 1
+                    Dim currentVCN As ULongLong = vcn + i
+                    Dim offsetInData As ULongLong = (currentVCN - baseVCN) * ctx->clusterSize
+                    
+                    If offsetInData >= dataSize Then Exit For
+                    
+                    Dim bytesToRead As ULong = ctx->clusterSize
+                    If offsetInData + bytesToRead > dataSize Then bytesToRead = dataSize - offsetInData
+                    If bytesToRead = 0 Then Exit For
+                    
+                    If isSparse Then
+                        ' 稀疏：已 memset 为 0，只需推进计数
                         bytesWritten += bytesToRead
                     Else
-                        Print "      [!] 读取簇失败: LCN=" & lcn
+                        Dim lcn As ULongLong = currentLCN + i
+                        If ReadClusters(ctx, lcn, 1, clusterBuffer) Then
+                            memcpy(pfileData + offsetInData, clusterBuffer, bytesToRead)
+                            bytesWritten += bytesToRead
+                        End If
                     End If
-                End If
-            Next
+                Next
+                
+                vcn += runLen
+            Wend
             
-            vcn += runLen  ' 正确跟踪下一个 Run 的起始 VCN
-            runIndex += 1
-        Wend
-        
-        ' 显示结果
-        Print "    读取完成: " & bytesWritten & " / " & dataSize & " 字节"
-        
-        If bytesWritten > 0 Then
-            ' 显示前16字节（十六进制）
-            /'Print "    前16字节(HEX): ";
-            For i As Integer = 0 To IIf(dataSize > 15, 15, dataSize - 1)
-                Print Hex(pfileData[i], 2) & " ";
-            Next
-            Print
-            Print "编码类型:" & GetEncodingType(pfileData, dataSize)'/
-            ' 显示为ASCII文本
-            /'Print "    ASCII预览: ";
-            Dim strData As String =  Utf8ToAnsi(pfileData, IIf(dataSize > 16, 16, dataSize))
-            Print strData
-            Print'/
-            ReDim bytData(bytesWritten - 1) As UByte
-            For i As Integer = 0 To bytesWritten - 1
-                bytData(i) = pfileData[i]
-            Next
+            If bytesWritten > 0 Then
+                ReDim bytData(bytesWritten - 1)
+                memcpy(@bytData(0), pfileData, bytesWritten)
+                result = True
+            End If
+            Deallocate(pfileData)
         End If
-        result = True
     Else
-        ' 处理小文件（常驻属性）
+        ' 常驻属性（保持不变）
         Dim resAttr As ATTR_HEADER_RESIDENT Ptr = Cast(ATTR_HEADER_RESIDENT Ptr, gAttr)
-        fileSize = resAttr->dataLen
-        ' 直接读取常驻数据
-        'Dim dataPtr As UByte Ptr = @recBuf(0) + attrOff + SizeOf(ATTR_HEADER_RESIDENT) + resAttr->dataOff
-        ' 修正：dataOff是从resident头开始的偏移，不需要加SizeOf
+        Dim dataLen As ULong = resAttr->dataLen
         Dim dataPtr As UByte Ptr = Cast(UByte Ptr, resAttr) + resAttr->dataOff
-        
-        If dataPtr <> NULL Then
-            ' 显示前16字节（十六进制）
-            /'Print "    前16字节(HEX): ";
-            For i As Integer = 0 To IIf(fileSize > 15, 15, fileSize - 1)
-                Print Hex(dataPtr[i], 2) & " ";
-            Next
-            Print
-            Print "编码类型:" & GetEncodingType(dataPtr, fileSize)'/
-            ' 显示为ASCII文本
-            /'Print "    ASCII预览: ";
-            Dim strData As String =  Utf8ToAnsi(dataPtr, IIf(fileSize > 16, 16, fileSize))
-            Print strData
-            Print'/
-            ReDim bytData(fileSize - 1) As UByte
-            For i As Integer = 0 To fileSize - 1
-                bytData(i) = dataPtr[i]
-            Next
+        If dataPtr <> NULL And dataLen > 0 Then
+            ReDim bytData(dataLen - 1)
+            memcpy(@bytData(0), dataPtr, dataLen)
+            result = True
         End If
-            
-        result = True
     End If
     
     ' ========== 最终结果返回 ==========
@@ -1750,35 +1867,25 @@ Private Function MyCopyFile_Internal(ctx As NTFS_CONTEXT Ptr, lpSourceFile As St
     Return True
 End Function
 
-'======================================================================
-' 对外接口（完全保持原签名）
-'======================================================================
-Function GetDirList(lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) As Long
-    ' 自动获取或创建对应卷的上下文
-    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpDirPath)
-    If ctx = NULL Then 
-        ' 卷打开失败，返回错误
-        Return -1
-    End If
-    
-    ' 调用内部实现，传入正确的上下文
-    Return GetDirList_Internal(ctx, lpDirPath, fileInfoList())
-End Function
-
 ' 同理，ReadFile2 和 MyCopyFile 的包装实现：
 Function ReadFile2(ByVal lpFilePath As String, bytData() As UByte) As Boolean
     Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpFilePath)
     If ctx = NULL Then Return False
-    Return ReadFile2_Internal(ctx, lpFilePath, bytData())
+    
+    Dim result As Boolean = ReadFile2_Internal(ctx, lpFilePath, bytData())
+    
+    CloseNTFSVolumeContext(ctx)
+    Return result
 End Function
 
 Function MyCopyFile(lpSourceFile As StringW, lpTargetFile As StringW) As Boolean
-    ' 源文件和目标文件可能在不同卷，需要分别获取上下文
-    ' 但 MyCopyFile 主要是读取源文件，写入目标文件是普通 Win32 API
-    ' 因此只需要源文件的上下文
     Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpSourceFile)
     If ctx = NULL Then Return False
-    Return MyCopyFile_Internal(ctx, lpSourceFile, lpTargetFile)
+    
+    Dim result As Boolean = MyCopyFile_Internal(ctx, lpSourceFile, lpTargetFile)
+    
+    CloseNTFSVolumeContext(ctx)
+    Return result
 End Function
 
 '======================================================================
@@ -1851,6 +1958,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     ' 步骤1：根据路径获取文件 MFT 记录号
     Dim targetRecNo As ULongLong
     If GetMFTRecordByPath(ctx, lpFilePath, targetRecNo) = 0 Then
+        CloseNTFSVolumeContext(ctx)
         Return -1
     End If
 
@@ -1858,11 +1966,15 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
     If Not ReadExternalMFTRecord(ctx, targetRecNo, @recBuf(0)) Then
+        CloseNTFSVolumeContext(ctx)
         Return -1
     End If
 
     Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, @recBuf(0))
-    If mrh->magic <> NTFS_MFT_RECORD_MAGIC Then Return -1
+    If mrh->magic <> NTFS_MFT_RECORD_MAGIC Then
+        CloseNTFSVolumeContext(ctx)
+        Return -1
+    End If
     
     InitListViewData lvwFileStream
     
@@ -1874,6 +1986,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     ReDim streamSizes(0 To 0)
     If Not CollectDataStreamsFromRecord(ctx, recBuf(), streamNames(), streamSizes(), totalStreams) Then
         CommitListViewView lvwFileStream
+        CloseNTFSVolumeContext(ctx)
         Return -1
     End If
 
@@ -1988,5 +2101,68 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
 
     ' 返回最终收集到的流个数
     CommitListViewView lvwFileStream
+    CloseNTFSVolumeContext(ctx)
     Return totalStreams
 End Function
+
+Sub TestWriteSector()
+    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext("C:\")
+    If ctx = NULL Then Exit Sub
+    ' 读取测试
+    Print !"\n=== 读取测试 ==="
+    Dim buffer(511) As UByte
+    
+    If ReadAtOffset(ctx, 0, @buffer(0), 512) Then
+        Print "MBR读取成功！"
+        Print "签名: " & Hex(buffer(510), 2) & Hex(buffer(511), 2)
+        
+        ' 显示分区表
+        Print !"\n分区表信息:"
+        For i As Integer = 0 To 3
+            Dim offset As Integer = 446 + i * 16
+            Dim partType As Byte = buffer(offset + 4)
+            If partType <> 0 Then
+                Print "  分区" & i + 1 & ": 类型=" & Hex(partType, 2)
+            End If
+        Next
+    Else
+        Print "读取失败,错误码: " & GetLastError
+    End If
+    
+    ' 写入测试：仅测试前16扇区（存在PartMgr防护）
+    Print !"\n=== 写入测试（仅前16扇区）==="
+    Print "警告: 直接写入磁盘扇区具有风险！"
+    Print "Windows限制: RING3只能写入前16扇区(0-15)"
+    Print "目标扇区: 15 (相对安全的保留扇区)"
+    
+    Dim confirm As String
+    Input "输入 'YES' 确认写入测试: ", confirm
+    
+    If confirm = "YES" Then
+        ' 修改数据（仅修改前8字节）
+        Dim buffer(511) As UByte
+        For i As Integer = 0 To 7
+            buffer(i) = &H42  ' 写入测试标记 'B'
+        Next
+        
+        ' 写入到扇区1（MBR备份位置，相对安全）
+        If WriteAtOffset(ctx, 1 * 512, @buffer(0), 512) Then
+            Print "写入成功！"
+            
+            ' 验证写入
+            Dim verifyBuffer(511) As UByte
+            ReadAtOffset(ctx, 1 * 512, @verifyBuffer(0), 512)
+            
+            If verifyBuffer(0) = &H42 Then
+                Print "数据验证通过！"
+            Else
+                Print "警告: 数据验证失败"
+            End If
+        Else
+            Print "写入失败，错误码: " & GetLastError
+        End If
+    Else
+        Print "已取消写入测试"
+    End If
+    CloseNTFSVolumeContext ctx
+End Sub

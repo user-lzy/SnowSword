@@ -56,13 +56,13 @@ Function GetRegPathByNodeW(Node As HTREEITEM, treKey As Class_TreeView, ByRef Re
     
     ' 第一步：向上遍历所有【子节点】，拼接纯子路径（跳过根键）
     Do While treKey.GetParent(CurrentNode) <> NULL
-        Print "treKey.Text(CurrentNode):" & treKey.Text(CurrentNode)
+        'Print "treKey.Text(CurrentNode):" & treKey.Text(CurrentNode)
         If RegPath = "" Then
             RegPath = treKey.Text(CurrentNode)
         Else
             RegPath = treKey.Text(CurrentNode) & "\" & RegPath
         End If
-        Print "RegPath:" & RegPath
+        'Print "RegPath:" & RegPath
         CurrentNode = treKey.GetParent(CurrentNode)
     Loop
     
@@ -289,7 +289,7 @@ Function GetRegList1( _
     Dim keyName As WString * MAX_PATH
     Do
         If RegEnumKeyW(KeyHandle, idx, @keyName, MAX_PATH) <> ERROR_SUCCESS Then Exit Do
-        Print keyName
+        'Print keyName
         ReDim Preserve outResult.SubKeys(idx)
         outResult.SubKeys(idx) = keyName
         idx += 1
@@ -773,7 +773,7 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     
     ' ===== Step2: UseHive=False 原有逻辑保留，仅UI优化 =====
     If Not UseHive Then
-        Print "=== DEBUG: UseHive=False ==="
+        'Print "=== DEBUG: UseHive=False ==="
         
         ' ✅ 仅清空当前节点的子节点，不全局清空TreeView
         If Node <> NULL Then
@@ -801,7 +801,7 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
             Next
         End If
         
-        Print "=== DEBUG: UseHive=False 结束 ==="
+        'Print "=== DEBUG: UseHive=False 结束 ==="
         CommitListViewView lvwValue
         Exit Sub
     End If

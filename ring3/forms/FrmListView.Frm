@@ -50,9 +50,9 @@ AcceptFiles=False
 Name=mnuWebConnect
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuWebConnect_mnuRefresh0-10-FrmListView_mnuWebConnect_mnuStep10-10关闭连接FrmListView_mnuWebConnect_mnuCloseConnect0-10-FrmListView_mnuWebConnect_mnuStep20-10显示全部FrmListView_mnuWebConnect_mnuViewAll0-10-FrmListView_mnuWebConnect_mnuStep30-10复制FrmListView_mnuWebConnect_mnuCopy0-10{复制单格数据FrmListView_mnuWebConnect_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuWebConnect_mnuLocateFilePath0-10
-Left=680
-Top=190
+Menu=刷新FrmListView_mnuWebConnect_mnuRefresh0-10-FrmListView_mnuWebConnect_mnuStep10-10关闭连接FrmListView_mnuWebConnect_mnuCloseConnect0-10-FrmListView_mnuWebConnect_mnuStep20-10显示全部FrmListView_mnuWebConnect_mnuViewAll0-10转到进程FrmListView_mnuWebConnect_mnuGotoProcess000-FrmListView_mnuWebConnect_mnuStep30-10复制FrmListView_mnuWebConnect_mnuCopy0-10{复制单格数据FrmListView_mnuWebConnect_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuWebConnect_mnuLocateFilePath0-10
+Left=530
+Top=160
 Tag=
 
 [PopupMenu]
@@ -60,8 +60,8 @@ Name=mnuWindow
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuWindow_mnuRefresh0-10-FrmListView_mnuWindow_mnuStep10-10显示窗口FrmListView_mnuWindow_mnuShowWindow0-10隐藏窗口FrmListView_mnuWindow_mnuHideWindow0-10最小化窗口FrmListView_mnuWindow_mnuMinWindow0-10最大化窗口FrmListView_mnuWindow_mnuMaxWindow0-10-FrmListView_mnuWindow_mnuStep20-10摧毁窗口FrmListView_mnuWindow_mnnuDestroyWindow0-10冻结窗口FrmListView_mnuWindow_mnuFreezeWindow0-10激活窗口FrmListView_mnuWindow_mnuActiveWindow0-10窗口置顶FrmListView_mnuWindow_mnuWindowTop0-10取消置顶FrmListView_mnuWindow_mnuWindowNoTop0-10-FrmListView_mnuWindow_mnuStep30-10复制FrmListView_mnuWindow_mnuCopy0-10{复制单格数据FrmListView_mnuWindow_mnuLittleCopy0-10}
-Left=610
-Top=270
+Left=570
+Top=160
 Tag=
 
 [PopupMenu]
@@ -69,8 +69,8 @@ Name=mnuMemory
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuMemory_mnuRefresh0-10-FrmListView_mnuMemory_mnuStep10-10定位内存FrmListView_mnuMemory_mnuLocateMemoryCtrl+G0-10修改内存属性FrmListView_mnuMemory_mnuChangeMemory0-10查看/编辑内存FrmListView_mnuMemory_mnuEditMemory0-10复制FrmListView_mnuMemory_mnuCopy0-10{复制单格数据FrmListView_mnuMemory_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuMemory_mnuLocateFilePath0-10
-Left=550
-Top=180
+Left=210
+Top=160
 Tag=
 
 [Label]
@@ -104,8 +104,8 @@ Name=mnuHandle
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuHandle_mnuRefresh0-10关闭FrmListView_mnuHandle_mnuCloseHandle0-10-FrmListView_mnuHandle_Step10-10复制FrmListView_mnuHandle_mnuCopy0-10{复制单格数据FrmListView_mnuHandle_mnuLittleCopy0-10}
-Left=490
-Top=260
+Left=90
+Top=160
 Tag=
 
 [TextBox]
@@ -149,27 +149,27 @@ AcceptFiles=False
 Name=mnuUnlock_File
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuUnlock_FIle_mnuRefresh0-10关闭句柄FrmListView_mnuUnlock_FIle_mnuCloseHandle0-10强制关闭句柄FrmListView_mnuUnlock_FIle_mnuForceCloseHandle0-10结束进程FrmListView_mnuUnlock_FIle_mnuTerminateProcess0-10-FrmListView_mnuUnlock_File_mnuStep10-10复制FrmListView_mnuUnlock_File_mnuCopy0-10{复制单格数据FrmListView_mnuUnlock_File_mnuLittleCopy0-10}
-Left=380
-Top=250
+Menu=刷新FrmListView_mnuUnlock_FIle_mnuRefresh0-10关闭句柄FrmListView_mnuUnlock_FIle_mnuCloseHandle0-10强制关闭句柄FrmListView_mnuUnlock_FIle_mnuForceCloseHandle0-10结束进程FrmListView_mnuUnlock_FIle_mnuTerminateProcess0-10定位文件位置(文件管理器)FrmListView_mnuUnlock_File_mnuLocateFile0-10-FrmListView_mnuUnlock_File_mnuStep10-10复制FrmListView_mnuUnlock_File_mnuCopy0-10{复制单格数据FrmListView_mnuUnlock_File_mnuLittleCopy0-10}
+Left=490
+Top=160
 Tag=
 
 [PopupMenu]
 Name=mnuModule
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuModule_mnuRefreshModule0-10卸载模块FrmListView_mnuModule_mnuUnloadModule0-10全局卸载模块FrmListView_mnuModule_mnuGlobalUnloadModule0-10强制卸载模块FrmListView_mnuModule_mnuForceUnloadModule0-10查看HookFrmListView_mnuModule_mnuViewHook0-10-FrmListView_mnuModule_mnuStep10-10查看/编辑内存FrmListView_mnuModule_mnuEditMemory0-10复制FrmListView_mnuModule_mnuCopy0-10{复制单格数据FrmListView_mnuModule_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuModule_mnuLocateFilePath0-10
-Left=450
-Top=150
+Menu=刷新FrmListView_mnuModule_mnuRefresh0-10卸载模块FrmListView_mnuModule_mnuUnloadModule0-10全局卸载模块FrmListView_mnuModule_mnuGlobalUnloadModule0-10强制卸载模块FrmListView_mnuModule_mnuForceUnloadModule0-10查看HookFrmListView_mnuModule_mnuViewHook0-10-FrmListView_mnuModule_mnuStep10-10查看/编辑内存FrmListView_mnuModule_mnuEditMemory0-10复制FrmListView_mnuModule_mnuCopy0-10{复制单格数据FrmListView_mnuModule_mnuLittleCopy0-10}定位文件位置(文件管理器)FrmListView_mnuModule_mnuLocateFile0-10定位文件位置(资源管理器)FrmListView_mnuModule_mnuLocateFileByExplorer0-10
+Left=290
+Top=160
 Tag=
 
 [PopupMenu]
 Name=mnuThread
 Help=
 Index=-1
-Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10暴力摧毁线程(可能蓝屏)FrmListView_mnuThread_mnuForceDestroyThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10查看线程栈FrmListView_mnuThread_mnuViewThreadStack0-10-FrmListView_mnuThread_mnuStep30-10查看/编辑内存FrmListView_mnuThread_mnuEditMemory0-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
-Left=360
-Top=150
+Menu=刷新FrmListView_mnuThread_mnuRefreshThread0-10-FrmListView_mnuThread_Step10-10结束线程FrmListView_mnuThread_mnuTerminateThread0-10强制结束线程FrmListView_mnuThread_mnuForceKillThread0-10暴力摧毁线程(可能蓝屏)FrmListView_mnuThread_mnuForceDestroyThread0-10-FrmListView_mnuThread_Step20-10挂起(暂停)线程FrmListView_mnuThread_mnuSuspendThread0-10恢复线程FrmListView_mnuThread_mnuResumeThread0-10查看线程栈FrmListView_mnuThread_mnuViewThreadStack0-10查看详细信息FrmListView_mnuThread_mnuViewAllInfo0-10-FrmListView_mnuThread_mnuStep30-10查看/编辑内存FrmListView_mnuThread_mnuEditMemory0-10复制FrmListView_mnuThread_mnuCopy0-10{复制单格数据FrmListView_mnuThread_mnuLittleCopy0-10}定位文件位置(资源管理器)FrmListView_mnuThread_mnuLocateFilePath0-10
+Left=450
+Top=160
 Tag=
 
 [PopupMenu]
@@ -177,8 +177,8 @@ Name=mnuPrivilege
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuPrivilege_mnuRefresh0-10-FrmListView_mnuPrivilege_mnuStep10-10启用特权FrmListView_mnuPrivilege_mnuEnablePrivilege0-10禁用特权FrmListView_mnuPrivilege_mnuDisablePrivilege0-10
-Left=390
-Top=350
+Left=370
+Top=160
 Tag=
 
 [PopupMenu]
@@ -186,8 +186,8 @@ Name=mnuMsgHook
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuMsgHook_mnuRefresh0-10-FrmListView_mnuMsgHook_mnuStep10-10移除FrmListView_mnuMsgHook_mnuRemove0-10-FrmListView_mnuMsgHook_mnuStep20-10显示全部FrmListView_mnuMsgHook_mnuViewAll0-10-FrmListView_mnuMsgHook_mnuStep30-10查看/编辑内存FrmListView_mnuMsgHook_mnuEditMemory0-10复制FrmListView_mnuMsgHook_mnuCopy0-10{复制整行数据FrmListView_mnuMsgHook_mnuCopyRowData0-10}
-Left=500
-Top=100
+Left=330
+Top=160
 Tag=
 
 [PopupMenu]
@@ -195,8 +195,8 @@ Name=mnuEventHook
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuEventHook_mnuRefresh0-10-FrmListView_mnuEventHook_mnuStep10-10移除FrmListView_mnuEventHook_mnuRemove0-10-FrmListView_mnuEventHook_mnuStep20-10显示全部FrmListView_mnuEventHook_mnuViewAll0-10-FrmListView_mnuEventHook_mnuStep30-10查看/编辑内存FrmListView_mnuEventHook_mnuEditMemory0-10复制FrmListView_mnuEventHook_mnuCopy0-10{复制整行数据FrmListView_mnuEventHook_mnuCopyRowData0-10}
-Left=600
-Top=100
+Left=10
+Top=160
 Tag=
 
 [PopupMenu]
@@ -204,8 +204,8 @@ Name=mnuHotkey
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuHotkey_mnuRefresh0-10-FrmListView_mnuHotkey_mnuStep10-10移除FrmListView_mnuHotkey_mnuRemove0-10-FrmListView_mnuHotkey_mnuStep20-10显示全部FrmListView_mnuHotkey_mnuViewAll0-10-FrmListView_mnuHotkey_mnuStep30-10查看/编辑内存FrmListView_mnuHotkey_mnuEditMemory0-10复制FrmListView_mnuHotkey_mnuCopy0-10{复制整行数据FrmListView_mnuHotkey_mnuCopyRowData0-10}
-Left=660
-Top=70
+Left=130
+Top=160
 Tag=
 
 [PopupMenu]
@@ -213,8 +213,8 @@ Name=mnuIOFunction
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuIOFunction_mnuRefresh0-10
-Left=490
-Top=360
+Left=170
+Top=160
 Tag=
 
 [PopupMenu]
@@ -222,8 +222,8 @@ Name=mnuProcessTimer
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuProcessTimer_mnuRefresh0-10-FrmListView_mnuProcessTimer_mnuStep10-10移除FrmListView_mnuProcessTimer_mnuRemove0-10-FrmListView_mnuProcessTimer_mnuStep20-10显示全部FrmListView_mnuProcessTimer_mnuViewAll0-10
-Left=600
-Top=360
+Left=410
+Top=160
 Tag=
 
 [PopupMenu]
@@ -231,8 +231,8 @@ Name=mnuMinifilterInstance
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuMinifilterInstance_mnuRefresh0-10-FrmListView_mnuMinifilterInstance_mnuStep10-10分离实例FrmListView_mnuMinifilterInstance_mnuDetachInstance0-10分离所有实例FrmListView_mnuMinifilterInstance_mnuDetachAllInstances0-10
-Left=690
-Top=280
+Left=250
+Top=160
 Tag=
 
 [PopupMenu]
@@ -240,8 +240,17 @@ Name=mnuFileStream
 Help=
 Index=-1
 Menu=刷新FrmListView_mnuFileStream_mnuRefresh0-10-FrmListView_mnuFileStream_mnuStep10-10新建流FrmListView_mnuFileStream_mnuCreateStream0-10从文件复制为流FrmListView_mnuFileStream_mnuCreateStreamFromFile0-10从流复制为文件FrmListView_mnuFileStream_mnuCreateFileFromStream0-10修改流内容FrmListView_mnuFileStream_mnuEditStream0-10删除流FrmListView_mnuFileStream_mnuDeleteStream0-10
-Left=290
-Top=250
+Left=50
+Top=160
+Tag=
+
+[PopupMenu]
+Name=mnuKernelThread
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuKernelThread_mnuRefresh0-10挂起线程FrmListView_mnuKernelThread_mnuSuspendThread0-10恢复线程FrmListView_mnuKernelThread_mnuResumeThread0-10
+Left=610
+Top=160
 Tag=
 
 [ListView]
@@ -758,6 +767,9 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 线程列表"
         Case KernelThread
             GetKernelThreadList ListView
+            TxtFilter1.Text = CurrentInfo->CurrentDriver.DriverName
+            SetListViewFilter ListView, CurrentInfo->CurrentDriver.DriverName
+            CommitListViewView ListView
             Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "]" & " 线程列表"
         Case Windows
             GetWindowList CurrentPID, ListView
@@ -916,7 +928,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case UnlockTheFile
             mnuUnlock_File.hWndForm = hWndForm
             PopupMenu hWndForm, mnuUnlock_File.HMENU
-            
+        Case KernelThread
+            mnuKernelThread.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuKernelThread.HMENU
         Case FileStream
             mnuFileStream.hWndForm = hWndForm
             PopupMenu hWndForm, mnuFileStream.HMENU
@@ -940,44 +954,88 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuThread_mnuTerminateThread ' 结束线程
+            If AfxMsg("确认结束所选线程?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    If KillThread(ValULng(ListView.GetItemText(i, 0))) Then DeleteItemEx ListView, i, False
+                    If KillThread(ValULng(ListView.GetItemText(i, 0))) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
                 End If
             Next
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuForceKillThread ' 强制结束线程
+            If AfxMsg("确认强制结束所选线程?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    'Print "TID:" & Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
-                    If ForceKillThread(Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))) Then DeleteItemEx ListView, i, False
+                    If ForceKillThread(Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
                 End If
             Next
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuForceDestroyThread ' 暴力摧毁线程(可能蓝屏)
+            If AfxMsg("确认暴力摧毁所选线程?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
                     Dim TID As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, 0)))
-                    'Print "TID:" & TID
-                    If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then DeleteItemEx ListView, i, False
+                    If IoControl(hDrv, IOCTL_ForceDestroyThread, @TID, SizeOf(TID)) <> 0 Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
                 End If
             Next
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuSuspendThread ' 挂起线程
-            For i As Integer = 0 To ListView.ItemCount - 1
-                If IsListViewItemSelected(ListView, i) Then MySuspendThread ValULng(ListView.GetItemText(i, 0))
+            If AfxMsg("确认挂起所选线程?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If Not MySuspendThread(ValULng(ListView.GetItemText(i, 0))) Then
+                        bSuccess = False
+                    End If
+                End If
             Next
             GetThreadList CurrentPID, ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuResumeThread ' 恢复线程
-            For i As Integer = 0 To ListView.ItemCount - 1
-                If IsListViewItemSelected(ListView, i) Then MyResumeThread ValULng(ListView.GetItemText(i, 0))
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If Not MyResumeThread(ValULng(ListView.GetItemText(i, 0))) Then
+                        bSuccess = False
+                    End If
+                End If
             Next
             GetThreadList CurrentPID, ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
             Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo_New->ProcessId = CurrentPID
             CurrentInfo_New->ThreadId = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadCallStack
             FrmListView.Show,, Cast(Integer, CurrentInfo_New)
+        Case FrmListView_mnuThread_mnuViewAllInfo ' 查看详细信息
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo_New->ProcessId = CurrentPID
+            CurrentInfo_New->ThreadId = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
+            CurrentInfo_New->intType = ThreadAllInfo
+            FrmOtherInfo.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
             If LastClickedSubItem <> 3 AndAlso LastClickedSubItem <> 4 AndAlso LastClickedSubItem <> 5 Then Exit Sub
             Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
@@ -1010,25 +1068,41 @@ Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
     Dim ModuleHandle As HMODULE = Cast(Any Ptr, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 2), "0x", "&H")))
     Select Case wID
-        Case FrmListView_mnuModule_mnuRefreshModule ' 刷新
+        Case FrmListView_mnuModule_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
             GetModuleList CurrentPID, ListView
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuModule_mnuUnloadModule ' 卸载模块
-            If UnloadModule(CurrentPID, ModuleHandle) Then
-                AfxMsg "卸载成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "卸载失败!是否强制卸载?"
-            End If
+            If AfxMsg("确认卸载所选模块?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If UnloadModule(CurrentPID, ModuleHandle) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuModule_mnuForceUnloadModule ' 强制卸载模块
-            If ForceUnloadModule(CurrentPID, ModuleHandle) Then
-                AfxMsg "卸载成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "卸载失败!"
-            End If
+            If AfxMsg("确认强制卸载所选模块?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    If ForceUnloadModule(CurrentPID, ModuleHandle) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuModule_mnuViewHook ' 查看Hook
             Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->intType = Hook
@@ -1052,7 +1126,10 @@ Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
                (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView.ColumnCount - 1) Then
                 CopyDataToClipboard ListView.GetItemText(LastClickedItem, LastClickedSubItem)
             End If
-        Case FrmListView_mnuModule_mnuLocateFilePath ' 定位文件位置(资源管理器)
+        Case FrmListView_mnuModule_mnuLocateFile ' 定位文件位置(文件管理器)
+            Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 4)
+            If Not LocateFilePath(lpFilePath) Then AfxMsg "未找到文件位置!", "错误"
+        Case FrmListView_mnuModule_mnuLocateFileByExplorer ' 定位文件位置(资源管理器)
             Dim lpFilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 4)
             If Not LocateFilePathByExplorer(lpFilePath) Then AfxMsg "定位失败!", "提示"
    End Select
@@ -1073,38 +1150,45 @@ Sub FrmListView_mnuUnlock_File_WM_Command(hWndForm As hWnd, wID As ULong)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuUnlock_File_mnuCloseHandle ' 关闭句柄
-            'MyLog.PrintLog LOG_INFO,,, "开始关闭句柄..."
+            If AfxMsg("确认关闭所选句柄?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    'MyLog.PrintLog LOG_INFO,,, "找到句柄"
                     If CloseProcessHandle(ValUInt(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 4), "0x", "&H")))) Then
-                        'MyLog.PrintLog LOG_INFO,,, "已关闭句柄"
-                        BusyDelete += 1
                         DeleteItemEx ListView, i, False
-                        BusyDelete -= 1
-                        AfxMsg "关闭句柄成功!", "提示"
                     Else
-                        'AfxMsg "关闭句柄失败!", "提示"
+                        bSuccess = False
                     End If
                 End If
             Next
-            lblNum.Caption = "数量:" & ListView.ItemCount
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuUnlock_File_mnuForceCloseHandle ' 强制关闭句柄
-            '&H863
-            Dim DoSomething As DO_SOMETHING
-            DoSomething.ProcessId = ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
-            DoSomething.TheContext = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
-            IoControl hDrv, IOCTL_CloseHandle, @DoSomething, SizeOf(DO_SOMETHING)
-            If (GetLastError = 0) Then
-                AfxMsg "强制关闭句柄成功!", "提示"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "强制关闭句柄失败!", "提示"
-                MyLog.PrintWin32Error "FrmListView_mnuUnlock_FIle_mnuForceCloseHandle", "IOCTL_CloseHandle"
-            End If
+            If AfxMsg("确认强制关闭所选句柄?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim DoSomething As DO_SOMETHING
+                    DoSomething.ProcessId = ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
+                    DoSomething.TheContext = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
+                    IoControl hDrv, IOCTL_CloseHandle, @DoSomething, SizeOf(DO_SOMETHING)                    
+                    If (GetLastError = 0) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmListView_mnuUnlock_FIle_mnuForceCloseHandle", "IOCTL_CloseHandle"
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuUnlock_File_mnuTerminateProcess ' 结束进程
             KillProcess ValULng(ListView.GetItemText(ListView.SelectedItem, 1))
+        Case FrmListView_mnuUnlock_File_mnuLocateFile ' 定位文件位置(文件管理器)
+            Dim FilePath As StringW = ListView.GetItemText(ListView.SelectedItem, 2)
+            
         Case FrmListView_mnuUnlock_File_mnuLittleCopy ' 复制单格数据
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -1191,13 +1275,20 @@ Sub FrmListView_mnuHandle_WM_Command(hWndForm As hWnd, wID As ULong)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHandle_mnuCloseHandle ' 关闭
+            If AfxMsg("确认关闭所选句柄?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    CloseProcessHandle ValULng(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(ListView.GetItemText(i, 4)))
-                    DeleteItemEx ListView, i
+                    If CloseProcessHandle(ValULng(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(ListView.GetItemText(i, 4)))) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
                 End If
             Next
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuHandle_mnuLittleCopy ' 复制单格数据
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -1218,18 +1309,64 @@ Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd, wID As ULong)
     Me.ListView.hWndForm = hWndForm
     Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+    Dim SelectIndex As Long = ListView.SelectedItem
     Select Case wID
         Case FrmListView_mnuWebConnect_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
             GetWebConnectList CurrentPID, ListView, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuWebConnect_mnuCloseConnect ' 关闭连接
+            If AfxMsg("确认关闭所选连接?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim LocalAddr As String = "", RemoteAddr As String = ""
+                    Dim LocalIP As String = "", RemoteIP As String = ""
+                    Dim LocalPort As Integer, RemotePort As Integer
+                    
+                    If GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll) Then
+                        ' 非过滤模式列：协议(0), PID(1), 状态(2), 本地地址(3), 远程地址(4), 路径(5)
+                        LocalAddr  = ListView.GetItemText(i, 3)
+                        RemoteAddr = ListView.GetItemText(i, 4)
+                    Else
+                        ' 过滤模式列：协议(0), 状态(1), 本地地址(2), 远程地址(3)
+                        LocalAddr  = ListView.GetItemText(i, 2)
+                        RemoteAddr = ListView.GetItemText(i, 3)
+                    End If
+                    
+                    ' 解析 IP:Port 或 [IPv6]:Port
+                    ParseAddrPort(LocalAddr, LocalIP, LocalPort)
+                    ParseAddrPort(RemoteAddr, RemoteIP, RemotePort)
+                    
+                    If CloseTcpConnection(LocalIP, LocalPort, RemoteIP, RemotePort) Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuWebConnect_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
             GetWebConnectList CurrentPID, ListView, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
             CommitListViewView ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
             SetMenuCheckState mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll, Not GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
+            SetMenuStatus mnuWebConnect, FrmListView_mnuWebConnect_mnuGotoProcess, GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll)
+        Case FrmListView_mnuWebConnect_mnuGotoProcess ' 转到进程
+            Dim PID As DWORD = ValUInt(ListView.GetItemText(SelectIndex, 1))
+            SwitchToModule("进程")
+            For i As Integer = 0 To FrmMain.ListView1.ItemCount - 1
+                If ValUInt(FrmMain.ListView1.GetItemText(i, 0)) = PID Then
+                    FrmMain.ListView1.SelectedItem = i
+                    ListView_EnsureVisible(FrmMain.ListView1.hWnd, i, False)
+                    Return
+                End If
+            Next
+            AfxMsg "未找到进程!"
         Case FrmListView_mnuWebConnect_mnuLittleCopy ' 复制单格数据
             ' ==========================================
             ' 3. 复制到剪贴板
@@ -1344,14 +1481,22 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
             GetMsgHookList GetMenuCheckState(mnuMsgHook, FrmListView_mnuMsgHook_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuMsgHook_mnuRemove ' 移除
-            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWindowsHookEx(hHook) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                MyLog.PrintWin32Error "FrmListView_mnuMsgHook_mnuRemove", "UnhookWindowsHookEx", "0x" & WHex(hHook)
-            End If
+            If AfxMsg("确认移除所选消息钩子?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+                    If UnhookWindowsHookEx(hHook) <> 0 Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmListView_mnuMsgHook_mnuRemove", "UnhookWindowsHookEx", "0x" & WHex(hHook)
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuMsgHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
             If Not IsDriverLoaded Then 
@@ -1405,14 +1550,22 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
             GetEventHookList GetMenuCheckState(mnuEventHook, FrmListView_mnuEventHook_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuEventHook_mnuRemove ' 移除
-            Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
-            If UnhookWinEvent(hHook) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                MyLog.PrintWin32Error "FrmListView_mnuEventHook_mnuRemove", "UnhookWinEvent", "0x" & WHex(hHook)
-            End If
+            If AfxMsg("确认移除所选事件钩子?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+                    If UnhookWinEvent(hHook) <> 0 Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmListView_mnuEventHook_mnuRemove", "UnhookWinEvent", "0x" & WHex(hHook)
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuEventHook_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
             If Not IsDriverLoaded Then 
@@ -1464,15 +1617,23 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
             GetHotkeyList GetMenuCheckState(mnuHotkey, FrmListView_mnuHotkey_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuRemove ' 移除
-            Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
-            Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
-            If UnregisterHotKey(hWnd, id) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem, True
-            Else
-                AfxMsg "移除失败!"
-                MyLog.PrintWin32Error "FrmListView_mnuHotkey_mnuRemove", "UnregisterHotKey", "0x" & WHex(hWnd) & " 0x" & WHex(id)
-            End If
+            If AfxMsg("确认移除所选热键?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 1), "0x", "&H"))
+                    Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 3), "0x", "&H")))
+                    If UnregisterHotKey(hWnd, id) <> 0 Then                    
+                        DeleteItemEx ListView, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmListView_mnuHotkey_mnuRemove", "UnregisterHotKey", "0x" & WHex(hWnd) & " 0x" & WHex(id)
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuHotkey_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
             If Not IsDriverLoaded Then 
@@ -1523,14 +1684,23 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
             GetProcessTimerList GetMenuCheckState(mnuProcessTimer, FrmListView_mnuProcessTimer_mnuViewAll), CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
-            Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
-            Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
-            If KillTimer(hWnd, uIDEvent) <> 0 Then
-                AfxMsg "移除成功!"
-                DeleteItemEx ListView, ListView.SelectedItem
-            Else
-                AfxMsg "移除失败!"
-            End If
+            If AfxMsg("确认移除所选进程定时器?",, MB_YESNO) = IDNO Then Exit Sub
+            Dim bSuccess As Boolean = True
+            For i As Integer = ListView.ItemCount - 1 To 0 Step -1
+                If IsListViewItemSelected(ListView, i) Then
+                    Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 4), "0x", "&H")))
+                    Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H"))
+                    If KillTimer(hWnd, uIDEvent) <> 0 Then
+                        DeleteItemEx ListView, i, False
+                    Else
+                        MyLog.PrintWin32Error "FrmListView_mnuProcessTimer_mnuRemove", "KillTimer", "hWnd=0x" & WHex(hWnd) & " uIDEvent=0x" & WHex(uIDEvent)
+                        bSuccess = False
+                    End If
+                End If
+            Next
+            CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+            If bSuccess Then AfxMsg "操作全部成功!" Else AfxMsg "操作部分或全部失败!"
         Case FrmListView_mnuProcessTimer_mnuViewAll ' 显示全部
             lblNum.Caption = "正在刷新..."
             If Not IsDriverLoaded Then 
@@ -1628,6 +1798,7 @@ Sub FrmListView_mnuFileStream_WM_Command(hWndForm As hWnd, wID As ULong)
                 CloseHandle hStream
                 AddItemColListEx ListView, 2,,, WStr(StreamName), WStr("0")
                 CommitListViewView ListView
+                lblNum.Caption = "数量:" & ListView.ItemCount
             Else
                 AfxMsg "创建流失败!"
                 MyLog.PrintWin32Error "FrmListView_mnuFileStream_mnuCreateStream", "CreateFileW", "StreamPath = " & StreamPath
@@ -1675,6 +1846,7 @@ Sub FrmListView_mnuFileStream_WM_Command(hWndForm As hWnd, wID As ULong)
             AfxMsg "从文件复制为流成功!"
             AddItemColListEx ListView, 2,,, WStr(StreamName), WStr(dwFileSize)
             CommitListViewView ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
         Case FrmListView_mnuFileStream_mnuCreateFileFromStream ' 从流复制为文件
             Dim StreamPath As StringW = CurrentInfo->FilePath & ":" & ListView.GetItemText(ListView.SelectedItem, 0)
             Dim FilePath As StringW = AfxInputBox(,,, "提示", "请输入文件路径")
@@ -1721,6 +1893,24 @@ Sub FrmListView_mnuFileStream_WM_Command(hWndForm As hWnd, wID As ULong)
 
     End Select
 End Sub
+
+'[FrmListView.mnuKernelThread]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuKernelThread_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmListView_mnuKernelThread_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetKernelThreadList ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+        Case FrmListView_mnuKernelThread_mnuSuspendThread ' 挂起线程
+
+        Case FrmListView_mnuKernelThread_mnuResumeThread ' 恢复线程
+
+   End Select
+End Sub
+
 
 
 

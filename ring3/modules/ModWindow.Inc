@@ -115,7 +115,7 @@ Function GetProcessMemory(pid As DWORD) As SIZE_T
     Dim hProcess As HANDLE
     Dim pmc As PROCESS_MEMORY_COUNTERS
     
-    hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, FALSE, pid)
+    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)
     If hProcess = NULL Then Return 0
     
     pmc.cb = SizeOf(PROCESS_MEMORY_COUNTERS)
@@ -152,7 +152,7 @@ Public Sub GetVisibleProcessList(lvwForegroundProcess As Class_ListView)
     Dim procList() As Process_Info ' 动态数组：存储汇总后的进程
     
     ' 清空列表
-    Erase procList
+    'Erase procList
     InitListViewData lvwForegroundProcess ' 初始化3列：进程名 | 内存 | 状态
 
     ' 第一步：枚举所有窗口 → 按进程汇总
@@ -170,14 +170,15 @@ Public Sub GetVisibleProcessList(lvwForegroundProcess As Class_ListView)
             ) Then
                 ' 获取进程ID
                 GetWindowThreadProcessId(hWnd, @pid)
-                idx = FindProcessIndex(procList(), PID)
+                idx = FindProcessIndex(procList(), pid)
                 
                 If idx = -1 Then
                     ' 新进程：加入数组
                     count += 1
-                    ReDim Preserve procList(count) As ProcessInfo
+                    ReDim Preserve procList(count) As Process_Info
+                    idx = count  ' ← 关键：更新 idx 为新索引
                     procList(count).pid = pid
-                    procList(count).memory = GetProcessMemory(PID)
+                    procList(count).memory = GetProcessMemory(pid)
                     procList(count).is_hung = FALSE
                     procList(count).window_count = 0
                     

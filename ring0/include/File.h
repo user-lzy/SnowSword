@@ -18,12 +18,14 @@ typedef struct _COPY_PATH {
 	BOOLEAN IsDirectory;
 } COPY_PATH, * PCOPY_PATH;
 
-// 输入结构体，必须扇区对齐
-typedef struct _VOLUME_SECTOR_IO {
-    WCHAR VolumeName[8];          // DOS 卷名，例如 L"C:"，必须以 null 结尾
-    LARGE_INTEGER ByteOffset;     // 卷内字节偏移（扇区对齐）
-    ULONG Length;                 // 字节长度（扇区对齐）
-} VOLUME_SECTOR_IO, * PVOLUME_SECTOR_IO;
+// 请求结构体
+typedef struct _SECTORIO_REQUEST {
+    ULONG DiskNumber;            // 物理磁盘号（0-based）
+    LONGLONG DiskOffset;         // 物理磁盘字节偏移
+    ULONG Length;                // 读写长度（512 对齐）
+    ULONG DataOffset;            // 写操作专用
+    ULONG Reserved[2];           // 对齐保留
+} SECTORIO_REQUEST, * PSECTORIO_REQUEST;
 
 NTKERNELAPI
 NTSTATUS
@@ -349,15 +351,8 @@ IrpWriteFile(
     IN PLARGE_INTEGER  ByteOffset  OPTIONAL
 );
 
-NTSTATUS HandleVolumeSectorRead(
-    _In_ PIRP Irp,
-    _In_ PIO_STACK_LOCATION Stack
-);
-
-NTSTATUS HandleVolumeSectorWrite(
-    _In_ PIRP Irp,
-    _In_ PIO_STACK_LOCATION Stack
-);
+NTSTATUS HandleVolumeSectorRead(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+NTSTATUS HandleVolumeSectorWrite(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 
 NTSTATUS
 IoCompletionRoutine(

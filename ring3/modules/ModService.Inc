@@ -321,33 +321,85 @@ Public Sub GetServiceList(lvwService As Class_ListView)
     timeListInit = segFinish - segStart
     
     ' ====================== 环节4：循环遍历所有服务、解析字段、填充列表 ======================
+    ' ===== 阶段4前声明子阶段累加变量 =====
+    Dim timeBaseParse As Double = 0.0     ' 基础字段解析
+    Dim timeStartType As Double = 0.0     ' 查询启动类型
+    Dim timeProcPath As Double = 0.0      ' 获取进程路径
+    Dim timeSvcPath As Double = 0.0       ' 获取服务模块路径
+    Dim timeAddItem As Double = 0.0       ' 虚拟列表项写入
+    Dim timeSignAsync As Double = 0.0     ' 异步签名提交
+    Dim timeDoEvents As Double = 0.0      ' DoEvents消息处理
+    Dim t1 As Double, t2 As Double
+    Dim dwPID As DWORD
     segStart = Timer()
     For i = 0 To lngServicesReturned - 1
-        ' 基础信息
-        Dim lpServiceName As WString * MAX_PATH = *lpServices->lpServiceName
+        ' 1. 基础字段解析
+        t1 = Timer()
         strServiceName = *lpServices->lpServiceName
-        
-        Dim lpDisplayName As StringW = *lpServices->lpDisplayName
         strDisplayName = *lpServices->lpDisplayName
-        
         strState = GetServiceState(lpServices->ServiceStatusProcess.dwCurrentState)
         strServiceType = GetServiceType(lpServices->ServiceStatusProcess.dwServiceType)
+        dwPID = lpServices->ServiceStatusProcess.dwProcessId
+        strPID = WStr(dwPID)
+        t2 = Timer()
+        timeBaseParse += t2 - t1
         
-        ' 新增信息
-        strStartType = GetServiceStartType(hSCM, lpServices->lpServiceName) ' 启动类型
-        strPID = WStr(lpServices->ServiceStatusProcess.dwProcessId) ' 进程ID（驱动类为0）
-        strProcessPath = GetProcessPath(ValULng(strPID)) ' 进程路径
-        strModulePath = GetServiceModulePath(hSCM, lpServices->lpServiceName) ' 服务模块路径
+        ' 2. 查询启动类型
+        t1 = Timer()
+        strStartType = GetServiceStartType(hSCM, lpServices->lpServiceName)
+        t2 = Timer()
+        timeStartType += t2 - t1
         
-        Dim ItemIndex As Long = AddItemColListEx(lvwService, 8,,, lpServiceName, WStr(strState), WStr(strServiceType), WStr(strStartType), WStr(strPID), WStr(strProcessPath), _
-        WStr(strModulePath), WStr(lpDisplayName))
-        ' 异步校验签名（异步逻辑不计入单服务同步耗时）
+        ' 3. 获取进程路径（驱动PID为0，直接跳过）
+        t1 = Timer()
+        If dwPID > 0 Then
+            strProcessPath = GetProcessPath(dwPID)
+        Else
+            strProcessPath = ""
+        End If
+        t2 = Timer()
+        timeProcPath += t2 - t1
+        
+        ' 4. 获取服务模块路径
+        t1 = Timer()
+        strModulePath = GetServiceModulePath(hSCM, lpServices->lpServiceName)
+        t2 = Timer()
+        timeSvcPath += t2 - t1
+        
+        ' 5. 写入虚拟列表
+        t1 = Timer()
+        Dim ItemIndex As Long = AddItemColListEx(lvwService, 8,,, strServiceName, WStr(strState), WStr(strServiceType), WStr(strStartType), WStr(strPID), WStr(strProcessPath), _
+        WStr(strModulePath), WStr(strDisplayName))
+        t2 = Timer()
+        timeAddItem += t2 - t1
+        
+        ' 6. 异步签名校验提交
+        t1 = Timer()
         VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strModulePath
-        lpServices += 1
+        t2 = Timer()
+        timeSignAsync += t2 - t1
+        
+        ' 7. 消息处理（原逻辑，后续优化频率）
+        t1 = Timer()
         FF_DoEvents
+        t2 = Timer()
+        timeDoEvents += t2 - t1
+        
+        lpServices += 1
     Next
     segFinish = Timer()
     timeEnumLoop = segFinish - segStart
+    
+    ' 循环结束后统一输出子阶段耗时
+    MyLog.PrintLog LOG_INFO,,, "----- 阶段4 内部子阶段耗时 -----"
+    MyLog.PrintLog LOG_INFO,,, "基础字段解析: " & Format(timeBaseParse, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "查询启动类型: " & Format(timeStartType, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "获取进程路径: " & Format(timeProcPath, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "获取服务模块路径: " & Format(timeSvcPath, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "虚拟列表项写入: " & Format(timeAddItem, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "异步签名提交: " & Format(timeSignAsync, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "DoEvents消息处理: " & Format(timeDoEvents, "0.0000") & " s"
+    MyLog.PrintLog LOG_INFO,,, "------------------------------"
     
     ' ====================== 环节5：释放SCM句柄、提交ListView视图刷新 ======================
     segStart = Timer()

@@ -1527,7 +1527,7 @@ Function Exec_File_List(ByVal pc As ParsedCmd Ptr) As Boolean
     InitializeListView File, FrmMain.ListView1
     InitializeTreeView FrmMain.TreeView
     If pc->path = "" Then
-        GetDriveList FrmMain.TreeView
+        'GetDriveList FrmMain.TreeView, False
     Else
         GetFileList_CLI pc->path
     End If
@@ -1701,7 +1701,7 @@ Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) A
         'Case "etw-provider|list"  : InitializeListView EtwProvider, FrmMain.ListView1 : GetETWProviderList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "winsock-spi|list"   : InitializeListView WinsockSPI, FrmMain.ListView1 : GetWinsockSPIList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "task-scheduler|list": InitializeListView TaskScheduler, FrmMain.ListView1 : GetTaskSchedulerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
-        Case "violent-check|scan" : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        'Case "violent-check|scan" : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True
         
         ' GDT / IDT / Minifilter / FilterDriver 等 TreeList 模块保持原样
         Case "gdt|read"           : InitializeTreeList GDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetGDT FrmMain.mCtrlTreeList1 : Return True

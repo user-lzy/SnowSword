@@ -12,6 +12,10 @@ extern POBJECT_TYPE* IoDeviceObjectType;
 #define POOL_TAG_PATH        'htpC'  // CtpH - Copy Path
 #define POOL_TAG_BUFFER      'fubC'  // Cubf - Copy Buffer
 #define POOL_TAG_WORKITEM    'kwoC'  // Cowk - Copy Work Item
+#define SECTORIO_TAG         'oISr'
+
+#define FILE_SYNCHRONIZE_IO_NONALERT    0x00000002
+#define IRP_SYNCHRONIZE_API             0x00000004
 
 // ============================================================================
 // 工作队列结构（用于迭代替代递归）
@@ -970,596 +974,481 @@ IrpWriteFile(
     return IoStatusBlock->Status;
 }
 
-// 通过 DOS 名称（如 L"C:"）打开卷设备对象
-NTSTATUS OpenVolumeDevice(
-    _In_ PCWSTR DosVolumeName,
-    _Out_ PDEVICE_OBJECT* VolumeDevice
+// ========================================================================
+// 获取卷磁盘扩展信息
+// ========================================================================
+NTSTATUS GetVolumeDiskExtentsInfo(
+    _In_ PUNICODE_STRING VolumePath,
+    _Out_ PVOLUME_DISK_EXTENTS* Extents,
+    _Out_ PULONG ExtentsSize
 )
 {
     NTSTATUS status;
-    UNICODE_STRING volName;
-    WCHAR buf[64];
-    HANDLE hFile;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    PFILE_OBJECT fileObject;
+    HANDLE hVolume = NULL;
+    PFILE_OBJECT fileObject = NULL;
+    PDEVICE_OBJECT deviceObject = NULL;
+    IO_STATUS_BLOCK ioStatus;
+    KEVENT event;
+    PIRP irp = NULL;
+    PVOID buffer = NULL;
 
-    RtlStringCbPrintfW(buf, sizeof(buf), L"\\??\\%ws", DosVolumeName);
-    RtlInitUnicodeString(&volName, buf);
+    // 初始分配 16 个 extent 的缓冲区
+    ULONG initialCount = 16;
+    ULONG bufferSize = FIELD_OFFSET(VOLUME_DISK_EXTENTS, Extents) + initialCount * sizeof(DISK_EXTENT);
 
-    InitializeObjectAttributes(
-        &oa,
-        &volName,
-        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-        NULL,
-        NULL);
+    OBJECT_ATTRIBUTES objAttr;
+    InitializeObjectAttributes(&objAttr, VolumePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
 
+    // 打开卷设备
     status = ZwCreateFile(
-        &hFile,
-        FILE_READ_ATTRIBUTES,
-        &oa,
-        &iosb,
+        &hVolume,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        &objAttr,
+        &ioStatus,
         NULL,
-        FILE_ATTRIBUTE_NORMAL,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
         FILE_OPEN,
-        FILE_SYNCHRONOUS_IO_NONALERT,
+        FILE_SYNCHRONIZE_IO_NONALERT,
         NULL,
         0
     );
-
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[GetVolumeDiskExtentsInfo]ZwCreateFile %wZ failed,status=0x%X", VolumePath, status);
         return status;
+    }
 
     status = ObReferenceObjectByHandle(
-        hFile,
+        hVolume,
         0,
         *IoFileObjectType,
         KernelMode,
         (PVOID*)&fileObject,
         NULL
     );
-
-    ZwClose(hFile);
-
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[GetVolumeDiskExtentsInfo]ObReferenceObjectByHandle %wZ failed,status=0x%X", VolumePath, status);
+        ZwClose(hVolume);
         return status;
+    }
 
-    *VolumeDevice = IoGetRelatedDeviceObject(fileObject);
-    ObReferenceObject(*VolumeDevice);
-    ObDereferenceObject(fileObject);
-    return STATUS_SUCCESS;
-}
+    deviceObject = IoGetRelatedDeviceObject(fileObject);
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS GetVolumeDiskExtents(
-    _In_ PDEVICE_OBJECT VolumeDevice,
-    _Out_ ULONG* DiskNumber,
-    _Out_ LARGE_INTEGER* StartingOffset
-)
-{
-    NTSTATUS status;
-    KEVENT event;
-    IO_STATUS_BLOCK ioStatus;
-    PIRP irp;
-    PVOLUME_DISK_EXTENTS extents;
+    // 分配缓冲区（非分页池）
+    buffer = ExAllocatePoolWithTag(NonPagedPoolNx, bufferSize, SECTORIO_TAG);
+    if (!buffer) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
 
+retry_ioctl:
     KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    extents = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(VOLUME_DISK_EXTENTS), 'VdEx');
-    if (!extents)
-        return STATUS_INSUFFICIENT_RESOURCES;
 
     irp = IoBuildDeviceIoControlRequest(
         IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-        VolumeDevice,
+        deviceObject,
         NULL,
         0,
-        extents,
-        sizeof(VOLUME_DISK_EXTENTS),
-        FALSE,
+        buffer,
+        bufferSize,
+        FALSE,          // IRP_MJ_DEVICE_CONTROL
         &event,
-        &ioStatus);
-
-    if (!irp) {
-        ExFreePoolWithTag(extents, 'VdEx');
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    status = IoCallDriver(VolumeDevice, irp);
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = ioStatus.Status;
-    }
-
-    if (NT_SUCCESS(status)) {
-        *DiskNumber = extents->Extents[0].DiskNumber;
-        *StartingOffset = extents->Extents[0].StartingOffset;
-    }
-
-    ExFreePoolWithTag(extents, 'VdEx');
-    return status;
-}
-
-// 打开物理磁盘设备对象（\Device\HarddiskX\DRX）
-//NTSTATUS OpenDiskDevice(
-//    _In_ ULONG DiskNumber,
-//    _Out_ PDEVICE_OBJECT* DiskDevice
-//)
-//{
-//    NTSTATUS status;
-//    WCHAR path[64];
-//    UNICODE_STRING name;
-//    PFILE_OBJECT fileObject;
-//	PDEVICE_OBJECT topDevice;
-//
-//    RtlStringCbPrintfW(path, sizeof(path),
-//        L"\\Device\\Harddisk%d\\DR%d",
-//        DiskNumber, 0);
-//
-//    RtlInitUnicodeString(&name, path);
-//
-//    status = IoGetDeviceObjectPointer(
-//        &name,
-//        FILE_READ_DATA | FILE_WRITE_DATA,
-//        &fileObject,
-//        &topDevice
-//    );
-//
-//    if (!NT_SUCCESS(status))
-//        return status;
-//
-//    // 获取最底层设备对象
-//    PDEVICE_OBJECT physicalDevice = IoGetAttachedDeviceReference(topDevice);
-//    // 释放顶层设备引用（不再需要 fileObject，但注意引用计数）
-//    ObDereferenceObject(fileObject);
-//    // 现在 physicalDevice 就是物理磁盘设备
-//    *DiskDevice = physicalDevice;
-//    return STATUS_SUCCESS;
-//}
-NTSTATUS OpenDiskDevice(
-    _In_ ULONG DiskNumber,
-    _Out_ PDEVICE_OBJECT* DiskDevice
-)
-{
-    NTSTATUS status;
-    UNICODE_STRING us;
-    WCHAR path[64];
-    HANDLE hFile;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    PFILE_OBJECT fileObject;
-
-    RtlStringCbPrintfW(path, sizeof(path), L"\\??\\PhysicalDrive%u", DiskNumber);
-    RtlInitUnicodeString(&us, path);
-    InitializeObjectAttributes(&oa, &us, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    status = ZwCreateFile(
-        &hFile,
-        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        &oa,
-        &iosb,
-        NULL,
-        FILE_ATTRIBUTE_NORMAL,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        FILE_OPEN,
-        FILE_SYNCHRONOUS_IO_NONALERT,
-        NULL,
-        0
+        &ioStatus
     );
-    if (!NT_SUCCESS(status)) return status;
-
-    status = ObReferenceObjectByHandle(
-        hFile,
-        0,
-        *IoFileObjectType,
-        KernelMode,
-        (PVOID*)&fileObject,
-        NULL
-    );
-    ZwClose(hFile);
-    if (!NT_SUCCESS(status)) return status;
-
-    *DiskDevice = IoGetRelatedDeviceObject(fileObject);
-    ObReferenceObject(*DiskDevice);
-    ObDereferenceObject(fileObject);
-
-    return STATUS_SUCCESS;
-}
-
-// 获取磁盘扇区大小
-_IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS GetDiskSectorSize(
-    _In_ PDEVICE_OBJECT DiskDevice,
-    _Out_ PULONG BytesPerSector
-)
-{
-    NTSTATUS status;
-    KEVENT event;
-    IO_STATUS_BLOCK ioStatus;
-    PIRP irp;
-    DISK_GEOMETRY geometry;
-
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    irp = IoBuildDeviceIoControlRequest(
-        IOCTL_DISK_GET_DRIVE_GEOMETRY,
-        DiskDevice,
-        NULL,
-        0,
-        &geometry,
-        sizeof(geometry),
-        FALSE,
-        &event,
-        &ioStatus);
-
-    if (irp == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    status = IoCallDriver(DiskDevice, irp);
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = ioStatus.Status;
-    }
-
-    if (NT_SUCCESS(status))
-        *BytesPerSector = geometry.BytesPerSector;
-
-    return status;
-}
-
-NTSTATUS DiskReadSectors(
-    _In_ PDEVICE_OBJECT DiskDevice,
-    _In_ LARGE_INTEGER ByteOffset,
-    _Inout_updates_bytes_(Length) PVOID Buffer,
-    _In_ ULONG Length
-)
-{
-    KEVENT event;
-    IO_STATUS_BLOCK iosb;
-    PIRP irp;
-    PIO_STACK_LOCATION sp;
-    PMDL mdl;
-
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
-    if (!mdl)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    __try {
-        MmProbeAndLockPages(mdl, KernelMode, IoModifyAccess);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        IoFreeMdl(mdl);
-        return GetExceptionCode();
-    }
-
-    irp = IoAllocateIrp(DiskDevice->StackSize, FALSE);
     if (!irp) {
-        MmUnlockPages(mdl);
-        IoFreeMdl(mdl);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    irp->MdlAddress = mdl;
-    irp->UserEvent = &event;
-    irp->UserIosb = &iosb;
-    irp->Flags = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
-
-    sp = IoGetNextIrpStackLocation(irp);
-    sp->MajorFunction = IRP_MJ_READ;
-    sp->Parameters.Read.ByteOffset = ByteOffset;
-    sp->Parameters.Read.Length = Length;
-
-    IoSetCompletionRoutine(irp,
-        IoCompletionRoutine,
-        &event,
-        TRUE, TRUE, TRUE);
-
-    NTSTATUS status = IoCallDriver(DiskDevice, irp);
-
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = iosb.Status;
-    }
-
-    MmUnlockPages(mdl);
-    IoFreeMdl(mdl);
-
-    return status;
-}
-
-NTSTATUS DiskWriteSectors(
-    _In_ PDEVICE_OBJECT DiskDevice,
-    _In_ LARGE_INTEGER ByteOffset,
-    _In_reads_bytes_(Length) PVOID Buffer,
-    _In_ ULONG Length
-)
-{
-    KEVENT event;
-    IO_STATUS_BLOCK iosb;
-    PIRP irp;
-    PIO_STACK_LOCATION sp;
-    PMDL mdl;
-
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
-    if (!mdl)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    __try {
-        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        IoFreeMdl(mdl);
-        return GetExceptionCode();
-    }
-
-    irp = IoAllocateIrp(DiskDevice->StackSize, FALSE);
-    if (!irp) {
-        MmUnlockPages(mdl);
-        IoFreeMdl(mdl);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    irp->MdlAddress = mdl;
-    irp->UserEvent = &event;
-    irp->UserIosb = &iosb;
-    irp->Flags = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
-
-    sp = IoGetNextIrpStackLocation(irp);
-    sp->MajorFunction = IRP_MJ_WRITE;
-    sp->Flags |= SL_FORCE_DIRECT_WRITE;
-
-    sp->Parameters.Write.ByteOffset = ByteOffset;
-    sp->Parameters.Write.Length = Length;
-
-    IoSetCompletionRoutine(irp,
-        IoCompletionRoutine,
-        &event,
-        TRUE, TRUE, TRUE);
-
-    NTSTATUS status = IoCallDriver(DiskDevice, irp);
-
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = iosb.Status;
-    }
-
-    MmUnlockPages(mdl);
-    IoFreeMdl(mdl);
-
-    return status;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS AlignRangeToSectors(
-    _In_ ULONGLONG ByteOffset,
-    _In_ ULONG Length,
-    _In_ ULONG BytesPerSector,
-    _Out_ ULONGLONG* AlignedByteOffset,
-    _Out_ ULONG* AlignedLength
-)
-{
-    // 新增校验：避免除零异常
-    if (BytesPerSector == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    ULONGLONG startSector = ByteOffset / BytesPerSector;
-    ULONGLONG endSector = (ByteOffset + Length - 1) / BytesPerSector;
-    ULONGLONG alignedOffset = startSector * BytesPerSector;
-    ULONG alignedLength = (ULONG)((endSector - startSector + 1) * BytesPerSector);
-
-    *AlignedByteOffset = alignedOffset;
-    *AlignedLength = alignedLength;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS HandleVolumeSectorRead(
-    _In_ PIRP Irp,
-    _In_ PIO_STACK_LOCATION Stack
-)
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PVOLUME_SECTOR_IO pInput;
-    PDEVICE_OBJECT volumeDevice = NULL;
-    PDEVICE_OBJECT diskDevice = NULL;
-    PVOID kernelBuffer = NULL;
-    ULONG bytesPerSector;
-    ULONG diskNumber;
-    LARGE_INTEGER startOffset;
-
-    ULONG length;
-    ULONG alignedLength;
-    ULONGLONG alignedByteOffset;
-    PVOID userBuffer;
-    ULONG userLen;
-
-    pInput = (PVOLUME_SECTOR_IO)Irp->AssociatedIrp.SystemBuffer;
-
-    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(VOLUME_SECTOR_IO))
-        return STATUS_BUFFER_TOO_SMALL;
-    if (pInput->VolumeName[0] == L'\0') {
-        DbgPrint("VolumeName is empty\n");
-        return STATUS_INVALID_PARAMETER;
-    }
-    length = pInput->Length;
-    if (length == 0) {
-        DbgPrint("Length is zero\n");
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    // 新增校验：MDL空指针防护
-    if (Irp->MdlAddress == NULL) {
-        status = STATUS_INVALID_PARAMETER;
-        goto Cleanup;
-    }
-
-    status = OpenVolumeDevice(pInput->VolumeName, &volumeDevice);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to open volume device for %ws: %X\n", pInput->VolumeName, status);
-        goto Cleanup;
-    }
-
-    status = GetVolumeDiskExtents(volumeDevice, &diskNumber, &startOffset);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to get volume disk extents: %X\n", status);
-        goto Cleanup;
-    }
-
-    status = OpenDiskDevice(diskNumber, &diskDevice);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to open disk device for disk number %u: %X\n", diskNumber, status);
-        goto Cleanup;
-    }
-	DbgPrint("diskDevice:0x%p\n", diskDevice);
-    status = GetDiskSectorSize(diskDevice, &bytesPerSector);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to get disk sector size: %X\n", status);
-        goto Cleanup;
-    }
-
-    status = AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
-        &alignedByteOffset, &alignedLength);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("AlignRangeToSectors failed: %X\n", status);
-        goto Cleanup;
-    }
-
-    userLen = (ULONG)MmGetMdlByteCount(Irp->MdlAddress);
-    if (length > userLen) {
-        status = STATUS_BUFFER_TOO_SMALL;
-        goto Cleanup;
-    }
-
-    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, alignedLength, 'SdRw');
-    if (!kernelBuffer) {
+        DbgPrint("[GetVolumeDiskExtentsInfo]IoBuildDeviceIoControlRequest failed");
         status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Cleanup;
+        goto cleanup;
     }
 
-    {
-        LARGE_INTEGER diskAlignedOffset;
-        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
-        status = DiskReadSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("Failed to read sectors from disk: %X\n", status);
-            goto Cleanup;
+    status = IoCallDriver(deviceObject, irp);
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = ioStatus.Status;
+    }
+
+    // 缓冲区不足，按实际需要的 extent 数量重试
+    if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL) {
+        PVOLUME_DISK_EXTENTS tmp = (PVOLUME_DISK_EXTENTS)buffer;
+        ULONG neededCount = tmp->NumberOfDiskExtents;
+        if (neededCount > initialCount) {
+            ExFreePoolWithTag(buffer, SECTORIO_TAG);
+            initialCount = neededCount;
+            bufferSize = FIELD_OFFSET(VOLUME_DISK_EXTENTS, Extents) + neededCount * sizeof(DISK_EXTENT);
+            buffer = ExAllocatePoolWithTag(NonPagedPoolNx, bufferSize, SECTORIO_TAG);
+            if (!buffer) {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                goto cleanup;
+            }
+            goto retry_ioctl;
         }
     }
 
-    userBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, LowPagePriority);
-    if (!userBuffer) {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Cleanup;
-    }
-    {
-        ULONG offsetInAligned = (ULONG)(pInput->ByteOffset.QuadPart - alignedByteOffset);
-        RtlCopyMemory(userBuffer, (PUCHAR)kernelBuffer + offsetInAligned, length);
+    if (NT_SUCCESS(status)) {
+        *Extents = (PVOLUME_DISK_EXTENTS)buffer;
+        *ExtentsSize = bufferSize;
+        buffer = NULL;  // 所有权转移给调用者
     }
 
-Cleanup:
-    if (kernelBuffer) ExFreePoolWithTag(kernelBuffer, 'SdRw');
-    if (diskDevice) ObDereferenceObject(diskDevice);
-    if (volumeDevice) ObDereferenceObject(volumeDevice);
+cleanup:
+    if (buffer) {
+        ExFreePoolWithTag(buffer, SECTORIO_TAG);
+    }
+    if (fileObject) {
+        ObDereferenceObject(fileObject);
+    }
+    if (hVolume) {
+        ZwClose(hVolume);
+    }
     return status;
 }
 
-NTSTATUS HandleVolumeSectorWrite(
-    _In_ PIRP Irp,
-    _In_ PIO_STACK_LOCATION Stack
+// ========================================================================
+// 卷偏移 → 磁盘偏移转换
+// 支持简单卷和跨区卷（Spanned）。条带卷（Striped）需要额外条带计算
+// ========================================================================
+NTSTATUS TranslateVolumeOffsetToDiskOffset(
+    _In_ PVOLUME_DISK_EXTENTS Extents,
+    _In_ LONGLONG VolumeOffset,
+    _Out_ PULONG DiskNumber,
+    _Out_ PLONGLONG DiskOffset
 )
 {
-    NTSTATUS status = STATUS_SUCCESS;
-    PVOLUME_SECTOR_IO pInput;
-    PDEVICE_OBJECT volumeDevice = NULL;
-    PDEVICE_OBJECT diskDevice = NULL;
-    PVOID kernelBuffer = NULL;
-    ULONG bytesPerSector;
-    ULONG diskNumber;
-    LARGE_INTEGER startOffset;
+    LONGLONG currentVolOffset = 0;
 
-    ULONG length;
-    ULONG alignedLength;
-    ULONGLONG alignedByteOffset;
-    PVOID userBuffer;
+    for (ULONG i = 0; i < Extents->NumberOfDiskExtents; i++) {
+        PDISK_EXTENT ext = &Extents->Extents[i];
+        LONGLONG extLength = ext->ExtentLength.QuadPart;
 
-    pInput = (PVOLUME_SECTOR_IO)Irp->AssociatedIrp.SystemBuffer;
+        // VolumeOffset 落在当前 extent 的卷区间内
+        if (VolumeOffset >= currentVolOffset && VolumeOffset < currentVolOffset + extLength) {
+            *DiskNumber = ext->DiskNumber;
+            // 磁盘绝对偏移 = 该 extent 在磁盘上的起始偏移 + 段内相对偏移
+            *DiskOffset = ext->StartingOffset.QuadPart + (VolumeOffset - currentVolOffset);
+            return STATUS_SUCCESS;
+        }
 
-    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(VOLUME_SECTOR_IO))
-        return STATUS_BUFFER_TOO_SMALL;
-    if (pInput->VolumeName[0] == L'\0')
-        return STATUS_INVALID_PARAMETER;
-    length = pInput->Length;
-    if (length == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    // 新增校验：MDL空指针防护
-    if (Irp->MdlAddress == NULL) {
-        status = STATUS_INVALID_PARAMETER;
-        goto Cleanup;
+        currentVolOffset += extLength;
     }
 
-    status = OpenVolumeDevice(pInput->VolumeName, &volumeDevice);
-    if (!NT_SUCCESS(status)) goto Cleanup;
+    return STATUS_NOT_FOUND;
+}
 
-    status = GetVolumeDiskExtents(volumeDevice, &diskNumber, &startOffset);
-    if (!NT_SUCCESS(status)) goto Cleanup;
+// ========================================================================
+// 同步完成例程
+// ========================================================================
+NTSTATUS SyncCompletionRoutine(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+    PKEVENT event = (PKEVENT)Context;
+    KeSetEvent(event, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;  // 阻止 I/O 管理器继续往下处理
+}
 
-    status = OpenDiskDevice(diskNumber, &diskDevice);
-    if (!NT_SUCCESS(status)) goto Cleanup;
+// ========================================================================
+// 物理磁盘扇区读写
+// 打开 \Device\HarddiskN\Partition0 并发送同步 IRP_MJ_READ/WRITE
+// ========================================================================
+NTSTATUS ReadWritePhysicalDiskSectors(
+    _In_ ULONG DiskNumber,
+    _In_ LONGLONG ByteOffset,
+    _Inout_ PVOID Buffer,
+    _In_ ULONG Length,
+    _In_ BOOLEAN IsWrite
+)
+{
+    NTSTATUS status;
+    HANDLE hDisk = NULL;
+    PFILE_OBJECT fileObject = NULL;
+    PDEVICE_OBJECT deviceObject = NULL;
+    IO_STATUS_BLOCK ioStatus = { 0 };
+    KEVENT event;
+    PIRP irp = NULL;
+    PMDL mdl = NULL;
+    LARGE_INTEGER offset;
+    WCHAR diskPath[64];
+    UNICODE_STRING diskPathUni;
+    OBJECT_ATTRIBUTES objAttr;
+    PIO_STACK_LOCATION irpSp;
 
-    status = GetDiskSectorSize(diskDevice, &bytesPerSector);
-    if (!NT_SUCCESS(status)) goto Cleanup;
+    status = RtlStringCchPrintfW(diskPath, RTL_NUMBER_OF(diskPath),
+        L"\\Device\\Harddisk%d\\Partition0", DiskNumber);
+    if (!NT_SUCCESS(status)) return status;
 
-    status = AlignRangeToSectors(pInput->ByteOffset.QuadPart, length, bytesPerSector,
-        &alignedByteOffset, &alignedLength);
+    RtlInitUnicodeString(&diskPathUni, diskPath);
+    InitializeObjectAttributes(&objAttr, &diskPathUni, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    status = ZwCreateFile(
+        &hDisk,
+        SYNCHRONIZE | (IsWrite ? FILE_WRITE_DATA : FILE_READ_DATA),
+        &objAttr,
+        &ioStatus,
+        NULL,
+        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        FILE_OPEN,
+        FILE_SYNCHRONIZE_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING,
+        NULL,
+        0
+    );
     if (!NT_SUCCESS(status)) {
-        DbgPrint("AlignRangeToSectors failed: %X\n", status);
-        goto Cleanup;
+        DbgPrint("[ReadWritePhysicalDiskSectors] ZwCreateFile %ws failed, status=0x%X\n", diskPath, status);
+        return status;
     }
 
-    if (length > MmGetMdlByteCount(Irp->MdlAddress)) {
+    status = ObReferenceObjectByHandle(hDisk, 0, *IoFileObjectType, KernelMode, (PVOID*)&fileObject, NULL);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[ReadWritePhysicalDiskSectors] ObReferenceObjectByHandle failed, status=0x%X\n", status);
+        ZwClose(hDisk);
+        return status;
+    }
+
+    deviceObject = IoGetRelatedDeviceObject(fileObject);
+
+    mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+    if (!mdl) {
+        DbgPrint("[ReadWritePhysicalDiskSectors] IoAllocateMdl failed\n"); // 诊断输出
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
+    MmBuildMdlForNonPagedPool(mdl);
+
+    offset.QuadPart = ByteOffset;
+
+    irp = IoAllocateIrp(deviceObject->StackSize, FALSE);
+    if (!irp) {
+        DbgPrint("[ReadWritePhysicalDiskSectors] IoAllocateIrp failed\n");
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
+
+    irp->MdlAddress = mdl;
+    irp->UserIosb = &ioStatus;
+    irp->Tail.Overlay.Thread = PsGetCurrentThread();
+
+    irp->Flags |= (IsWrite ? IRP_WRITE_OPERATION : IRP_READ_OPERATION);
+
+    irpSp = IoGetNextIrpStackLocation(irp);
+    irpSp->MajorFunction = IsWrite ? IRP_MJ_WRITE : IRP_MJ_READ;
+    irpSp->Parameters.Read.Length = Length;
+    irpSp->Parameters.Read.ByteOffset = offset;
+    irpSp->DeviceObject = deviceObject;
+    irpSp->FileObject = fileObject;
+
+    if (IsWrite) {
+        irpSp->Flags |= SL_FORCE_DIRECT_WRITE;
+    }
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    IoSetCompletionRoutine(irp, SyncCompletionRoutine, &event, TRUE, TRUE, TRUE);
+
+    status = IoCallDriver(deviceObject, irp);
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = ioStatus.Status;
+    }
+    else {
+        // 如果不是 PENDING，也要获取最终状态
+        status = ioStatus.Status;
+    }
+
+    if (!NT_SUCCESS(status)) {
+        // 诊断输出：如果这里打印出 0xC000009A，说明是底层磁盘驱动返回的资源不足
+        DbgPrint("[ReadWritePhysicalDiskSectors] IoCallDriver failed, status=0x%X, ioStatus=0x%X\n", status, ioStatus.Status);
+    }
+
+cleanup:
+    if (irp) {
+        if (irp->MdlAddress) {
+            IoFreeMdl(irp->MdlAddress);
+            irp->MdlAddress = NULL;
+        }
+        IoFreeIrp(irp);
+    }
+    else {
+        if (mdl) {
+            IoFreeMdl(mdl);
+        }
+    }
+
+    if (fileObject) {
+        ObDereferenceObject(fileObject);
+    }
+    if (hDisk) {
+        ZwClose(hDisk);
+    }
+    return status;
+}
+
+// ========================================================================
+// 释放扩展信息缓冲区
+// ========================================================================
+VOID FreeVolumeDiskExtents(_In_ PVOLUME_DISK_EXTENTS Extents)
+{
+    if (Extents) {
+        ExFreePoolWithTag(Extents, SECTORIO_TAG);
+    }
+}
+
+// =====================================================================
+// 新增：从 PhysicalDrive 路径解析磁盘号
+// =====================================================================
+NTSTATUS ParsePhysicalDrivePath(
+    _In_ PCWSTR Path,
+    _Out_ PULONG DiskNumber
+)
+{
+    UNICODE_STRING pathStr;
+    RtlInitUnicodeString(&pathStr, Path);
+
+    // 支持格式: \??\PhysicalDriveN 或 \\.\PhysicalDriveN
+    UNICODE_STRING prefix;
+    RtlInitUnicodeString(&prefix, L"\\??\\PhysicalDrive");
+
+    if (!RtlPrefixUnicodeString(&prefix, &pathStr, TRUE)) {
+        RtlInitUnicodeString(&prefix, L"\\\\.\\PhysicalDrive");
+        if (!RtlPrefixUnicodeString(&prefix, &pathStr, TRUE)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    // 提取数字部分
+    ULONG prefixLen = prefix.Length / sizeof(WCHAR);
+    PCWSTR numStr = Path + prefixLen;
+
+    ULONG diskNum = 0;
+    while (*numStr >= L'0' && *numStr <= L'9') {
+        diskNum = diskNum * 10 + (*numStr - L'0');
+        numStr++;
+    }
+
+    if (*numStr != L'\0' && *numStr != L' ') {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *DiskNumber = diskNum;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS HandleVolumeSectorRead(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
+{
+    NTSTATUS status;
+    PSECTORIO_REQUEST request = NULL;
+    PVOID dataBuffer = NULL;
+    ULONG readLength = 0;
+
+    DbgPrint("[SectorIo][Read] === IRP entered ===\n");
+
+    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(SECTORIO_REQUEST)) {
+        DbgPrint("[SectorIo][Read] Input buffer too small: got %lu, need %zu\n",
+            Stack->Parameters.DeviceIoControl.InputBufferLength,
+            sizeof(SECTORIO_REQUEST));
         status = STATUS_BUFFER_TOO_SMALL;
-        goto Cleanup;
+        goto EndRequest;
     }
 
-    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, alignedLength, 'SdRw');
-    if (!kernelBuffer) {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Cleanup;
+    request = (PSECTORIO_REQUEST)Irp->AssociatedIrp.SystemBuffer;
+
+    DbgPrint("[SectorIo][Read] Request: DiskNumber=%lu, DiskOffset=%lld, Length=%lu\n",
+        request->DiskNumber, request->DiskOffset, request->Length);
+
+    if (Stack->Parameters.DeviceIoControl.OutputBufferLength < request->Length) {
+        DbgPrint("[SectorIo][Read] Output buffer too small: got %lu, need %lu\n",
+            Stack->Parameters.DeviceIoControl.OutputBufferLength,
+            request->Length);
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto EndRequest;
     }
 
-    if (length != alignedLength || (ULONGLONG)pInput->ByteOffset.QuadPart != alignedByteOffset) {
-        LARGE_INTEGER diskAlignedOffset;
-        // ===================== 修复蓝屏核心错误：偏移计算 =====================
-        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
-        status = DiskReadSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
-        if (!NT_SUCCESS(status)) goto Cleanup;
+    if (request->Length == 0 || (request->Length % 512) != 0) {
+        DbgPrint("[SectorIo][Read] Invalid Length: %lu\n", request->Length);
+        status = STATUS_INVALID_PARAMETER;
+        goto EndRequest;
     }
 
-    userBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, LowPagePriority);
-    if (!userBuffer) {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Cleanup;
-    }
-    {
-        ULONG offsetInAligned = (ULONG)(pInput->ByteOffset.QuadPart - alignedByteOffset);
-        RtlCopyMemory((PUCHAR)kernelBuffer + offsetInAligned, userBuffer, length);
+    readLength = request->Length;
+    dataBuffer = Irp->AssociatedIrp.SystemBuffer;
+
+    DbgPrint("[SectorIo][Read] -> ReadWritePhysicalDiskSectors: disk=%lu, offset=%lld, len=%lu\n",
+        request->DiskNumber, request->DiskOffset, readLength);
+
+    status = ReadWritePhysicalDiskSectors(
+        request->DiskNumber,
+        request->DiskOffset,
+        dataBuffer,
+        readLength,
+        FALSE
+    );
+
+    DbgPrint("[SectorIo][Read] <- status=0x%08X\n", status);
+
+EndRequest:
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = NT_SUCCESS(status) ? readLength : 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return status;
+}
+
+NTSTATUS HandleVolumeSectorWrite(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
+{
+    NTSTATUS status;
+    PSECTORIO_REQUEST request = NULL;
+    PVOID dataBuffer = NULL;
+    ULONG writeLength = 0;
+
+    DbgPrint("[SectorIo][Write] === IRP entered ===\n");
+
+    if (Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(SECTORIO_REQUEST)) {
+        DbgPrint("[SectorIo][Write] Input buffer too small\n");
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto EndRequest;
     }
 
-    {
-        LARGE_INTEGER diskAlignedOffset;
-        diskAlignedOffset.QuadPart = startOffset.QuadPart + alignedByteOffset;
-        status = DiskWriteSectors(diskDevice, diskAlignedOffset, kernelBuffer, alignedLength);
+    request = (PSECTORIO_REQUEST)Irp->AssociatedIrp.SystemBuffer;
+
+    DbgPrint("[SectorIo][Write] Request: DiskNumber=%lu, DiskOffset=%lld, Length=%lu, DataOffset=%lu\n",
+        request->DiskNumber, request->DiskOffset,
+        request->Length, request->DataOffset);
+
+    if (request->Length == 0 || (request->Length % 512) != 0) {
+        status = STATUS_INVALID_PARAMETER;
+        goto EndRequest;
     }
 
-Cleanup:
-    if (kernelBuffer) ExFreePoolWithTag(kernelBuffer, 'SdRw');
-    if (diskDevice) ObDereferenceObject(diskDevice);
-    if (volumeDevice) ObDereferenceObject(volumeDevice);
+    if (request->DataOffset < sizeof(SECTORIO_REQUEST) ||
+        request->DataOffset + request->Length > Stack->Parameters.DeviceIoControl.InputBufferLength) {
+        DbgPrint("[SectorIo][Write] Invalid DataOffset: %lu (buflen=%lu)\n",
+            request->DataOffset,
+            Stack->Parameters.DeviceIoControl.InputBufferLength);
+        status = STATUS_INVALID_PARAMETER;
+        goto EndRequest;
+    }
+
+    writeLength = request->Length;
+    dataBuffer = (PUCHAR)Irp->AssociatedIrp.SystemBuffer + request->DataOffset;
+
+    DbgPrint("[SectorIo][Write] -> ReadWritePhysicalDiskSectors: disk=%lu, offset=%lld, len=%lu\n",
+        request->DiskNumber, request->DiskOffset, writeLength);
+
+    status = ReadWritePhysicalDiskSectors(
+        request->DiskNumber,
+        request->DiskOffset,
+        dataBuffer,
+        writeLength,
+        TRUE
+    );
+
+    DbgPrint("[SectorIo][Write] <- status=0x%08X\n", status);
+
+EndRequest:
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return status;
 }
 

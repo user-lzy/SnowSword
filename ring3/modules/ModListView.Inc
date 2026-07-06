@@ -12,6 +12,7 @@ Enum Interface
     Hook
     Privilege
     ProcessOtherInfo
+    ThreadAllInfo
     MsgHook
     EventHook
     Hotkey
@@ -156,7 +157,21 @@ Type ViewModuleCache
     TreeList_TopVisibleIndex As Long
     TreeList_SavedVisibleCount As Long  ' 🔥 新增：保存TreeList当时的可见项数
     
-    ItemCount As Long            ' 项数量
+    ' ===================== 新增：列宽缓存 =====================
+    ColumnWidths(Any) As Long      ' 每列宽度数组
+    ColumnCount As Long            ' 列数（用于校验）
+    ItemCount As Long ' 项数量
+    
+    ' ===================== 新增：排序状态缓存 =====================
+    SortedColumn As Long       ' 保存时的排序列
+    SortAscending As Boolean   ' 保存时的排序方向
+    
+    ' ===================== 新增：可见索引映射（排序+筛选后的顺序）====================
+    pVisibleIndex As Long Ptr  ' 排序后的可见行索引数组（指向 Snap 的索引）
+    VisibleCount As Long       ' 可见项数量
+    
+    ' ===================== 新增：筛选条件 =====================
+    FilterText As Wstring Ptr  ' 保存时的筛选文本（可选，用于恢复时自动应用）
 End Type
 
 ' ===================== 列配置：列表头右键菜单"选择列"功能 =====================
@@ -168,7 +183,7 @@ Type ColumnConfig
 End Type
 
 Type ListViewContext
-    hLV As HWND
+    hLV As hWnd
 
     Snap As ListViewSnapshot Ptr
 
@@ -345,13 +360,11 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "所属TID",, 100
                 .AddColumn "所属PID",, 100
             Case WebConnect
-                .AddColumn "协议",, 100
-                .AddColumn "PID",, 100
-                .AddColumn "状态",, 150
-                .AddColumn "SrcIP",, 200
-                .AddColumn "DstIP",, 200
-                .AddColumn "SrcPort",, 100
-                .AddColumn "DstPort",, 100
+                .AddColumn "协议",, 80
+                .AddColumn "PID",, 80
+                .AddColumn "状态",, 200
+                .AddColumn "本地地址",, 300
+                .AddColumn "远程地址",, 300
                 .AddColumn "路径",, 500
             Case Hook
                 .AddColumn "Hook类型",, 200
@@ -532,11 +545,13 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 'TreeList.AddColumn "类型", 150
                 'TreeList.AddColumn "状态", 100
             Case WinsockSPI
-                .AddColumn "序号",, 60
-                .AddColumn "协议名称",, 180
-                .AddColumn "提供者路径",, 320
-                .AddColumn "文件厂商",, 120
+                .AddColumn "类型",, 180
+                .AddColumn "ID",, 180
+                .AddColumn "名称",, 180
                 .AddColumn "CLSID",, 260
+                .AddColumn "提供者路径",, 320
+                .AddColumn "公司",, 120
+                .AddColumn "文件描述",, 300
             Case TaskScheduler
                 .AddColumn "序号",, 60
                 .AddColumn "任务路径",, 320
@@ -750,6 +765,7 @@ Sub Cache_AddRow(ByVal moduleType As Interface, ByVal row As LVRow Ptr)
     newRow->ColCount = row->ColCount
     newRow->Fore = row->Fore
     newRow->Back = row->Back
+    newRow->iconIndex = row->iconIndex  ' 🔥 新增
     newRow->Cols = CAllocate(newRow->ColCount, SizeOf(Wstring Ptr))
 
     Dim i As Long
@@ -889,6 +905,17 @@ Private Sub InitAllModuleCache()
             FreeListViewSnapshot g_ViewCache(i).pListSnap
             g_ViewCache(i).pListSnap = 0
         End If
+        ' 新增：释放可见索引映射
+        If g_ViewCache(i).pVisibleIndex <> 0 Then
+            Deallocate g_ViewCache(i).pVisibleIndex
+            g_ViewCache(i).pVisibleIndex = 0
+        End If
+        ' 新增：释放筛选文本
+        If g_ViewCache(i).FilterText <> 0 Then
+            Deallocate g_ViewCache(i).FilterText
+            g_ViewCache(i).FilterText = 0
+        End If
+        
         ' 释放TreeView快照（不变）
         If g_ViewCache(i).pTreeSnap <> 0 Then
             FreeTreeViewSnapshot g_ViewCache(i).pTreeSnap
@@ -920,6 +947,7 @@ Private Function CloneListViewSnapshot(ByVal src As ListViewSnapshot Ptr) As Lis
         drow->ColCount = srow->ColCount
         drow->Fore = srow->Fore
         drow->Back = srow->Back
+        drow->iconIndex = srow->iconIndex  ' 🔥 新增：复制图标索引
 
         If drow->ColCount > 0 Then
             drow->Cols = Callocate(drow->ColCount, SizeOf(WString Ptr))
@@ -931,6 +959,43 @@ Private Function CloneListViewSnapshot(ByVal src As ListViewSnapshot Ptr) As Lis
         End If
 
         dst->Rows[i] = drow
+    Next
+
+    Return dst
+End Function
+
+' ============================================================
+' 直接从 ListView 控件读取当前显示状态（包含排序后的顺序）
+' ============================================================
+Private Function CloneListViewSnapshotFromListView(ByVal lvw As Class_ListView) As ListViewSnapshot Ptr
+    Dim itemCount As Long = lvw.ItemCount
+    If itemCount <= 0 Then Return 0
+
+    ' 获取列数
+    Dim colCount As Long = lvw.ColumnCount
+    If colCount <= 0 Then colCount = 1
+
+    Dim dst As ListViewSnapshot Ptr = Callocate(1, SizeOf(ListViewSnapshot))
+    dst->RowCount = itemCount
+    dst->Rows = Callocate(dst->RowCount, SizeOf(LVRow Ptr))
+
+    Dim i As Long, c As Long
+    For i = 0 To itemCount - 1
+        ' 🔥 关键：按当前显示顺序读取，i 就是当前视觉顺序的索引
+        Dim drow As LVRow Ptr = Callocate(1, SizeOf(LVRow))
+        drow->ColCount = colCount
+        dst->Rows[i] = drow
+
+        ' 读取每列文本
+        drow->Cols = Callocate(drow->ColCount, SizeOf(WString Ptr))
+        For c = 0 To colCount - 1
+            drow->Cols[c] = DupFromStringW(lvw.GetItemText(i, c))
+        Next
+
+        ' 读取颜色
+        GetItemColor lvw, i, drow->Fore, drow->Back
+        ' 读取图表索引
+        drow->iconIndex = lvw.ItemImage(i)
     Next
 
     Return dst
@@ -1027,36 +1092,82 @@ Function IsItemExpanded(tls As Class_mCtrlTreeList, hItem As MC_HTREELISTITEM) A
     Return ((item.state And MC_TLIS_EXPANDED) <> 0)
 End Function
 
+Function GetIndexByListViewHwnd(ByVal hListView As HWND) As Integer
+    For i As Integer = 0 To UBound(CurrentInformationArray)
+        If CurrentInformationArray(i).hListView = hListView Then Return i
+    Next
+    Return -1
+End Function
+
+Private Function GetCtx(ListView As Class_ListView) As ListViewContext Ptr
+    Return Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+End Function
+
 
 
 Sub SaveCurrentListViewState(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
-    Print "===== [DEBUG] SaveListView 模块: " & moduleType & " ====="
-    Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(lvw.hWnd, GWLP_USERDATA))
+    Dim ctx As ListViewContext Ptr = GetCtx(lvw)
     If ctx = 0 OrElse ctx->Snap = 0 OrElse ctx->Snap->RowCount = 0 Then Exit Sub
 
-    If g_ViewCache(moduleType).pListSnap <> 0 Then
-        FreeListViewSnapshot g_ViewCache(moduleType).pListSnap
-        g_ViewCache(moduleType).pListSnap = NULL
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    
+    ' 清理旧数据
+    If cache->pListSnap <> 0 Then
+        FreeListViewSnapshot cache->pListSnap
+        cache->pListSnap = NULL
+    End If
+    If cache->pVisibleIndex <> 0 Then
+        Deallocate cache->pVisibleIndex
+        cache->pVisibleIndex = NULL
+    End If
+    If cache->FilterText <> 0 Then
+        Deallocate cache->FilterText
+        cache->FilterText = NULL
     End If
 
-    g_ViewCache(moduleType).pListSnap = CloneListViewSnapshot(ctx->Snap)
-    If g_ViewCache(moduleType).pListSnap = NULL Then Exit Sub
+    ' ===================== 保存完整数据快照（始终从 ctx->Snap，保证数据完整）====================
+    cache->pListSnap = CloneListViewSnapshot(ctx->Snap)
+    If cache->pListSnap = NULL Then Exit Sub
 
-    g_ViewCache(moduleType).IsCached = True
-    g_ViewCache(moduleType).List_SelectedIndex = lvw.SelectedItem
-    g_ViewCache(moduleType).List_TopVisibleIndex = ListView_GetTopIndex(lvw.hWnd)
-    g_ViewCache(moduleType).ItemCount = ctx->Snap->RowCount
-    g_ViewCache(moduleType).List_SavedCountPerPage = lvw.CountPerPage
+    ' ===================== 保存排序+筛选后的可见索引映射 =====================
+    ' 这保留了用户当前的视觉顺序，无论是否排序/筛选
+    cache->VisibleCount = ctx->VisibleCount
+    If ctx->VisibleCount > 0 Then
+        cache->pVisibleIndex = Callocate(ctx->VisibleCount, SizeOf(Long))
+        memcpy(cache->pVisibleIndex, @ctx->VisibleIndex(0), ctx->VisibleCount * SizeOf(Long))
+    End If
 
-    ' 调试输出
-    Print "  选中: " & g_ViewCache(moduleType).List_SelectedIndex
-    Print "  顶部: " & g_ViewCache(moduleType).List_TopVisibleIndex
-    Print "  CountPerPage保存: " & g_ViewCache(moduleType).List_SavedCountPerPage
-    Print "============================================="
+    ' 保存排序状态
+    cache->SortedColumn = ctx->SortedColumn
+    cache->SortAscending = ctx->SortAscending
+
+    ' 保存筛选条件（可选，用于恢复时提示用户）
+    If ctx->Filter <> 0 AndAlso *ctx->Filter <> "" Then
+        cache->FilterText = DupWStr(ctx->Filter)
+    End If
+
+    ' ===================== 保存列宽 =====================
+    Dim colCount As Long = lvw.ColumnCount
+    If colCount > 0 Then
+        ReDim cache->ColumnWidths(0 To colCount - 1)
+        cache->ColumnCount = colCount
+        Dim c As Long
+        For c = 0 To colCount - 1
+            cache->ColumnWidths(c) = lvw.ColumnWidth(c)
+        Next
+    Else
+        cache->ColumnCount = 0
+        Erase cache->ColumnWidths
+    End If
+
+    cache->IsCached = True
+    cache->List_SelectedIndex = lvw.SelectedItem
+    cache->List_TopVisibleIndex = ListView_GetTopIndex(lvw.hWnd)
+    cache->ItemCount = ctx->Snap->RowCount
+    cache->List_SavedCountPerPage = lvw.CountPerPage
 End Sub
 
 Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
-    Print "===== [DEBUG] RestoreListView 模块: " & moduleType & " ====="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = NULL OrElse cache->IsCached = False OrElse cache->pListSnap = NULL Then 
         Print "  缓存无效"
@@ -1064,54 +1175,108 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
     End If
 
     Dim snap As ListViewSnapshot Ptr = cache->pListSnap
-    Print "  缓存项数: " & snap->RowCount
-    Print "  选中: " & cache->List_SelectedIndex & " | 顶部: " & cache->List_TopVisibleIndex & " | 保存的CountPerPage: " & cache->List_SavedCountPerPage
     If snap->RowCount <= 0 OrElse snap->Rows = 0 Then Exit Sub
 
     InitListViewData lvw
-    Dim i As Long, c As Long
-    For i = 0 To snap->RowCount - 1
+    
+    ' 恢复列宽
+    Dim currentColCount As Long = lvw.ColumnCount
+    If cache->ColumnCount > 0 AndAlso currentColCount = cache->ColumnCount Then
+        Dim c As Long
+        For c = 0 To cache->ColumnCount - 1
+            lvw.ColumnWidth(c) = cache->ColumnWidths(c)
+        Next
+    End If
+    
+    ' 1. 先按完整数据恢复所有行（不要用 pVisibleIndex）
+    For i As Integer = 0 To snap->RowCount - 1
         Dim row As LVRow Ptr = snap->Rows[i]
         If row = 0 Then Continue For
         Dim rowIdx As Long = AddItemEx(lvw, *row->Cols[0], row->Fore, row->Back)
-        For c = 1 To row->ColCount - 1
+        For c As Integer = 1 To row->ColCount - 1
             If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
         Next
+        SetItemIconEx lvw, i, row->iconIndex
     Next
+    
+    ' ===================== 核心：按保存时的可见索引映射顺序恢复数据 =====================
+    ' 如果存在排序/筛选映射，按映射顺序添加；否则按原始顺序
+    Dim i As Long, c As Long
+    If cache->pVisibleIndex <> 0 AndAlso cache->VisibleCount > 0 Then
+        ' 有排序/筛选映射：按保存时的视觉顺序恢复
+        For i = 0 To cache->VisibleCount - 1
+            Dim srcIdx As Long = cache->pVisibleIndex[i]
+            If srcIdx < 0 Or srcIdx >= snap->RowCount Then Continue For
+            
+            Dim row As LVRow Ptr = snap->Rows[srcIdx]
+            If row = 0 Then Continue For
+            
+            Dim rowIdx As Long = AddItemEx(lvw, *row->Cols[0], row->Fore, row->Back)
+            For c = 1 To row->ColCount - 1
+                If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
+            Next
+        Next
+        
+        ' 恢复排序标记到 ctx（让用户知道当前是排序状态）
+        Dim ctx As ListViewContext Ptr = GetCtx(lvw)
+        If ctx <> 0 Then
+            ctx->SortedColumn = cache->SortedColumn
+            ctx->SortAscending = cache->SortAscending
+            ' 可选：恢复筛选
+            ' If cache->FilterText <> 0 Then SetListViewFilter(lvw, *cache->FilterText)
+        End If
+    Else
+        ' 无排序/筛选：按原始顺序恢复
+        For i = 0 To snap->RowCount - 1
+            Dim row As LVRow Ptr = snap->Rows[i]
+            If row = 0 Then Continue For
+            Dim rowIdx As Long = AddItemEx(lvw, *row->Cols[0], row->Fore, row->Back)
+            For c = 1 To row->ColCount - 1
+                If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
+            Next
+        Next
+    End If
+    
+    ' 3. 恢复筛选条件
+    If cache->FilterText <> 0 AndAlso *cache->FilterText <> "" Then
+        SetListViewFilter(lvw, *cache->FilterText)
+    End If
+    
     CommitListViewView lvw
+    
+    ' 5. 如果有排序，重新排序
+    If cache->SortedColumn >= 0 Then
+        Dim ctx As ListViewContext Ptr = GetCtx(lvw)
+        ctx->SortedColumn = cache->SortedColumn
+        ctx->SortAscending = cache->SortAscending
+        SortListViewVisibleIndex ctx
+        ' 排序后需要刷新控件显示
+        InvalidateRect lvw.hWnd, NULL, True
+    End If
 
-    ' 🔥 核心修复：必须等控件渲染完成，再滚动（跨布局失效的90%原因）
-    'FF_DoEvents
-    'lvw.Refresh
-
+    ' 恢复选中、滚动位置...
     If cache->List_SelectedIndex >= 0 And cache->List_SelectedIndex < lvw.ItemCount Then
         lvw.SelectedItem = cache->List_SelectedIndex
         If cache->List_SavedCountPerPage > 0 Then
-            ' 🔥 治本：化简公式 + 修正逻辑（天然不越界）
             Dim targetTopIndex As Long = cache->List_TopVisibleIndex
             Dim maxIndex As Long = lvw.ItemCount - 1
             Dim scrollToIndex As Long = targetTopIndex + cache->List_SavedCountPerPage
-            
-            ' 仅当计算值超出最大索引时，修正为最后一个项（这是公式逻辑的一部分，非兜底）
             If scrollToIndex > maxIndex Then scrollToIndex = maxIndex
-            
-            Print "  计算滚动到索引: " & scrollToIndex
             ListView_EnsureVisible(lvw.hWnd, scrollToIndex, True)
         End If
         lvw.SetFocus
     End If
-    Print "============================================="
 End Sub
 
 Sub SaveCurrentTreeViewState(ByVal tvw As Class_TreeView, ByVal moduleType As Interface)
-    Print "===== [DEBUG] SaveTreeView 模块: " & moduleType & " ====="
+    'Print "===== [DEBUG] SaveTreeView 模块: " & moduleType & " ====="
     If g_ViewCache(moduleType).pTreeSnap <> NULL Then
         FreeTreeViewSnapshot g_ViewCache(moduleType).pTreeSnap
         g_ViewCache(moduleType).pTreeSnap = NULL
     End If
 
     Dim totalCount As Long = tvw.GetCount
-    Print "  总项数: " & totalCount
+    'Print "  总项数: " & totalCount
     If totalCount <= 0 Then Exit Sub
 
     Dim pNewSnap As TreeViewSnapshot Ptr = Callocate(1, SizeOf(TreeViewSnapshot))
@@ -1172,16 +1337,16 @@ Sub SaveCurrentTreeViewState(ByVal tvw As Class_TreeView, ByVal moduleType As In
     End If
 
     ' 🔥 关键调试输出
-    Print "  保存选中索引: " & g_ViewCache(moduleType).Tree_SelectedIndex
+    /'Print "  保存选中索引: " & g_ViewCache(moduleType).Tree_SelectedIndex
     Print "  保存顶部可见索引: " & g_ViewCache(moduleType).Tree_TopVisibleIndex
-    Print "============================================="
+    Print "============================================="'/
     
     Deallocate hItemMap
 End Sub
 
 ' =============================================================================
 Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As Interface)
-    Print "===== [DEBUG] RestoreTreeView 模块: " & moduleType & " ====="
+    'Print "===== [DEBUG] RestoreTreeView 模块: " & moduleType & " ====="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = NULL OrElse cache->IsCached = False OrElse cache->pTreeSnap = NULL Then 
         Print "  缓存无效，退出"
@@ -1189,8 +1354,8 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
     End If
 
     Dim snap As TreeViewSnapshot Ptr = cache->pTreeSnap
-    Print "  缓存总项数: " & snap->NodeCount
-    Print "  缓存选中: " & cache->Tree_SelectedIndex & " | 缓存顶部: " & cache->Tree_TopVisibleIndex
+    'Print "  缓存总项数: " & snap->NodeCount
+    'Print "  缓存选中: " & cache->Tree_SelectedIndex & " | 缓存顶部: " & cache->Tree_TopVisibleIndex
     If snap->NodeCount <= 0 OrElse snap->Nodes = 0 Then Exit Sub
 
     tvw.DeleteAllItems()
@@ -1214,21 +1379,21 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
     ' 恢复选中
     If cache->Tree_SelectedIndex >= 0 And cache->Tree_SelectedIndex < snap->NodeCount Then
         tvw.Selection = hNewNodes(cache->Tree_SelectedIndex)
-        Print "  执行恢复选中: " & cache->Tree_SelectedIndex
+        'Print "  执行恢复选中: " & cache->Tree_SelectedIndex
     End If
 
     ' 恢复滚动条
     If cache->Tree_TopVisibleIndex >= 0 And cache->Tree_TopVisibleIndex < snap->NodeCount Then
         tvw.SelectSetFirstVisible(hNewNodes(cache->Tree_TopVisibleIndex))
-        Print "  执行恢复顶部: " & cache->Tree_TopVisibleIndex
+        'Print "  执行恢复顶部: " & cache->Tree_TopVisibleIndex
     End If
 
     If cache->Tree_SelectedIndex >= 0 Then tvw.SetFocus()
-    Print "============================================="
+    'Print "============================================="
 End Sub
 
 Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)
-    Print "=== [Save] Enter ==="
+    'Print "=== [Save] Enter ==="
     
     If g_ViewCache(moduleType).pTreeListSnap <> 0 Then
         FreeTreeListSnapshot g_ViewCache(moduleType).pTreeListSnap
@@ -1259,7 +1424,7 @@ Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
             cur = tls.GetNextItem(cur, MC_TLGN_PARENT)
         Loop
     Wend
-    Print "[Save] 真实总节点数 = " & totalCount
+    'Print "[Save] 真实总节点数 = " & totalCount
     If totalCount <= 0 Then Exit Sub
 
     Dim colCount As Long = tls.GetColumnCount : If colCount <= 0 Then colCount = 1
@@ -1293,7 +1458,7 @@ Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
         pRow->Expanded = IsItemExpanded(tls, hCur)
         ' 【新增调试】打印所有节点的状态，重点看 hrdevmon
         Dim nodeText As StringW = tls.GetItemText(hCur, 0)
-        If pRow->Expanded Then Print "[DEBUG Save] 索引=" & index & " 文本=[" & nodeText & "] Expanded=" & pRow->Expanded & " 深度=" & depth
+        'If pRow->Expanded Then Print "[DEBUG Save] 索引=" & index & " 文本=[" & nodeText & "] Expanded=" & pRow->Expanded & " 深度=" & depth
 
         hItemMap[index] = hCur
         pNewSnap->Rows[index] = pRow
@@ -1363,12 +1528,12 @@ Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
     End If
 
     Deallocate hItemMap
-    Print "=== [Save] Exit ==="
+    'Print "=== [Save] Exit ==="
 End Sub
 Sub PrintExpandedItem(tls As Class_mCtrlTreeList)
     Dim cur As MC_HTREELISTITEM = tls.GetRoot()
     While cur <> 0
-        If IsItemExpanded(tls, cur) Then Print "[Restore Info]" & tls.GetItemText(cur, 0) & "被展开!"
+        'If IsItemExpanded(tls, cur) Then Print "[Restore Info]" & tls.GetItemText(cur, 0) & "被展开!"
         Dim child As MC_HTREELISTITEM = tls.GetNextItem(cur, MC_TLGN_CHILD)
         If child <> 0 Then
             cur = child
@@ -1390,16 +1555,16 @@ Sub PrintExpandedItem(tls As Class_mCtrlTreeList)
     Wend
 End Sub
 Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)
-    Print "=== [Restore] Enter ==="
+    'Print "=== [Restore] Enter ==="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = 0 OrElse cache->IsCached = False OrElse cache->pTreeListSnap = 0 Then
-        Print "[Restore] 无有效缓存，退出"
+        'Print "[Restore] 无有效缓存，退出"
         Exit Sub
     End If
     
     Dim snap As TreeListSnapshot Ptr = cache->pTreeListSnap
-    Print "[Restore] 缓存总节点数 = " & snap->RowCount
-    Print "[Restore] 选中索引: " & cache->TreeList_SelectedIndex & " | 顶部索引: " & cache->TreeList_TopVisibleIndex
+    'Print "[Restore] 缓存总节点数 = " & snap->RowCount
+    'Print "[Restore] 选中索引: " & cache->TreeList_SelectedIndex & " | 顶部索引: " & cache->TreeList_TopVisibleIndex
     If snap->RowCount <= 0 OrElse snap->Rows = 0 Then Exit Sub
     
     ' 清空控件
@@ -1458,7 +1623,7 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
     ' ==============================================
     ' 🔥 完全恢复你的原代码：统一设置展开/折叠（保留 TOGGLE 和调试打印）
     ' ==============================================
-    Print "[DEBUG Restore] 开始第二阶段：统一设置展开/折叠"
+    'Print "[DEBUG Restore] 开始第二阶段：统一设置展开/折叠"
     For i = 0 To snap->RowCount - 1
         Dim row As TLRow Ptr = snap->Rows[i]
         If hNewItems[i] = 0 Or row = 0 Then Continue For
@@ -1466,7 +1631,7 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
         ' 核心修复：严格按照缓存的状态，仅展开/折叠 当前节点
         If row->Expanded Then
             ' 🔥 恢复你的调试打印
-            If row->Cols[0] <> 0 Then Print "被展开节点:" & *row->Cols[0]
+            'If row->Cols[0] <> 0 Then Print "被展开节点:" & *row->Cols[0]
             ' 🔥 保留你的 TOGGLE 逻辑（仅展开一层）
             tls.Expand(hNewItems[i], MC_TLE_TOGGLE, 0)
         Else
@@ -1506,7 +1671,7 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
         ' 3. 🔥 对最后这个项调用 EnsureVisible（利用它置底的特性，把目标顶到顶部）
         If hScrollItem <> 0 Then
             tls.EnsureVisible(hScrollItem)
-            Print "[DEBUG] 反向置顶成功：目标DFS索引=" & cache->TreeList_TopVisibleIndex
+            'Print "[DEBUG] 反向置顶成功：目标DFS索引=" & cache->TreeList_TopVisibleIndex
         End If
     End If
     
@@ -1518,7 +1683,7 @@ Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType 
     
     ' 释放内存
     Deallocate hNewItems
-    Print "=== [Restore] Exit ==="
+    'Print "=== [Restore] Exit ==="
 End Sub
 
 Sub Cache_DeleteRow(ByVal moduleType As Interface, ByVal index As Long)
@@ -1555,15 +1720,20 @@ Sub Cache_DeleteRow(ByVal moduleType As Interface, ByVal index As Long)
     End If
 End Sub
 
-Function GetIndexByListViewHwnd(ByVal hListView As HWND) As Integer
-    For i As Integer = 0 To UBound(CurrentInformationArray)
-        If CurrentInformationArray(i).hListView = hListView Then Return i
-    Next
-    Return -1
-End Function
-
-Private Function GetCtx(ListView As Class_ListView) As ListViewContext Ptr
-    Return Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+' 辅助函数：将 0x 前缀转换为 FreeBasic 认识的 &H 前缀
+Private Function HexToVal(hexStr As WString Ptr) As UInteger
+    If hexStr = NULL OrElse *hexStr = WStr("") Then Return 0
+    
+    Dim s As WString * 64
+    Dim lenS As Long = Len(*hexStr)
+    
+    If lenS >= 2 AndAlso (Mid(*hexStr, 1, 2) = WStr("0x") OrElse Mid(*hexStr, 1, 2) = WStr("0X")) Then
+        s = WStr("&H") & Mid(*hexStr, 3)
+    Else
+        s = *hexStr
+    End If
+    
+    Return ValULng(s)
 End Function
 
 ' 统一行比较函数：返回>0表示idx1应排在idx2后，<0表示排在前，=0相等
@@ -1598,8 +1768,19 @@ Private Function CompareRow( _
     
     If isNumber Then
         ' 数值比较
-        Dim val1 As Double = Val(*cell1)
-        Dim val2 As Double = Val(*cell2)
+        Dim val1 As Double, val2 As Double
+        ' 判断是否为十六进制字符串（含 0x 前缀）
+        If InStrW(*cell1, WStr("0x")) = 1 OrElse InStrW(*cell1, WStr("0X")) = 1 Then
+            val1 = CDbl(HexToVal(*cell1))
+        Else
+            val1 = Val(*cell1)
+        End If
+        
+        If InStrW(*cell2, WStr("0x")) = 1 OrElse InStrW(*cell2, WStr("0X")) = 1 Then
+            val2 = CDbl(HexToVal(*cell2))
+        Else
+            val2 = Val(*cell2)
+        End If
         If val1 > val2 Then Return 1
         If val1 < val2 Then Return -1
         Return 0
@@ -1719,46 +1900,71 @@ Private Sub ListView_QuickSort( _
     End If
 End Sub
 
-Private Function IsValidNumberW(pwStr As WString Ptr) As Boolean
-    ' 空指针/空字符串 → 不是数字
+Private Function IsValidNumberW(pwStr As WString Ptr, ByRef isHex As Boolean = False) As Boolean
     If pwStr = NULL OrElse *pwStr = WStr("") Then Return False
     
     Dim p As WString Ptr = pwStr
-    Dim hasDot As Boolean = False    ' 是否已出现小数点
-    Dim hasDigit As Boolean = False  ' 是否包含至少一个数字
+    Dim hasDot As Boolean = False
+    Dim hasDigit As Boolean = False
+    isHex = False  ' 默认非十六进制
     
-    ' 跳过开头空白（空格、制表符，不需要可以直接删掉这一段）
+    ' 跳过开头空白
     While *p <> 0 AndAlso (*p = 32 OrElse *p = 9)
         p += 1
     Wend
-    If *p = 0 Then Return False ' 全是空白
+    If *p = 0 Then Return False
     
-    ' 处理正负号（只能出现在开头）
-    If *p = 43 OrElse *p = 45 Then ' + 或 - 的Unicode码值
+    ' 处理正负号
+    If *p = 43 OrElse *p = 45 Then
         p += 1
+    End If
+    
+    ' === 新增：检测 0x / 0X 前缀 ===
+    If *p = 48 Then  ' 字符 '0'
+        Dim nextChar As UShort = *(p + 1)
+        If nextChar = 120 OrElse nextChar = 88 Then  ' 'x' 或 'X'
+            isHex = True
+            p += 2  ' 跳过 "0x"
+            ' 十六进制必须至少有一个有效字符
+            If *p = 0 Then Return False
+            ' 十六进制不允许小数点
+            hasDot = True  ' 借用标记，防止后续进入小数点逻辑
+        End If
     End If
     
     ' 逐字符校验
     While *p <> 0
-        Dim c As UShort = *p ' 直接取宽字符的编码值
-        If c = 46 Then 
-            ' 小数点，只能出现一次
-            If hasDot Then Return False
-            hasDot = True
-        ElseIf c >= 48 AndAlso c <= 57 Then 
-            ' 0-9 数字字符
-            hasDigit = True
-        ElseIf c = 32 OrElse c = 9 Then 
-            ' 尾部空白，直接结束校验
-            Exit While
+        Dim c As UShort = *p
+        
+        If isHex Then
+            ' === 十六进制模式：0-9, a-f, A-F ===
+            If (c >= 48 AndAlso c <= 57) OrElse _      ' 0-9
+               (c >= 65 AndAlso c <= 70) OrElse _       ' A-F
+               (c >= 97 AndAlso c <= 102) Then           ' a-f
+                hasDigit = True
+            ElseIf c = 32 OrElse c = 9 Then
+                Exit While  ' 尾部空白
+            Else
+                Return False
+            End If
+            
         Else
-            ' 出现其他非数字字符，直接判定为非数字
-            Return False
+            ' === 十进制模式（原有逻辑）===
+            If c = 46 Then 
+                If hasDot Then Return False
+                hasDot = True
+            ElseIf c >= 48 AndAlso c <= 57 Then 
+                hasDigit = True
+            ElseIf c = 32 OrElse c = 9 Then 
+                Exit While
+            Else
+                Return False
+            End If
         End If
+        
         p += 1
     Wend
     
-    ' 必须至少包含一个数字（排除只有 "+"、"-"、"." 的非法情况）
     Return hasDigit
 End Function
 
@@ -1794,14 +2000,14 @@ Private Sub CacheColumnTypes(ctx As ListViewContext Ptr)
             If Not IsValidNumberW(cell) Then
                 ctx->ColumnIsNumber(col) = False
                 ' 新增：打印第一个触发非数字判定的单元格内容
-                'Print "列" & col & "第" & i & "行 非数字内容: [" & cell & "]"
+                'Print "列" & col & "第" & i & "行 非数字内容: [" & *cell & "]"
             End If
         Next
     Next
     ' 打印每一列的最终判定结果
-    For col As Long = 0 To colCount - 1
-        'Print "列" & col & "类型:" & IIf(ctx->ColumnIsNumber(col), WStr("数字"), WStr("文本"))
-    Next
+    /'For col As Long = 0 To colCount - 1
+        Print "列" & col & "类型:" & IIf(ctx->ColumnIsNumber(col), WStr("数字"), WStr("文本"))
+    Next'/
 End Sub
 
 ' 高性能自适应排序入口：对外唯一接口，自动选择最优算法
@@ -1985,7 +2191,12 @@ Function AddItemColListEx CDecl ( _
     For i As Long = 0 To colCnt - 1
         Dim src As WCHAR Ptr = va_arg(ap, WCHAR Ptr)
         ap = va_next(ap, WCHAR Ptr)
-        row->Cols[i] = DupWStr(src)
+        ' 增加空指针保护
+        'If src = NULL OrElse IsBadReadPtr(src, 2) Then  ' 至少能读1个WCHAR
+        '    row->Cols[i] = CAllocate(1, SizeOf(WCHAR))  ' 分配真正的空字符串
+        'Else
+            row->Cols[i] = DupWStr(src)
+        'End If
     Next
 
     Dim idx As Long = ctx->Snap->RowCount
@@ -2006,8 +2217,18 @@ Function AddItemColListEx CDecl ( _
 End Function
 
 Sub SetItemTextEx(ListView As Class_ListView, Row As Long, Col As Long, Text As StringW)
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+        
+    ' 安全校验：上下文/快照为空直接退出
+    If ctx = NULL Then Exit Sub
+    If ctx->Snap = NULL Then Exit Sub
+    If ctx->Snap->RowCount = 0 Then
+        ReDim ctx->VisibleIndex(-1)
+        ctx->VisibleCount = 0
+        SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, 0, 0)
+        InvalidateRect(ListView.hWnd, NULL, True)
+        Exit Sub
+    End If
 
     If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
     Dim r As LVRow Ptr = ctx->Snap->Rows[Row]
@@ -2045,8 +2266,18 @@ Sub SetItemTextEx(ListView As Class_ListView, Row As Long, Col As Long, Text As 
 End Sub
 
 Sub SetItemIconEx(ListView As Class_ListView, Row As Long, iconIndex As Long)
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+        
+    ' 安全校验：上下文/快照为空直接退出
+    If ctx = NULL Then Exit Sub
+    If ctx->Snap = NULL Then Exit Sub
+    If ctx->Snap->RowCount = 0 Then
+        ReDim ctx->VisibleIndex(-1)
+        ctx->VisibleCount = 0
+        SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, 0, 0)
+        InvalidateRect(ListView.hWnd, NULL, True)
+        Exit Sub
+    End If
 
     If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
     Dim r As LVRow Ptr = ctx->Snap->Rows[Row]
@@ -2057,9 +2288,19 @@ Sub SetItemIconEx(ListView As Class_ListView, Row As Long, iconIndex As Long)
 End Sub
 
 Sub SetListViewFilter(ListView As Class_ListView, s As StringW)
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
-
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+        
+    ' 安全校验：上下文/快照为空直接退出
+    If ctx = NULL Then Exit Sub
+    If ctx->Snap = NULL Then Exit Sub
+    If ctx->Snap->RowCount = 0 Then
+        ReDim ctx->VisibleIndex(-1)
+        ctx->VisibleCount = 0
+        SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, 0, 0)
+        InvalidateRect(ListView.hWnd, NULL, True)
+        Exit Sub
+    End If
+    'Print "开始筛选"
     If ctx->Filter <> 0 Then
         Deallocate(ctx->Filter)
         ctx->Filter = 0

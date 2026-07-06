@@ -99,11 +99,11 @@ NTSTATUS OpenProcess(HANDLE ProcessId, PHANDLE hTargetProcess);
 
 NTSTATUS GetProcessHandleCount(HANDLE ProcessId, PULONG pHandleCount);
 
-PEPROCESS GetEProcess(HANDLE ProcessId);
+NTSTATUS GetEProcess(HANDLE ProcessId, PEPROCESS* pEProcess);
 
 NTSTATUS GetProcessImageName(
     HANDLE ProcessId,
-    LPWSTR ProcessImageName
+    PUNICODE_STRING ImageName
 );
 
 NTSTATUS MyPsLookupProcessByProcessId(HANDLE ProcessId, PEPROCESS* Process);

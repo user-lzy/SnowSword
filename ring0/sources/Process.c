@@ -531,56 +531,145 @@ NTSTATUS GetProcessHandleCount(HANDLE ProcessId, PULONG pHandleCount) {
     return ZwQueryInformationProcess(ProcessHandle, ProcessHandleCount, pHandleCount, sizeof(*pHandleCount), NULL);
 }
 
-PEPROCESS GetEProcess(HANDLE ProcessId)
+NTSTATUS GetEProcess(HANDLE ProcessId, PEPROCESS* pEProcess)
 {
-	PEPROCESS pEProcess = NULL;
-    NTSTATUS status = PsLookupProcessByProcessId(ProcessId, &pEProcess);
-	if (status != STATUS_SUCCESS || pEProcess == NULL)
+    NTSTATUS status = PsLookupProcessByProcessId(ProcessId, pEProcess);
+	if (status != STATUS_SUCCESS || *pEProcess == NULL)
     {
 		DbgPrint("PsLookupProcessByProcessId ProcessId:%Iu Error:0x%X", (ULONG_PTR)ProcessId, status);
-        return NULL;
+        return status;
     }
-    if (PsGetProcessExitStatus(pEProcess) != STATUS_PENDING)
+    if (PsGetProcessExitStatus(*pEProcess) != STATUS_PENDING)
     {
-        ObDereferenceObject(pEProcess);
-        return NULL;
+		DbgPrint("Process %Iu is terminating, cannot get EPROCESS.", (ULONG_PTR)ProcessId);
+        ObDereferenceObject(*pEProcess);
+        return STATUS_PROCESS_IS_TERMINATING;
     }
-	ObDereferenceObject(pEProcess);
+	ObDereferenceObject(*pEProcess);
 	//DbgPrint("EPROCESS of Process %Iu:0x%p", (ULONG_PTR)ProcessId, pEProcess);
-	return pEProcess;
+	return status;
 }
 
 NTSTATUS GetProcessImageName(
     HANDLE ProcessId,
-    LPWSTR ProcessImageName
+    PUNICODE_STRING ImageName
 )
 {
+#define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
     NTSTATUS status;
-    ULONG returnedLength;
-    //ULONG bufferLength;
+    PEPROCESS Process = NULL;
+    HANDLE hProcess = NULL;
+    ULONG ReturnLength = 0;
+    PVOID Buffer = NULL;
+    PUNICODE_STRING pImageName;
 
-	// Open the process handle
-	HANDLE ProcessHandle = NULL;
-	status = OpenProcess(ProcessId, &ProcessHandle);
-	if (!NT_SUCCESS(status)) return status;
-	// Check if the process handle is valid
-	if (ProcessHandle == NULL) {
-		DbgPrint("OpenProcess failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)ProcessId, status);
-		return STATUS_ACCESS_DENIED;
-	}
+    if (ImageName == NULL ||
+        ImageName->Buffer == NULL ||
+        ImageName->MaximumLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-	// Initialize the process path
-	RtlZeroMemory(ProcessImageName, 260 * sizeof(WCHAR));
+    ImageName->Length = 0;
 
-    // Query the actual size of the process path
-    status = ZwQueryInformationProcess(ProcessHandle, ProcessImageFileName, NULL, 0, &returnedLength);
-    if (STATUS_INFO_LENGTH_MISMATCH != status) return status;
+    //
+    // PID -> EPROCESS
+    //
+    status = PsLookupProcessByProcessId(ProcessId, &Process);
+    if (!NT_SUCCESS(status))
+        return status;
 
-    // Retrieve the process path from the handle to the process
-    status = ZwQueryInformationProcess(ProcessHandle, ProcessImageFileName, ProcessImageName, returnedLength, &returnedLength);
-    if (NT_SUCCESS(status)) status = STATUS_SUCCESS;
+    //
+    // EPROCESS -> HANDLE
+    //
+    status = ObOpenObjectByPointer(
+        Process,
+        OBJ_KERNEL_HANDLE,
+        NULL,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        *PsProcessType,
+        KernelMode,
+        &hProcess);
 
-    return status;
+    ObDereferenceObject(Process);
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    //
+    // 获取所需缓冲区大小
+    //
+    status = ZwQueryInformationProcess(
+        hProcess,
+        ProcessImageFileName,
+        NULL,
+        0,
+        &ReturnLength);
+
+    if (status != STATUS_INFO_LENGTH_MISMATCH)
+    {
+        ZwClose(hProcess);
+        return status;
+    }
+
+    //
+    // 临时缓冲区
+    //
+    Buffer = ExAllocatePool2(
+        POOL_FLAG_PAGED,
+        ReturnLength,
+        'ImgP');
+
+    if (Buffer == NULL)
+    {
+        ZwClose(hProcess);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    //
+    // 查询路径
+    //
+    status = ZwQueryInformationProcess(
+        hProcess,
+        ProcessImageFileName,
+        Buffer,
+        ReturnLength,
+        &ReturnLength);
+
+    ZwClose(hProcess);
+
+    if (!NT_SUCCESS(status))
+    {
+        ExFreePoolWithTag(Buffer, 'ImgP');
+        return status;
+    }
+
+    pImageName = (PUNICODE_STRING)Buffer;
+
+    //
+    // 检查调用者缓冲区
+    //
+    if (ImageName->MaximumLength < (USHORT)(pImageName->Length + sizeof(WCHAR)))
+    {
+        ImageName->Length = pImageName->Length;
+        ExFreePoolWithTag(Buffer, 'ImgP');
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    //
+    // 拷贝字符串
+    //
+    RtlCopyMemory(
+        ImageName->Buffer,
+        pImageName->Buffer,
+        pImageName->Length);
+
+    ImageName->Length = pImageName->Length;
+    ImageName->Buffer[pImageName->Length / sizeof(WCHAR)] = L'\0';
+
+    ExFreePoolWithTag(Buffer, 'ImgP');
+
+    return STATUS_SUCCESS;
 }
 
 static BOOLEAN ProcessEnumCallback(

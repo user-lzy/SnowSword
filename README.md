@@ -11,7 +11,14 @@ SnowSword 是一款基于 **Ring0 内核驱动 + Ring3 用户层应用** 开发�
 
 ## 编译环境
 - 内核驱动：Visual Studio + WDK
-- 应用层：VisualFreeBasic 6.0
+- 应用层：
+- ## Build Requirements
+- VisualFreeBasic 5.9.7+
+- WinFBX library (bundled with VFB)
+
+## Build
+- 1. Open SnowSword.vfp in VFB IDE
+- 2. Click "Compile" (F5)
 - 平台：Windows x64
 
 ## 功能清单

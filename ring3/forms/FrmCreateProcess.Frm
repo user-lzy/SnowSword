@@ -164,7 +164,7 @@ Name=Check2
 Help=
 Index=-1
 Style=0 - 标准
-Caption=以SYSTEM权限运行(仅限无窗口进程)
+Caption=以SYSTEM权限运行
 TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
@@ -241,6 +241,23 @@ ToolTipBalloon=False
 '写好工程，复制全部文件到VFB软件文件夹里【template】里即可，子文件夹名为 VFB新建工程里显示的名称
 '快去打造属于你自己的工程模版吧。
 
+Dim Shared FrmCreateProcess_nWidth As Long, FrmCreateProcess_nHeight As Long
+
+Function FrmCreateProcess_SubclassProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM, ByVal uIdSubclass As UINT_PTR, ByVal dwRefData As DWORD_PTR) As LRESULT
+    Select Case uMsg
+        Case WM_SIZING
+            Dim pRect As RECT Ptr = Cast(RECT Ptr, lParam)
+            pRect->Right = pRect->Left + FrmCreateProcess_nWidth
+            pRect->bottom = pRect->top + FrmCreateProcess_nHeight
+            Return 1
+
+        Case WM_NCDESTROY
+            RemoveWindowSubclass hWnd, @FrmCreateProcess_SubclassProc, uIdSubclass
+    End Select
+
+    Return DefSubclassProc(hWnd, uMsg, wParam, lParam)
+End Function
+
 '[FrmCreateProcess.cmdOK]事件 : 单击
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
@@ -257,9 +274,9 @@ Sub FrmCreateProcess_cmdOK_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         strProgram = LeftW(strCommandLine, pos1 - 1)      ' "notepad"
         strParameters = RightW(strCommandLine, LenW(strCommandLine) - pos1)  ' "F:\1.txt"
     End If
-    
+    'Print strProgram & " " & strParameters
     If Check2.Value Then
-        If CreateSYSTEMPriviegeProcess(NULL, IIf(strParameters <> "", StrPtrW(strParameters), NULL)) Then
+        If CreateSYSTEMPriviegeProcess(NULL, IIf(strCommandLine <> "", StrPtrW(strCommandLine), NULL)) Then
             AfxMsg "创建成功!"
         Else
             AfxMsg "创建失败!"
@@ -298,6 +315,17 @@ End Sub
 Sub FrmCreateProcess_Check1_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If Check2.Value Then Check2.Value = 0
 End Sub
+
+'[FrmCreateProcess]事件 : 窗口完全显示后。
+'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
+Sub FrmCreateProcess_Shown(hWndForm As hWnd, UserData As Integer)
+    Me.hWndForm = hWndForm
+    FrmCreateProcess_nWidth = Me.Width
+    FrmCreateProcess_nHeight = Me.Height
+    SetWindowSubclass Me.hWnd, @FrmCreateProcess_SubclassProc, 1, 0
+End Sub
+
 
 
 

@@ -140,6 +140,16 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
         Exit Sub
     End If
     
+    Print "bufferSize=" & bufferSize
+
+    Dim pToken As TOKEN_PRIVILEGES Ptr
+    pToken = Cast(TOKEN_PRIVILEGES Ptr,@infoBuffer(0))
+
+    Print "PrivilegeCount=" & pToken->PrivilegeCount
+
+    Print "TP Size=" & SizeOf(TOKEN_PRIVILEGES)
+    Print "LUID_ATTR Size=" & SizeOf(LUID_AND_ATTRIBUTES)
+    
     ' 复制数据到结构体
     memcpy @tpTokens, @infoBuffer(0), SizeOf(TOKEN_PRIVILEGES) - (ANYSIZE_ARRAY * SizeOf(LUID_AND_ATTRIBUTES))
     
@@ -177,7 +187,7 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
             Else
                 privInfo.sStatus = "Disabled"
             End If
-            
+            'Print privInfo.sDisplay
             ' 添加到数组
             ReDim Preserve PrivilegeInfo(count) As PRIVILEGE_INFO
             PrivilegeInfo(count) = privInfo
@@ -202,7 +212,7 @@ Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_List
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(ProcessId)
     Else
-        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ProcessId)
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, ProcessId)
     End If
     If (hProcess <= 0) Then
         Print "OpenProcess " & ProcessId & " Failed!"
@@ -212,7 +222,7 @@ Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_List
     ' 获取当前进程特权
     GetProcessPrivileges hProcess, langID, privileges()
     
-    If Ubound(privileges) = 0 Then
+    If UBound(privileges, 0) = 0 Then
         Print "无法获取进程特权信息"
         Exit Sub
     End If

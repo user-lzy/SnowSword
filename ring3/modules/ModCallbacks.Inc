@@ -16,6 +16,7 @@ End Type
 Type SYSTEM_TIMER
     strType As Wstring * 10
     TimerObject As ULONG64
+    pDpc As ULONG64
     Func As ULONG64
     Period As ULong
     uType As Short
@@ -240,7 +241,9 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
 End Sub
 
 Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
-    Dim SystemTimers(63) As SYSTEM_TIMER
+    Dim pSystemTimers As SYSTEM_TIMER Ptr = CAllocate(512 * SizeOf(SYSTEM_TIMER))
+    If pSystemTimers = NULL Then Return
+    
     Dim ret As Long, NewIndex As Long
     /'If GetSystemVersion <> "Windows 11 23H2" Then
         AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
@@ -249,30 +252,37 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
     
     InitListViewData lvwKernelTimer
     
-    IoControl hDrv, IOCTL_EnumIoTimers, NULL, 0, @SystemTimers(0), 64 * SizeOf(SYSTEM_TIMER)
-    For i As Integer = 0 To 63
-        If (SystemTimers(i).Func <> 0) Then
-            /'NewIndex = AddItemEx(lvwKernelTimer,, SystemTimers(i).strType)
-            SetItemTextEx lvwKernelTimer, NewIndex, 1, "0x" & Hex(SystemTimers(i).TimerObject)
-            SetItemTextEx lvwKernelTimer, NewIndex, 2, "0x" & Hex(SystemTimers(i).Func)
-            
-            ' SystemTimers(i).uFlag
-            SetItemTextEx lvwKernelTimer, NewIndex, 4, WStr(SystemTimers(i).uType)'IIf(SystemTimers(i).st, "已启动", "已停止")
-            SetItemTextEx lvwKernelTimer, NewIndex, 5, GetDriverPathByAddr(SystemTimers(i).Func) 'Callbacks(i).DriverName'/
-            Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
-            WStr(""), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func)))
-            SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
-        End If
-    Next
-    memset @SystemTimers(0), 0, 64 * SizeOf(SYSTEM_TIMER)
-    IoControl hDrv, IOCTL_EnumDpcTimers, NULL, 0, @SystemTimers(0), 64 * SizeOf(SYSTEM_TIMER)
-    For i As Integer = 0 To 63
-        If (SystemTimers(i).strType <> "") Then
-            Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, SystemTimers(i).strType, "0x" & WHex(SystemTimers(i).TimerObject), "0x" & WHex(SystemTimers(i).Func), _
-            WStr(SystemTimers(i).Period), WStr(SystemTimers(i).uType), WStr(GetDriverPathByAddr(SystemTimers(i).Func)))
-            SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
-        End If
-    Next
+    If IoControl(hDrv, IOCTL_EnumIoTimers, NULL, 0, pSystemTimers, 512 * SizeOf(SYSTEM_TIMER)) <> 0 Then
+        For i As Integer = 0 To 512
+            If (pSystemTimers[i].Func <> 0) Then
+                /'NewIndex = AddItemEx(lvwKernelTimer,, pSystemTimers[i].strType)
+                SetItemTextEx lvwKernelTimer, NewIndex, 1, "0x" & Hex(pSystemTimers[i].TimerObject)
+                SetItemTextEx lvwKernelTimer, NewIndex, 2, "0x" & Hex(pSystemTimers[i].Func)
+                
+                ' pSystemTimers[i].uFlag
+                SetItemTextEx lvwKernelTimer, NewIndex, 4, WStr(pSystemTimers[i].uType)'
+                SetItemTextEx lvwKernelTimer, NewIndex, 5, GetDriverPathByAddr(pSystemTimers[i].Func) 'Callbacks[i].DriverName'/
+                Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, pSystemTimers[i].strType, "0x" & WHex(pSystemTimers[i].TimerObject), "0x" & WHex(pSystemTimers[i].Func), _
+                WStr(IIf(pSystemTimers[i].uFlag, "已启动", "已停止")), WStr(pSystemTimers[i].uType), WStr(GetDriverPathByAddr(pSystemTimers[i].Func)))
+                SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
+            End If
+        Next
+    Else
+        MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumIoTimers"
+    End If
+    
+    memset pSystemTimers, 0, 512 * SizeOf(SYSTEM_TIMER)
+    If IoControl(hDrv, IOCTL_EnumDpcTimers, NULL, 0, pSystemTimers, 512 * SizeOf(SYSTEM_TIMER)) <> 0 Then
+        For i As Integer = 0 To 512
+            If (pSystemTimers[i].strType <> "") Then
+                Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 7,,, pSystemTimers[i].strType, "0x" & WHex(pSystemTimers[i].TimerObject), "0x" & WHex(pSystemTimers[i].Func), _
+                WStr(pSystemTimers[i].Period), WStr(pSystemTimers[i].uType), WStr(GetDriverPathByAddr(pSystemTimers[i].Func)), "pDpc=0x" & WHex(pSystemTimers[i].pDpc))
+                SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
+            End If
+        Next
+    Else
+        MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumDpcTimers"
+    End If
     CommitListViewView lvwKernelTimer
 End Sub
 

@@ -243,7 +243,9 @@ End Function
 '-------------------------------------------------------------------------------
 Sub Logger.OutputToUI(text As StringW)
     ' 安全UI更新（仅追加文本，避免全量替换）
-    strLog = strLog & text & Chr(13,10)
+    'strLog = strLog & text & Chr(13,10)
+    strLog &= text
+    strLog &= Chr(13,10)
 End Sub
 
 '-------------------------------------------------------------------------------

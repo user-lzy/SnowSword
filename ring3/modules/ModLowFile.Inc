@@ -1582,15 +1582,7 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Print "错误：路径不存在或无法解析MFT记录 → " & lpFilePath
         Return False
     End If
-    /'Print ">>> [调试] 卷基础参数:"
-    Print "      ClusterSize: " & ctx->clusterSize
-    Print "      MFT Start LCN: " & ctx->mftStartLCN
-    Print "      MFT Record Size: " & ctx->mftRecordSize
-    Print "成功解析路径，对应MFT记录号：" & targetMftRecordNum'/
     
-    ' ========== 步骤2：读取MFT记录（带USA修复） ==========
-    'If Not ParseVolume(parts(0)) Then Return -1
-    'If Not ParseMFTDataAttribute Then Return -1
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
     If Not ReadExternalMFTRecord(ctx, targetMftRecordNum, @recBuf(0)) Then ' ReadMFTRecord_Safe
@@ -1604,11 +1596,6 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
         Print "错误：目标路径是目录，非文件 → " & lpFilePath
         Return False
     End If
-    
-    /'Print "      Magic: " & Hex(mrh->magic, 8) & " (期望: 454C4946)"
-    Print "      Flags: " & Hex(mrh->dwFlags, 4) & " (Bit0=InUse, Bit1=IsDir)"
-    Print "      AttrOffset: " & mrh->attrOffset
-    Print "      BytesInUse: " & mrh->bytesInUse'/
     
     ' ========== 步骤3：解析DATA属性（类型0x80） ==========
     Dim dataAttr As ATTR_HEADER_NONRESIDENT Ptr = NULL
@@ -1625,21 +1612,15 @@ FindDataAttr:
     Do While attrOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
         'Print ">>> [调试] 检查属性偏移: " & attrOff
         gAttr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
-        /'Print "      TypeID: " & Hex(gAttr->typeID, 8) & " (80=DATA, 30=FILENAME)"
-        Print "      TotalLen: " & gAttr->totalLen
-        Print "      NonResident: " & gAttr->nonResident'/
         
         ' 终止条件：属性类型ID为0xFFFFFFFF
         If gAttr->typeID = &HFFFFFFFF Then Exit Do
         
         ' 找到DATA属性（类型0x80）
         If gAttr->typeID = &H80 Then
-            'Print ">>> [√] 找到 DATA 属性 (在" & IIf(isExternalRecord, "外部", "当前") & "记录中)"
             ' 直接移交控制权给下方的现有处理逻辑
             Goto ProcessFoundDataAttr
         ElseIf gAttr->typeID = ATTR_TYPE_ATTRIBUTE_LIST AndAlso Not isExternalRecord Then
-            'Print ">>> [调试] 发现 Attribute List，开始搜索外部 DATA..."
-            
             ' 1. 解析 Attribute List 的数据内容
             Dim listDataPtr As UByte Ptr
             Dim listDataSize As ULong
@@ -1691,8 +1672,6 @@ FindDataAttr:
                     ReDim targetMftBuf(0 To ctx->mftRecordSize - 1)
                     If ReadExternalMFTRecord(ctx, extMftRecNo, @targetMftBuf(0)) Then
                         ' 4. 切换上下文：将 recBuf 指向外部记录，并重置 mrh 指针
-                        ' 注意：这里我们利用数组的内存连续性，直接操作 @recBuf(0) 是关键
-                        ' FreeBASIC 动态数组内存是连续的，我们可以用 memcpy 覆盖它
                         memcpy(@recBuf(0), @targetMftBuf(0), ctx->mftRecordSize)
                         
                         ' 重新初始化 MFT 头指针
@@ -1712,7 +1691,6 @@ ContinueDo:
         attrOff += gAttr->totalLen ' 偏移到下一个属性
     Loop
     
-    ' 如果走到这里，说明没找到 DATA 属性
     Print "[!] 错误：未找到 $DATA 属性 (0x80)"
     Return False
     
@@ -1852,9 +1830,9 @@ Private Function MyCopyFile_Internal(ctx As NTFS_CONTEXT Ptr, lpSourceFile As St
         Print "ReadFile2失败"
         Return False
     End If
-    Dim hFile As HANDLE = CreateFile(lpTargetFile, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    Dim hFile As HANDLE = CreateFile(lpTargetFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
     If hFile = INVALID_HANDLE_VALUE Then
-        Print "CreateFile失败:" & WinErrorMsg(GetLastError)
+        Print "CreateFile(" & lpTargetFile & ")失败:" & WinErrorMsg(GetLastError)
         Return False
     End If
     Dim bytWritten As DWORD, dwWritten As DWORD = (UBound(bytData) + 1) * SizeOf(UByte)
@@ -1865,6 +1843,255 @@ Private Function MyCopyFile_Internal(ctx As NTFS_CONTEXT Ptr, lpSourceFile As St
     End If
     CloseHandle hFile
     Return True
+End Function
+
+'======================================================================
+'  目录栈条目（用于非递归遍历）
+'======================================================================
+Type DIR_STACK_ENTRY
+    sourcePath      As String     ' 源目录路径
+    targetPath      As String     ' 目标目录路径
+    isProcessed     As Boolean    ' 是否已处理（创建目录+枚举子项）
+End Type
+
+'======================================================================
+'  文件栈条目（用于批量文件拷贝）
+'======================================================================
+Type FILE_COPY_ENTRY
+    sourceFile      As String     ' 源文件完整路径
+    targetFile      As String     ' 目标文件完整路径
+End Type
+
+'======================================================================
+'  内部函数：创建目录（递归创建父目录）
+'======================================================================
+Private Function CreateDirectoryTree(ByVal dirPath As String) As Boolean
+    If dirPath = "" Then Return False
+    
+    ' 去除尾部反斜杠（除了根目录）
+    Dim cleanPath As String = dirPath
+    If Right(cleanPath, 1) = "\" And Len(cleanPath) > 3 Then
+        cleanPath = Left(cleanPath, Len(cleanPath) - 1)
+    End If
+    
+    ' 检查目录是否已存在
+    Dim attr As DWORD = GetFileAttributes(cleanPath)
+    If attr <> INVALID_FILE_ATTRIBUTES Then
+        Return (attr And FILE_ATTRIBUTE_DIRECTORY) <> 0
+    End If
+    
+    ' 递归创建父目录
+    Dim parentPath As String = Left(cleanPath, InStrRev(cleanPath, "\") - 1)
+    If Len(parentPath) >= 3 Then  ' 至少 "X:\"
+        If Not CreateDirectoryTree(parentPath) Then Return False
+    End If
+    
+    ' 创建当前目录
+    Return CreateDirectory(cleanPath, NULL) <> 0 Or GetLastError() = ERROR_ALREADY_EXISTS
+End Function
+
+'======================================================================
+'  内部函数：非递归拷贝单个文件（使用你的NTFS底层读取 + Win32写入）
+'======================================================================
+Private Function CopySingleFile_Internal(ctx As NTFS_CONTEXT Ptr, _
+                                         ByVal srcPath As String, _
+                                         ByVal dstPath As String) As Boolean
+    Dim bytData() As UByte
+    
+    ' 使用底层NTFS读取（绕过Windows句柄限制，支持被锁定的系统文件）
+    If Not ReadFile2_Internal(ctx, srcPath, bytData()) Then
+        ' 回退：使用普通Win32 API拷贝（对于非NTFS卷或普通文件）
+        Return CopyFile(srcPath, dstPath, FALSE) <> 0
+    End If
+    
+    ' 确保目标目录存在
+    Dim dstDir As String = Left(dstPath, InStrRev(dstPath, "\") - 1)
+    If Not CreateDirectoryTree(dstDir) Then Return False
+    
+    ' 写入目标文件
+    Dim hFile As HANDLE = CreateFile(dstPath, GENERIC_WRITE, _
+                                     FILE_SHARE_READ, NULL, _
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Return False
+    
+    Dim dwWritten As DWORD = 0
+    Dim dwSize As DWORD = (UBound(bytData) + 1) * SizeOf(UByte)
+    Dim result As Boolean = WriteFile(hFile, @bytData(0), dwSize, @dwWritten, NULL) <> 0 _
+                            And dwWritten = dwSize
+    CloseHandle hFile
+    
+    If Not result Then
+        ' 写入失败，清理残文件
+        DeleteFile dstPath
+    End If
+    
+    Return result
+End Function
+
+'======================================================================
+'  核心函数：非递归拷贝文件夹（包括子文件夹及所有文件）
+'  
+'  参数：
+'    lpSourceDir  - 源目录路径，如 "C:\SourceFolder"
+'    lpTargetDir  - 目标目录路径，如 "D:\Backup\SourceFolder"
+'  
+'  返回值：
+'    True  - 成功
+'    False - 失败（部分文件可能已拷贝）
+'  
+'  特点：
+'    1. 完全非递归，使用动态数组模拟栈，避免爆栈
+'    2. 支持NTFS底层读取（可拷贝被锁定的系统文件）
+'    3. 自动创建目标目录结构
+'    4. 保留文件属性（通过底层读取原始字节）
+'======================================================================
+Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
+                                        ByVal lpTargetDir As String) As Boolean
+    ' ---------- 参数校验 ----------
+    If Right(lpSourceDir, 1) <> "\" Then lpSourceDir += "\"
+    If Right(lpTargetDir, 1) <> "\" Then lpTargetDir += "\"
+    
+    ' 获取源卷上下文
+    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpSourceDir)
+    If ctx = NULL Then
+        Print "[CopyFolder] 无法打开源卷: " & lpSourceDir
+        Return False
+    End If
+    
+    ' ---------- 初始化目录栈（DFS） ----------
+    Dim dirStack() As DIR_STACK_ENTRY
+    ReDim dirStack(0 To 255)  ' 初始容量256，动态扩展
+    Dim dirStackTop As Long = -1  ' 栈顶指针，-1表示空栈
+    
+    ' 压入根目录
+    dirStackTop += 1
+    dirStack(dirStackTop).sourcePath = lpSourceDir
+    dirStack(dirStackTop).targetPath = lpTargetDir
+    dirStack(dirStackTop).isProcessed = False
+    
+    ' ---------- 初始化文件队列 ----------
+    Dim fileQueue() As FILE_COPY_ENTRY
+    ReDim fileQueue(0 To 1023)  ' 批量文件缓冲
+    Dim fileQueueCount As Long = 0
+    
+    ' ---------- 统计信息 ----------
+    Dim dirsCreated As Long = 0
+    Dim filesCopied As Long = 0
+    Dim filesFailed As Long = 0
+    Dim totalBytes As ULongLong = 0
+    
+    Print "[CopyFolder] 开始非递归拷贝..."
+    Print "  源: " & lpSourceDir
+    Print "  目标: " & lpTargetDir
+    
+    ' ---------- 主循环：DFS遍历目录树 ----------
+    Do While dirStackTop >= 0
+        
+        ' 查看栈顶（不弹出）
+        Dim currentIdx As Long = dirStackTop
+        Dim current As DIR_STACK_ENTRY Ptr = @dirStack(currentIdx)
+        
+        If current->isProcessed = False Then
+            ' ====== 第一次访问：创建目录，枚举子项 ======
+            
+            ' 创建目标目录
+            If Not CreateDirectoryTree(current->targetPath) Then
+                Print "[警告] 无法创建目录: " & current->targetPath
+                ' 标记为已处理并弹出（跳过此目录）
+                current->isProcessed = True
+                dirStackTop -= 1
+                Continue Do
+            End If
+            dirsCreated += 1
+            
+            ' 获取源目录下的所有文件和子目录
+            Dim fileInfoList() As WIN32_FILE_DATAEX2W
+            Dim listCount As Long = NTFS_GetDirList_Internal(ctx, current->sourcePath, fileInfoList())
+            
+            If listCount > 0 Then
+                ' 扩展目录栈容量（如果需要）
+                If dirStackTop + listCount >= UBound(dirStack) Then
+                    ReDim Preserve dirStack(0 To UBound(dirStack) + 512)
+                End If
+                
+                ' 扩展文件队列容量（如果需要）
+                If fileQueueCount + listCount >= UBound(fileQueue) Then
+                    ReDim Preserve fileQueue(0 To UBound(fileQueue) + 1024)
+                End If
+                
+                ' 遍历目录项，分类处理（文件入队列，目录入栈）
+                For i As Long = 0 To listCount - 1
+                    Dim itemName As String = fileInfoList(i).cFileName
+                    
+                    ' 跳过 "." 和 ".."
+                    If itemName = "." Or itemName = ".." Then Continue For
+                    If itemName = "" Then Continue For
+                    
+                    Dim srcFullPath As String = current->sourcePath & itemName
+                    Dim dstFullPath As String = current->targetPath & itemName
+                    
+                    If fileInfoList(i).bDirectory Then
+                        ' === 子目录：压入目录栈（DFS，后进先出）===
+                        dirStackTop += 1
+                        dirStack(dirStackTop).sourcePath = srcFullPath & "\"
+                        dirStack(dirStackTop).targetPath = dstFullPath & "\"
+                        dirStack(dirStackTop).isProcessed = False
+                    Else
+                        ' === 文件：加入文件队列 ===
+                        fileQueue(fileQueueCount).sourceFile = srcFullPath
+                        fileQueue(fileQueueCount).targetFile = dstFullPath
+                        fileQueueCount += 1
+                    End If
+                Next
+            End If
+            
+            ' 标记为已处理
+            current->isProcessed = True
+            
+        Else
+            ' ====== 第二次访问：目录处理完毕，弹出栈 ======
+            dirStackTop -= 1
+        End If
+        
+        ' 定期处理文件队列（防止内存占用过大）
+        ' 策略：当队列满80%时，批量处理
+        If fileQueueCount > 0 And (fileQueueCount >= UBound(fileQueue) * 0.8 Or dirStackTop < 0) Then
+            Print "  [批量拷贝] 处理 " & fileQueueCount & " 个文件..."
+            
+            For i As Long = 0 To fileQueueCount - 1
+                If CopySingleFile_Internal(ctx, _
+                                           fileQueue(i).sourceFile, _
+                                           fileQueue(i).targetFile) Then
+                    filesCopied += 1
+                Else
+                    filesFailed += 1
+                    Print "[失败] " & fileQueue(i).sourceFile
+                End If
+                FF_DoEvents  ' 防止UI卡死
+            Next
+            
+            fileQueueCount = 0  ' 清空队列
+        End If
+        
+        FF_DoEvents  ' UI响应
+        
+    Loop
+    
+    ' ---------- 最终统计 ----------
+    Print !"\n[CopyFolder] 拷贝完成:"
+    Print "  目录创建: " & dirsCreated
+    Print "  文件成功: " & filesCopied
+    Print "  文件失败: " & filesFailed
+    
+    Return filesFailed = 0
+End Function
+
+'======================================================================
+'  简化包装函数：直接调用
+'======================================================================
+Function CopyFolder(ByVal lpSourceDir As String, _
+                         ByVal lpTargetDir As String) As Boolean
+    Return CopyFolder_NonRecursive(lpSourceDir, lpTargetDir)
 End Function
 
 ' 同理，ReadFile2 和 MyCopyFile 的包装实现：

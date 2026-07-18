@@ -96,11 +96,11 @@ NTSTATUS NTKERNELAPI PsGetContextThread(
     _In_    ULONG     Flags          // 固定传 0
 );
 
-NTSTATUS NTKERNELAPI PsSetContextThread(
-    _In_  PETHREAD  Thread,
-    _In_  PCONTEXT  Context,        // 要写入的新上下文
-    _In_  ULONG     Flags          // 固定传 0
-);
+//NTSTATUS NTKERNELAPI PsSetContextThread(
+//    _In_  PETHREAD  Thread,
+//    _In_  PCONTEXT  Context,        // 要写入的新上下文
+//    _In_  ULONG     Flags          // 固定传 0
+//);
 
 NTSYSAPI NTSTATUS NTAPI ZwOpenThread(
     _Out_ PHANDLE ThreadHandle,
@@ -807,12 +807,12 @@ BOOLEAN ForceDestroyThread(HANDLE hThreadId)
     ctx.Rdx = STATUS_SUCCESS;  // x64 调用约定传参，防止蓝屏
 
     // 步骤4：写入修改后的上下文
-    status = PsSetContextThread(pEThread, &ctx, 0);
+    /*status = PsSetContextThread(pEThread, &ctx, 0);
     if (!NT_SUCCESS(status))
     {
         DbgPrint("[Error] PsSetContextThread 失败: %08X\n", status);
         goto Exit_ResumeProcess;
-    }
+    }*/
     DbgPrint("[Info] 修改RIP成功: %llx\n", ctx.Rip);
 
     // 所有操作成功

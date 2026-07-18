@@ -1,4 +1,4 @@
-﻿#VisualFreeBasic_Form#  Version=5.9.5
+﻿#VisualFreeBasic_Form#  Version=5.9.7
 Locked=0
 
 [Form]
@@ -132,6 +132,7 @@ Name=Frame2
 Help=
 Index=-1
 Caption=操作
+Frame=True
 TextAlign=0 - 左对齐
 Fillet=5
 BorderWidth=1
@@ -189,6 +190,7 @@ Name=Frame1
 Help=
 Index=-1
 Caption=类型
+Frame=True
 TextAlign=0 - 左对齐
 Fillet=5
 BorderWidth=1
@@ -214,6 +216,23 @@ ToolTipBalloon=False
 '写好工程，复制全部文件到VFB软件文件夹里【template】里即可，子文件夹名为 VFB新建工程里显示的名称
 '快去打造属于你自己的工程模版吧。
 
+Dim Shared FrmPowerManager_nWidth As Long, FrmPowerManager_nHeight As Long
+
+Function FrmPowerManager_SubclassProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM, ByVal uIdSubclass As UINT_PTR, ByVal dwRefData As DWORD_PTR) As LRESULT
+    Select Case uMsg
+        Case WM_SIZING
+            Dim pRect As RECT Ptr = Cast(RECT Ptr, lParam)
+            pRect->Right = pRect->Left + FrmPowerManager_nWidth
+            pRect->bottom = pRect->top + FrmPowerManager_nHeight
+            Return 1
+
+        Case WM_NCDESTROY
+            RemoveWindowSubclass hWnd, @FrmPowerManager_SubclassProc, uIdSubclass
+    End Select
+
+    Return DefSubclassProc(hWnd, uMsg, wParam, lParam)
+End Function
+
 '[FrmPowerManager]事件 : 窗口完全显示后。
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
@@ -221,6 +240,10 @@ Sub FrmPowerManager_Shown(hWndForm As hWnd,UserData As Integer)
     Combo1.AddItem "普通"
     Combo1.AddItem "强制"
     Combo1.AddItem "驱动"
+    Me.hWndForm = hWndForm
+    FrmPowerManager_nWidth = Me.Width
+    FrmPowerManager_nHeight = Me.Height
+    SetWindowSubclass Me.hWnd, @FrmPowerManager_SubclassProc, 1, 0
 End Sub
 
 '[FrmPowerManager.Check1]事件 : 单击

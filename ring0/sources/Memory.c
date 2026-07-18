@@ -1,4 +1,5 @@
 ﻿#pragma once
+#pragma warning(disable: 4047 4024)
 
 #include "Memory.h"
 
@@ -116,53 +117,401 @@ NTSTATUS VxkCopyMemory(PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCo
     return STATUS_SUCCESS;
 }
 
-NTSTATUS ReadProcessMemory(HANDLE dwProcessId, PVOID pSourceAddress, PVOID pDestinationBuffer, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred)
+//====================================================
+// 基于 MDL 的安全内存读写
+//====================================================
+
+typedef struct _MDL_RW_CONTEXT {
+    PMDL            Mdl;
+    PVOID           MappedSystemVa;
+    PVOID           OriginalBuffer;
+    SIZE_T          Length;
+    KPROCESSOR_MODE AccessMode;
+    LOCK_OPERATION  Operation;
+} MDL_RW_CONTEXT, * PMDL_RW_CONTEXT;
+
+NTSTATUS MdlRwInitialize(
+    _Out_ PMDL_RW_CONTEXT Context,
+    _In_  PVOID TargetAddress,
+    _In_  SIZE_T Length,
+    _In_  KPROCESSOR_MODE AccessMode,
+    _In_  LOCK_OPERATION Operation
+)
 {
-    if (dwProcessId == NULL) {
-        return VxkCopyMemory(pDestinationBuffer, pSourceAddress, SizeOfCopy, pBytesTransferred);
+    RtlZeroMemory(Context, sizeof(MDL_RW_CONTEXT));
+
+    if (Length == 0 || Length > 0xFFFFFFFF) {
+        DbgPrint("MdlRwInitialize 失败: 无效长度 %llu\n", Length);
+        return STATUS_INVALID_PARAMETER;
     }
 
-    NTSTATUS status;
-    PEPROCESS pEProcess = NULL;
-    status = PsLookupProcessByProcessId(dwProcessId, &pEProcess);
-    if (!NT_SUCCESS(status)) return status;
+    Context->Mdl = IoAllocateMdl(TargetAddress, (ULONG)Length, FALSE, FALSE, NULL);
+    if (!Context->Mdl) {
+        DbgPrint("MdlRwInitialize 失败: IoAllocateMdl 分配内存失败\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-    status = MmCopyVirtualMemory(
-        pEProcess,              // 源：目标进程
-        pSourceAddress,          // 源地址
-        PsGetCurrentProcess(),   // 目标：当前进程
-        pDestinationBuffer,      // 目标地址
-        SizeOfCopy,
-        KernelMode,
-        pBytesTransferred
-    );
+    Context->OriginalBuffer = TargetAddress;
+    Context->Length = Length;
+    Context->AccessMode = AccessMode;
+    Context->Operation = Operation;
 
-    ObDereferenceObject(pEProcess);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS MdlRwLockAndMap(
+    _Inout_ PMDL_RW_CONTEXT Context
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    if (!Context || !Context->Mdl) {
+        DbgPrint("MdlRwLockAndMap 失败: 无效上下文\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    __try {
+        DbgPrint("MdlRwLockAndMap: 开始锁定内存。目标地址: 0x%p, 长度: %llu\n", Context->OriginalBuffer, Context->Length);
+
+        // 探测并锁定页面到物理内存
+        MmProbeAndLockPages(
+            Context->Mdl,
+            Context->AccessMode,
+            Context->Operation
+        );
+        DbgPrint("MdlRwLockAndMap: MmProbeAndLockPages 成功，页面已锁定\n");
+
+        Context->MappedSystemVa = MmMapLockedPagesSpecifyCache(
+            Context->Mdl,
+            KernelMode,
+            MmCached,
+            NULL,
+            FALSE,
+            NormalPagePriority
+        );
+
+        if (!Context->MappedSystemVa) {
+            DbgPrint("MdlRwLockAndMap 失败: MmMapLockedPagesSpecifyCache 返回 NULL (内存不足)\n");
+            MmUnlockPages(Context->Mdl);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else {
+            DbgPrint("MdlRwLockAndMap: MmMapLockedPagesSpecifyCache 成功，映射地址: 0x%p\n", Context->MappedSystemVa);
+        }
+
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        // 这里的打印极其重要！如果返回 0xC0000005，说明在 ProbeAndLock 阶段就失败了
+        DbgPrint("MdlRwLockAndMap 异常! ExceptionCode: 0x%X (可能是地址未分配/PTE被篡改)\n", status);
+    }
+
     return status;
 }
 
-NTSTATUS WriteProcessMemory(HANDLE dwProcessId, PVOID pSourceBuffer, PVOID pDestinationAddress, SIZE_T SizeOfCopy, PSIZE_T pBytesTransferred)
+NTSTATUS MdlRwRead(
+    _Inout_ PMDL_RW_CONTEXT Context,
+    _Out_   PVOID DestinationBuffer,
+    _In_    SIZE_T CopyLength
+)
 {
-    if (dwProcessId == NULL) {
-        return VxkCopyMemory(pDestinationAddress, pSourceBuffer, SizeOfCopy, pBytesTransferred);
+    if (!Context->MappedSystemVa) {
+        DbgPrint("MdlRwRead 失败: MappedSystemVa 为空\n");
+        return STATUS_INVALID_DEVICE_STATE;
     }
 
+    if (CopyLength > Context->Length) {
+        DbgPrint("MdlRwRead 失败: 拷贝长度 %llu > 上下文长度 %llu\n", CopyLength, Context->Length);
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    __try {
+        RtlCopyMemory(DestinationBuffer, Context->MappedSystemVa, CopyLength);
+        DbgPrint("MdlRwRead: RtlCopyMemory 成功\n");
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        NTSTATUS status = GetExceptionCode();
+        DbgPrint("MdlRwRead 异常: RtlCopyMemory 失败! Code: 0x%X (目标缓冲区可能无效)\n", status);
+        return status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS MdlRwWrite(
+    _Inout_ PMDL_RW_CONTEXT Context,
+    _In_    PVOID SourceBuffer,
+    _In_    SIZE_T CopyLength
+)
+{
+    if (!Context->MappedSystemVa) {
+        DbgPrint("MdlRwWrite 失败: MappedSystemVa 为空\n");
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (CopyLength > Context->Length) {
+        DbgPrint("MdlRwWrite 失败: 拷贝长度 %llu > 上下文长度 %llu\n", CopyLength, Context->Length);
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    __try {
+        RtlCopyMemory(Context->MappedSystemVa, SourceBuffer, CopyLength);
+        DbgPrint("MdlRwWrite: RtlCopyMemory 成功\n");
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        NTSTATUS status = GetExceptionCode();
+        DbgPrint("MdlRwWrite 异常: RtlCopyMemory 失败! Code: 0x%X (源缓冲区可能无效)\n", status);
+        return status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+VOID MdlRwCleanup(
+    _Inout_ PMDL_RW_CONTEXT Context
+)
+{
+    if (Context->MappedSystemVa) {
+        MmUnmapLockedPages(Context->MappedSystemVa, Context->Mdl);
+        Context->MappedSystemVa = NULL;
+    }
+
+    if (Context->Mdl) {
+        if (Context->Mdl->MdlFlags & MDL_PAGES_LOCKED) {
+            MmUnlockPages(Context->Mdl);
+        }
+        IoFreeMdl(Context->Mdl);
+        Context->Mdl = NULL;
+    }
+}
+
+//====================================================
+// 对外封装：读取目标进程内存
+//====================================================
+NTSTATUS ReadProcessMemory(
+    _In_  HANDLE dwProcessId,
+    _In_  PVOID pSourceAddress,         // 目标进程中的地址
+    _Out_ PVOID pDestinationBuffer,    // 调用方进程的缓冲区 (可能是 R3 指针)
+    _In_  SIZE_T SizeOfCopy,
+    _Out_ PSIZE_T pBytesTransferred
+)
+{
     NTSTATUS status;
-    PEPROCESS pEProcess = NULL;
-    status = PsLookupProcessByProcessId(dwProcessId, &pEProcess);
-    if (!NT_SUCCESS(status)) return status;
+    PEPROCESS targetProcess = NULL;
+    KAPC_STATE apcState;
+    MDL_RW_CONTEXT ctx = { 0 };
+    PVOID kernelBuffer = NULL; // 新增：内核池中转缓冲区
 
-    status = MmCopyVirtualMemory(
-        PsGetCurrentProcess(),   // 源：当前进程
-        pSourceBuffer,            // 源地址
-        pEProcess,               // 目标：目标进程
-        pDestinationAddress,      // 目标地址
-        SizeOfCopy,
-        KernelMode,
-        pBytesTransferred
-    );
+    if (pBytesTransferred) {
+        *pBytesTransferred = 0;
+    }
 
-    ObDereferenceObject(pEProcess);
+    if (!dwProcessId || !pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
+        DbgPrint("ReadProcessMemory 失败: 无效参数\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        DbgPrint("ReadProcessMemory 失败: IRQL 过高 %d\n", KeGetCurrentIrql());
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    // 1. 分配内核池内存作为中转，防止跨进程上下文访问导致缺页/蓝屏
+    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
+    if (!kernelBuffer) {
+        DbgPrint("ReadProcessMemory 失败: 分配内核中转缓冲区失败\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    DbgPrint("ReadProcessMemory: 开始读取 PID: %p, 目标地址: 0x%p, 大小: %llu\n", dwProcessId, pSourceAddress, SizeOfCopy);
+
+    status = PsLookupProcessByProcessId(dwProcessId, &targetProcess);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("ReadProcessMemory 失败: PsLookupProcessByProcessId 找不到进程! Code: 0x%X\n", status);
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        return status;
+    }
+
+    if (PsGetProcessExitStatus(targetProcess) != STATUS_PENDING) {
+        DbgPrint("ReadProcessMemory 失败: 目标进程已终止\n");
+        ObDereferenceObject(targetProcess);
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
+
+    // 2. 附加到目标进程上下文
+    KeStackAttachProcess(targetProcess, &apcState);
+    DbgPrint("ReadProcessMemory: 已附加到进程上下文\n");
+
+    /*__try
+    {
+        volatile UCHAR x = *(volatile UCHAR*)pSourceAddress;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        DbgPrint("Exception=%08X\n", GetExceptionCode());
+    }*/
+
+    __try {
+        // 初始化 MDL 锁定目标进程的源地址
+        status = MdlRwInitialize(&ctx, pSourceAddress, SizeOfCopy, UserMode, IoReadAccess);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("ReadProcessMemory 失败: MdlRwInitialize 错误 0x%X\n", status);
+            __leave;
+        }
+
+        DbgPrint("MDL StartVa=%p ByteOffset=%lx ByteCount=%lx\n",
+            ctx.Mdl->StartVa,
+            ctx.Mdl->ByteOffset,
+            ctx.Mdl->ByteCount);
+        status = MdlRwLockAndMap(&ctx);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("ReadProcessMemory 失败: MdlRwLockAndMap 错误 0x%X\n", status);
+            __leave;
+        }
+
+        // 3. 此时在目标进程上下文中，将数据拷贝到【内核缓冲区】
+        // 由于 kernelBuffer 是 NonPagedPool，它在任何进程上下文下都有效，不会缺页
+        __try {
+            RtlCopyMemory(kernelBuffer, ctx.MappedSystemVa, SizeOfCopy);
+            DbgPrint("ReadProcessMemory: 成功将数据拷贝至内核中转缓冲区\n");
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = GetExceptionCode();
+            DbgPrint("ReadProcessMemory 异常: 拷贝至内核缓冲区失败! Code: 0x%X\n", status);
+            __leave;
+        }
+
+    }
+    __finally {
+        MdlRwCleanup(&ctx);
+        KeUnstackDetachProcess(&apcState); // 退出目标进程上下文，恢复原进程 CR3
+    }
+
+    ObDereferenceObject(targetProcess);
+
+    // 4. 回到原进程上下文后，将内核缓冲区的数据拷贝到调用方提供的 pDestinationBuffer
+    if (NT_SUCCESS(status)) {
+        __try {
+            RtlCopyMemory(pDestinationBuffer, kernelBuffer, SizeOfCopy);
+            if (pBytesTransferred) {
+                *pBytesTransferred = SizeOfCopy;
+            }
+            DbgPrint("ReadProcessMemory: 成功将数据拷贝至最终目标缓冲区\n");
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = GetExceptionCode();
+            DbgPrint("ReadProcessMemory 异常: 拷贝至目标缓冲区失败! Code: 0x%X (目标缓冲区无效)\n", status);
+        }
+    }
+
+    // 释放内核中转缓冲区
+    if (kernelBuffer) {
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+    }
+
+    return status;
+}
+
+//====================================================
+// 对外封装：写入目标进程内存
+//====================================================
+NTSTATUS WriteProcessMemory(
+    _In_  HANDLE dwProcessId,
+    _In_  PVOID pSourceAddress,
+    _Out_ PVOID pDestinationBuffer,
+    _In_  SIZE_T SizeOfCopy,
+    _Out_ PSIZE_T pBytesTransferred
+)
+{
+    NTSTATUS status;
+    PEPROCESS targetProcess = NULL;
+    KAPC_STATE apcState;
+    MDL_RW_CONTEXT ctx = { 0 };
+    PVOID kernelBuffer = NULL; // 新增：内核池中转缓冲区
+
+    if (pBytesTransferred) {
+        *pBytesTransferred = 0;
+    }
+
+    if (!dwProcessId || !pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
+        DbgPrint("WriteProcessMemory 失败: 无效参数\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        DbgPrint("WriteProcessMemory 失败: IRQL 过高 %d\n", KeGetCurrentIrql());
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    // 1. 分配内核池内存作为中转，防止跨进程上下文访问导致缺页/蓝屏
+    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
+    if (!kernelBuffer) {
+        DbgPrint("ReadProcessMemory 失败: 分配内核中转缓冲区失败\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+	// 将缓冲区数据拷贝到内核中转缓冲区，确保在目标进程上下文中访问安全
+    __try {
+        RtlCopyMemory(kernelBuffer, pSourceAddress, SizeOfCopy);
+	}
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        DbgPrint("WriteProcessMemory 异常: 拷贝源数据至内核缓冲区失败! Code: 0x%X\n", status);
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        return status;
+	}
+
+    DbgPrint("WriteProcessMemory: 开始写入 PID: %p, 目标地址: 0x%p, 大小: %llu\n", dwProcessId, pDestinationBuffer, SizeOfCopy);
+
+    status = PsLookupProcessByProcessId(dwProcessId, &targetProcess);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("WriteProcessMemory 失败: PsLookupProcessByProcessId 找不到进程! Code: 0x%X\n", status);
+		ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        return status;
+    }
+
+    if (PsGetProcessExitStatus(targetProcess) != STATUS_PENDING) {
+        DbgPrint("WriteProcessMemory 失败: 目标进程已终止\n");
+        ObDereferenceObject(targetProcess);
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
+
+    KeStackAttachProcess(targetProcess, &apcState);
+
+    __try {
+        status = MdlRwInitialize(&ctx, pDestinationBuffer, SizeOfCopy, UserMode, IoWriteAccess);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("WriteProcessMemory 失败: MdlRwInitialize 错误 0x%X\n", status);
+            __leave;
+        }
+
+        status = MdlRwLockAndMap(&ctx);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("WriteProcessMemory 失败: MdlRwLockAndMap 错误 0x%X\n", status);
+            __leave;
+        }
+
+		status = MdlRwWrite(&ctx, kernelBuffer, SizeOfCopy);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("WriteProcessMemory 失败: MdlRwWrite 错误 0x%X\n", status);
+            __leave;
+		}
+
+        if (pBytesTransferred) {
+            *pBytesTransferred = SizeOfCopy;
+        }
+        DbgPrint("WriteProcessMemory: 成功写入 %llu 字节\n", SizeOfCopy);
+
+    }
+    __finally {
+        MdlRwCleanup(&ctx);
+        ExFreePoolWithTag(kernelBuffer, 'kRwM');
+        KeUnstackDetachProcess(&apcState);
+    }
+
+    ObDereferenceObject(targetProcess);
     return status;
 }
 

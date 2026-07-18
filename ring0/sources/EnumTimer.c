@@ -38,8 +38,8 @@ PVOID FindIopTimerQueueHead()
     // 指定特征码长度
     ULONG ulSpecialCodeLength = 3;
 
-	// 打印从IoInitializeTimerAddr + 0x4b开始的20字节内容
-    for (ULONG i = 0x65; i <= 0xa5; i++) DbgPrint("Byte %02x: %02x", i, *((PUCHAR)IoInitializeTimerAddr + i));
+	// 打印从IoInitializeTimerAddr
+    //for (ULONG i = 0x26; i <= 0xa5; i++) DbgPrint("Byte %02x: %02x", i, *((PUCHAR)IoInitializeTimerAddr + i));
 
     // 开始搜索,找到后返回首地址
     PVOID result = SearchSpecialCode(StartSearchAddress, size, pSpecialCode, ulSpecialCodeLength);
@@ -56,38 +56,37 @@ PVOID FindIopTimerQueueHead()
     return IopTimerQueueHeadAddr;
 }
 
-void EnumIoTimers(PSYSTEM_TIMER SystemTimers)
+BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers)
 {
     PLIST_ENTRY IopTimerQueueHead = (PLIST_ENTRY)FindIopTimerQueueHead();
     // 枚举列表
     KIRQL OldIrql;
     ULONG i = 0;
 
+    if (!(IopTimerQueueHead && MmIsAddressValid((PVOID)IopTimerQueueHead))) return FALSE;
+
     // 获得特权级
     OldIrql = KeRaiseIrqlToDpcLevel();
 
     __try
     {
-        if (IopTimerQueueHead && MmIsAddressValid((PVOID)IopTimerQueueHead))
+        PLIST_ENTRY NextEntry = IopTimerQueueHead->Flink;
+        while (MmIsAddressValid(NextEntry) && NextEntry != (PLIST_ENTRY)IopTimerQueueHead)
         {
-            PLIST_ENTRY NextEntry = IopTimerQueueHead->Flink;
-            while (MmIsAddressValid(NextEntry) && NextEntry != (PLIST_ENTRY)IopTimerQueueHead)
-            {
-                PIO_TIMER Timer = CONTAINING_RECORD(NextEntry, IO_TIMER, TimerList);
+            PIO_TIMER Timer = CONTAINING_RECORD(NextEntry, IO_TIMER, TimerList);
 
-                if (Timer && MmIsAddressValid(Timer))
-                {
-                    RtlStringCbCopyW(SystemTimers[i].Name, sizeof(SystemTimers[i].Name), L"IoTimer");
-                    SystemTimers[i].TimerObject = (PVOID)Timer;
-                    SystemTimers[i].Func = Timer->TimerRoutine;
-                    SystemTimers[i].Flag = Timer->TimerFlag;
-                    SystemTimers[i].Type = Timer->Type;
-                    DbgPrint("IoTimer对象地址: 0x%p\n", Timer);
-                    DbgPrint("IoTimer回调地址: 0x%p\n", Timer->TimerRoutine);
-                    i++;
-                }
-                NextEntry = NextEntry->Flink;
+            if (Timer && MmIsAddressValid(Timer))
+            {
+                RtlStringCbCopyW(SystemTimers[i].Name, sizeof(SystemTimers[i].Name), L"IoTimer");
+                SystemTimers[i].TimerObject = (PVOID)Timer;
+                SystemTimers[i].Func = Timer->TimerRoutine;
+                SystemTimers[i].Flag = Timer->TimerFlag;
+                SystemTimers[i].Type = Timer->Type;
+                DbgPrint("IoTimer, Timer=: 0x%p, Func=0x%p, Flag=%d, Type=%d, Context=0x%p\n",
+                    Timer, Timer->TimerRoutine, Timer->TimerFlag, Timer->Type, Timer->Context);
+                i++;
             }
+            NextEntry = NextEntry->Flink;
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -97,126 +96,274 @@ void EnumIoTimers(PSYSTEM_TIMER SystemTimers)
 
     // 恢复特权级
     KeLowerIrql(OldIrql);
+    return TRUE;
 }
 
-PVOID FindKeSetTimerEx()
+PVOID FindKiSetTimerEx()
 {
-    UNICODE_STRING KeSetTimerName = RTL_CONSTANT_STRING(L"KeSetTimer");
-    PVOID KeSetTimerAddr = MmGetSystemRoutineAddress(&KeSetTimerName);
-    if (NULL == KeSetTimerAddr)
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"KeSetTimerEx");
+    PUCHAR pKeSetTimerEx = (PUCHAR)MmGetSystemRoutineAddress(&name);
+
+    if (pKeSetTimerEx == NULL)
     {
-        DbgPrint("KeSetTimerAddr is NULL");
+        DbgPrint("KeSetTimerEx is NULL\n");
         return NULL;
     }
-    //DbgPrint("KeSetTimerAddr: %p", KeSetTimerAddr);
 
-    // LyShark 开始定位特征
+    //
+    // 计算函数长度（直到 RET）
+    //
+    ULONG FuncSize = 0;
 
-    // 设置起始位置
-    PUCHAR StartSearchAddress = (PUCHAR)KeSetTimerAddr;
-
-    // 设置搜索长度
-    ULONG size = 0x20;
-
-    // 指定特征码
-    UCHAR pSpecialCode[256] = { 0xe8 };
-
-    // 指定特征码长度
-    ULONG ulSpecialCodeLength = 1;
-
-    // 开始搜索,找到后返回首地址
-    PVOID result = SearchSpecialCode(StartSearchAddress, size, pSpecialCode, ulSpecialCodeLength);
-    if (NULL == result)
+    while (FuncSize < 0x400)
     {
-        DbgPrint("KeSetTimerExAddr is NULL");
-        return NULL;
-    }
-    DbgPrint("KeSetTimerEx result:0x%p", result);
-    // 计算目标地址
-    ULONG offset = *(PULONG)((PUCHAR)result + 1);
-    PVOID KeSetTimerExAddr = (PVOID)((PUCHAR)result + 5 + offset);
+        UCHAR op = pKeSetTimerEx[FuncSize];
 
-    DbgPrint("KeSetTimerEx地址: 0x%p \n", KeSetTimerExAddr);
-    return KeSetTimerExAddr;
+        if (op == 0xC3)                 // ret
+        {
+            FuncSize++;
+            break;
+        }
+
+        if (op == 0xC2)                 // ret xx
+        {
+            FuncSize += 3;
+            break;
+        }
+
+        FuncSize++;
+    }
+
+    DbgPrint("KeSetTimerEx Size = 0x%X\n", FuncSize);
+
+    //
+    // Win10：函数很长，直接就是完整实现
+    //
+    if (FuncSize > 0x80)
+    {
+        DbgPrint("KeSetTimerEx is full implementation.\n");
+        return pKeSetTimerEx;
+    }
+
+    //
+    // Win11：wrapper，寻找 call rel32
+    //
+    for (ULONG i = 0; i + 5 <= FuncSize; i++)
+    {
+        if (pKeSetTimerEx[i] != 0xE8)
+            continue;
+
+        LONG Rel = *(PLONG)(pKeSetTimerEx + i + 1);
+
+        PUCHAR Target = pKeSetTimerEx + i + 5 + Rel;
+
+        DbgPrint("Found CALL at +0x%X -> %p\n", i, Target);
+
+        return Target;
+    }
+
+    DbgPrint("Wrapper detected but CALL not found.\n");
+
+    return NULL;
 }
 
-VOID FindKiWaitXXX(PVOID KeSetTimerEx, PVOID* KiWaitNever, PVOID* KiWaitAlways)
+PKDPC DecodeTimerDpc(
+    PKTIMER Timer,
+    PVOID KiWaitNever,
+    PVOID KiWaitAlways
+)
 {
-    ULONG64 addr = 0;
-    NTSTATUS status = GetNtSymbolAddress(L"KiWaitNever", &addr);
-    if (status == STATUS_SUCCESS && addr)
-    {
-        DbgPrint("Symbol: KiWaitNever=%p\n", (PVOID)addr);
-        *KiWaitNever = (PVOID)addr;
+    if (!Timer || !KiWaitNever || !KiWaitAlways) return NULL;
 
-        status = GetNtSymbolAddress(L"KiWaitAlways", &addr);
-        if (status == STATUS_SUCCESS && addr)
+    ULONG_PTR Dpc = (ULONG_PTR)Timer->Dpc;
+
+    ULONG_PTR Never =
+        *(volatile ULONG_PTR*)KiWaitNever;
+    ULONG_PTR Always =
+        *(volatile ULONG_PTR*)KiWaitAlways;
+
+    ULONG Shift = (ULONG)(Never & 0xFF);
+
+    //
+    // Win10 / Win11 23H2
+    //
+    Dpc ^= Never;
+    Dpc = _rotl64(
+        Dpc,
+        Shift
+    );
+    Dpc ^= (ULONG_PTR)Timer;
+    Dpc = _byteswap_uint64(Dpc);
+    Dpc ^= Always;
+
+    return (PKDPC)Dpc;
+}
+
+BOOLEAN FindKiWaitXXX(
+    PVOID KiSetTimerEx,
+    PVOID* KiWaitNever,
+    PVOID* KiWaitAlways
+)
+{
+    if (!KiSetTimerEx || !KiWaitNever || !KiWaitAlways)
+        return FALSE;
+
+    PUCHAR code = (PUCHAR)KiSetTimerEx;
+
+    DbgPrint(
+        "FindKiWaitXXX start: %p\n",
+        KiSetTimerEx
+    );
+
+    PVOID Never = NULL;
+    PVOID Always = NULL;
+    ULONG movCount = 0;
+
+    for (ULONG i = 0; i < 0x120; i++)
+    {
+        //
+        // mov rax,[rip+xxxx]
+        //
+        if (code[i] == 0x48 &&
+            code[i + 1] == 0x8B)
         {
-            DbgPrint("Symbol: KiWaitAlways=%p\n", (PVOID)addr);
-            *KiWaitAlways = (PVOID)addr;
-            return;
+            if ((code[i + 2] & 0xC7) == 0x05)
+            {
+                movCount++;
+
+                if (movCount == 1)
+                {
+                    // __security_cookie
+                    continue;
+                }
+                LONG offset =
+                    *(PLONG)(code + i + 3);
+
+                PVOID addr =
+                    code + i + 7 + offset;
+
+                DbgPrint(
+                    "RIP MOV found @+0x%x ModRM=%02X -> %p\n",
+                    i,
+                    code[i + 2],
+                    addr
+                );
+
+                if (movCount == 2)
+                {
+                    Never = addr;
+                }
+                else if (movCount == 3)
+                {
+                    Always = addr;
+                }
+            }
         }
 
-    }
-    DbgPrint("Symbol failed, fallback to pattern scan\n");
-    // -------------------------------------------
-    // LyShark 开始定位特征
-
-    if (NULL == KeSetTimerEx) return;
-    
-    // 设置起始位置
-    PUCHAR StartSearchAddress = (PUCHAR)KeSetTimerEx;
-
-    // 设置搜索长度
-    ULONG size = 0x60;
-
-    // 指定特征码
-    UCHAR pSpecialCode[256] = { 0x48,0x8b,0x05 };
-    
-    // 指定特征码长度
-    ULONG ulSpecialCodeLength = 3;
-	DbgPrint("正在尝试第一种搜索方法...");
-    // 开始搜索,找到后返回首地址
-    PVOID result = SearchSpecialCode(StartSearchAddress + 0x20, size, pSpecialCode, ulSpecialCodeLength);
-    if (NULL == result)
-    {
-        DbgPrint("正在尝试第二种搜索方法...");
-		UCHAR pSpecialCode1[1] = { 0xe8 };
-        result = SearchSpecialCode(KeSetTimerEx, size, pSpecialCode1, 1);
-        if (result == NULL)
+        //
+        // xor reg,[rip+xxxx]
+        //
+        if (code[i] == 0x48 &&
+            code[i + 1] == 0x33)
         {
-            DbgPrint("KiSetTimerExAddr is NULL");
-            return;
-		}
-		DbgPrint("KiSetTimerEx第二种搜索方法 result:0x%p", result);
-		ULONG offset = *(PULONG)((PUCHAR)result + 1);
-		PVOID KiSetTimerEx = (PVOID)((PUCHAR)result + 5 + offset);
-		result = SearchSpecialCode((PUCHAR)KiSetTimerEx, 0x60, pSpecialCode, ulSpecialCodeLength);
-        if (result == NULL) {
-			DbgPrint("KiWaitNeverAddr is NULL");
-            return;
-        }
-		DbgPrint("KiWaitNever第二种搜索方法 result:0x%p", result);
-		offset = *(PULONG)((PUCHAR)result + 3);
-		*KiWaitNever = (PVOID)((PUCHAR)result + 7 + offset);
-        DbgPrint("KiWaitNever首地址: 0x%p \n", *KiWaitNever);
-        offset = *(PULONG)((PUCHAR)result + 10 + 3);
-        *KiWaitAlways = (PVOID)((PUCHAR)result + 10 + 7 + offset);
-		DbgPrint("KiWaitAlways首地址: 0x%p \n", *KiWaitAlways);
-    }
-    // 计算目标地址
-	DbgPrint("KiWaitNever result:0x%p", result);
-    ULONG offset = *(PULONG)((PUCHAR)result + 3);
-    *KiWaitNever = (PVOID)((PUCHAR)result + 7 + offset);
-    offset = *(PULONG)((PUCHAR)result + 10 + 3);
-    *KiWaitAlways = (PVOID)((PUCHAR)result + 10 + 7 + offset);
 
-    DbgPrint("KiWaitNever首地址: 0x%p \n", *KiWaitNever);
-    DbgPrint("KiWaitAlways首地址: 0x%p \n", *KiWaitAlways);
+            //
+            // 2D:
+            // xor rbp,[rip+xxxx]
+            //
+            // 35:
+            // xor rsi,[rip+xxxx]
+            //
+            if (code[i + 2] >= 0x05 &&
+                code[i + 2] <= 0x3D)
+            {
+
+                LONG offset =
+                    *(PLONG)(code + i + 3);
+
+
+                PVOID addr =
+                    code + i + 7 + offset;
+
+
+                DbgPrint(
+                    "RIP XOR found @+0x%x -> %p\n",
+                    i,
+                    addr
+                );
+
+
+                if (!Always)
+                {
+                    Always = addr;
+                }
+            }
+        }
+    }
+
+    //
+    // Win10:
+    // mov KiWaitNever
+    // mov KiWaitAlways
+    //
+    // Win11:
+    // mov KiWaitNever
+    // xor KiWaitAlways
+    //
+    if (Never && Always)
+    {
+        *KiWaitNever = Never;
+        *KiWaitAlways = Always;
+
+
+        DbgPrint(
+            "KiWaitNever=%p\n",
+            Never
+        );
+
+        DbgPrint(
+            "KiWaitAlways=%p\n",
+            Always
+        );
+
+        return TRUE;
+    }
+
+
+    DbgPrint(
+        "Find failed Never=%p Always=%p\n",
+        Never,
+        Always
+    );
+
+
+    return FALSE;
 }
 
 void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
 {
+    PVOID KiWaitNever = NULL, KiWaitAlways = NULL;
+    __try
+    {
+        PVOID KiSetTimerEx;
+
+        KiSetTimerEx = FindKiSetTimerEx();
+        //if (!KiSetTimerEx) KiSetTimerEx = (PVOID)KeSetTimerEx;
+
+        if (!FindKiWaitXXX(
+            KiSetTimerEx,
+            &KiWaitNever,
+            &KiWaitAlways))
+        {
+            DbgPrint("Find KiWait failed\n");
+            return;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        DbgPrint("error1 status:%X", GetExceptionCode());
+    }
+
     // 获取 CPU 核心数
     int i_cpuNum = KeNumberProcessors;
     int k = 0;
@@ -235,7 +382,7 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
 			DbgPrint("Get PRCB Failed!");
             return;
         }
-		DbgPrint("PRCB地址: 0x%llx \n", p_PRCB);
+		//DbgPrint("PRCB地址: 0x%llx \n", p_PRCB);
 
         // 取消绑定 CPU
         KeRevertToUserAffinityThread();
@@ -245,16 +392,26 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
         OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
         RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
 
+        BOOLEAN IsWin11 =
+            (OSVersion.dwMajorVersion == 10 &&
+                OSVersion.dwBuildNumber >= 22000);
+
         // 计算 TimerTable 在 _KPRCB 结构中的偏移
         PKTIMER_TABLE p_TimeTable = NULL;
-        if (OSVersion.dwMajorVersion == 11) {
-            // Windows 11
-			p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x4100);
-        }
-        else if (OSVersion.dwMajorVersion == 10 && OSVersion.dwMinorVersion == 0)
+        if (OSVersion.dwMajorVersion == 10)
         {
-            // Windows 10
-            p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3c00);
+            if (IsWin11)
+            {
+                DbgPrint("Windows11\n");
+                p_TimeTable =
+                    (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x4100);
+            }
+            else
+            {
+                DbgPrint("Windows10\n");
+                p_TimeTable =
+                    (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3c00);
+            }
         }
         else if (OSVersion.dwMajorVersion == 6 && OSVersion.dwMinorVersion == 1)
         {
@@ -267,69 +424,50 @@ void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
             return;
         }
 
-        __try
+        // 遍历 TimerEntries[] 数组（大小 256）
+        for (int j = 0; j < 256; j++)
         {
-            // 遍历 TimerEntries[] 数组（大小 256）
-            for (int j = 0; j < 256; j++)
+            // 获取 Entry 双向链表地址
+            if (!MmIsAddressValid((PVOID64)p_TimeTable)) continue;
+
+            PLIST_ENTRY p_ListEntryHead = NULL;
+            _try{
+                p_ListEntryHead = &(p_TimeTable->TimerEntries[j].Entry);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
             {
-                // 获取 Entry 双向链表地址
-                if (!MmIsAddressValid((PVOID64)p_TimeTable)) continue;
-
-                PLIST_ENTRY p_ListEntryHead = &(p_TimeTable->TimerEntries[j].Entry);
-
-                // 遍历 Entry 双向链表
-                for (PLIST_ENTRY p_ListEntry = p_ListEntryHead->Flink; p_ListEntry != p_ListEntryHead; p_ListEntry = p_ListEntry->Flink)
+                DbgPrint("error2 status:%X", GetExceptionCode());
+            }
+            // 遍历 Entry 双向链表
+            PLIST_ENTRY p_ListEntry = p_ListEntryHead->Flink;
+            while (p_ListEntry && MmIsAddressValid(p_ListEntry) &&
+                p_ListEntry != p_ListEntryHead)
+            {
+                // 根据 Entry 取 _KTIMER 对象地址
+                PKTIMER p_Timer = CONTAINING_RECORD(p_ListEntry, KTIMER, TimerListEntry);
+                if (k >= 512)
                 {
-                    // 根据 Entry 取 _KTIMER 对象地址
-                    if (!MmIsAddressValid((PVOID64)p_ListEntry)) continue;
-
-                    PKTIMER p_Timer = CONTAINING_RECORD(p_ListEntry, KTIMER, TimerListEntry);
-
-                    // 硬编码取 KiWaitNever 和 KiWaitAlways
-					//DbgPrint("正在获取 KiWaitNever 和 KiWaitAlways 地址...");
-                    ULONG_PTR never = 0, always = 0, KeSetTimerEx = (ULONG_PTR)FindKeSetTimerEx();
-                    if (!KeSetTimerEx)
-                        FindKiWaitXXX((PVOID)KeSetTimer, (PVOID*)&never, (PVOID*)&always);
-                    else
-                        FindKiWaitXXX((PVOID)KeSetTimerEx, (PVOID*)&never, (PVOID*)&always);
-                    
-                    if (never == 0 || always == 0)
-                    {
-                        DbgPrint("Get KiWaitNever or KiWaitAlways Failed!");
-                        return;
-                    }
-					//DbgPrint("KiWaitNever: 0x%llX | KiWaitAlways: 0x%llX \n", never, always);
-
-                    // 获取解密前的 Dpc 对象
-                    if (!MmIsAddressValid((PVOID64)p_Timer)) continue;
-
-                    ULONG_PTR ul_Dpc = (ULONG_PTR)p_Timer->Dpc;
-                    INT i_Shift = (*((PULONG_PTR)never) & 0xFF);
-
-                    // 解密 Dpc 对象
-                    ul_Dpc ^= *((ULONG_PTR*)never);			// 异或
-                    ul_Dpc = _rotl64(ul_Dpc, i_Shift);		// 循环左移
-                    ul_Dpc ^= (ULONG_PTR)p_Timer;			// 异或
-                    ul_Dpc = _byteswap_uint64(ul_Dpc);		// 颠倒顺序
-                    ul_Dpc ^= *((ULONG_PTR*)always);		// 异或
-
-                    // 对象类型转换
-                    PKDPC p_Dpc = (PKDPC)ul_Dpc;
-					RtlStringCbCopyW(SystemTimers[k].Name, sizeof(SystemTimers[k].Name), L"DpcTimer");
-                    SystemTimers[k].TimerObject = p_Dpc;
-                    SystemTimers[k].Period = p_Timer->Period;
-					SystemTimers[k].Type = p_Timer->TimerType;
-                    k++;
-                    DbgPrint("定时器对象：0x%p | 触发周期: %d \n ", p_Timer, p_Timer->Period);
-                    if (!MmIsAddressValid((PVOID64)p_Dpc)) continue;
-                    SystemTimers[k].Func = (PVOID)(p_Dpc->DeferredRoutine);
-                    DbgPrint("函数入口：0x%p", p_Dpc->DeferredRoutine);
+                    DbgPrint("Timer buffer full\n");
+                    return;
                 }
+                PKDPC p_Dpc = DecodeTimerDpc(p_Timer, KiWaitNever, KiWaitAlways);
+                RtlStringCbCopyW(SystemTimers[k].Name, sizeof(SystemTimers[k].Name), L"DpcTimer");
+                SystemTimers[k].TimerObject = p_Timer;
+                SystemTimers[k].pDpc = p_Dpc;
+                SystemTimers[k].Period = p_Timer->Period;
+				SystemTimers[k].Type = p_Timer->TimerType;
+                DbgPrint("定时器对象：0x%p | 触发周期: %d \n ", p_Timer, p_Timer->Period);
+                if (p_Dpc && MmIsAddressValid((PVOID64)p_Dpc)) {
+                    SystemTimers[k].Func = (PVOID)(p_Dpc->DeferredRoutine);
+					DbgPrint("DPC对象：0x%p | 函数入口: 0x%p \n", p_Dpc, p_Dpc->DeferredRoutine);
+                }
+                k++;
+
+                if (!MmIsAddressValid(p_ListEntry))
+                    break;
+
+                p_ListEntry = p_ListEntry->Flink;
             }
         }
-		__except(EXCEPTION_EXECUTE_HANDLER)
-		{
-			DbgPrint("error status:%X", GetExceptionCode());
-		}
     }
 }

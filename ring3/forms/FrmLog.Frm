@@ -88,11 +88,76 @@ AcceptFiles=False
 
 Dim Shared strLog As StringW = ""
 
+' 可以改进为EM_STREAMIN
+Sub SafeSetRichEditTextW(hRichEdit As HWND, text As StringW)
+
+    Const CHUNK_CHARS = 32768
+
+    Dim totalChars As Integer = LenW(text)
+    If totalChars = 0 Then
+        SendMessage(hRichEdit, WM_SETTEXT, 0, Cast(LPARAM, @""))
+        Exit Sub
+    End If
+
+    ' RichEdit 取消文本限制
+    SendMessage(hRichEdit, EM_EXLIMITTEXT, 0, -1)
+
+    ' 清空内容
+    SendMessage(hRichEdit, WM_SETTEXT, 0, Cast(LPARAM, @""))
+
+    ' 禁止重绘
+    SendMessage(hRichEdit, WM_SETREDRAW, FALSE, 0)
+
+    ' 光标移动到末尾（仅一次）
+    Dim cr As CHARRANGE
+    cr.cpMin = -1
+    cr.cpMax = -1
+    SendMessage(hRichEdit, EM_EXSETSEL, 0, Cast(LPARAM, @cr))
+
+    ' 只获取一次指针
+    Dim pText As UShort Ptr = Cast(UShort Ptr, StrPtrW(text))
+
+    ' 缓冲区放到循环外
+    Dim wsz As WString * (CHUNK_CHARS + 1)
+
+    Dim i As Integer
+
+    For i = 0 To totalChars - 1 Step CHUNK_CHARS
+
+        Dim chunkLen As Integer
+
+        If i + CHUNK_CHARS <= totalChars Then
+            chunkLen = CHUNK_CHARS
+        Else
+            chunkLen = totalChars - i
+        End If
+
+        memcpy(@wsz[0], pText + i, chunkLen * SizeOf(UShort))
+
+        wsz[chunkLen] = 0
+
+        SendMessage( _
+            hRichEdit, _
+            EM_REPLACESEL, _
+            FALSE, _
+            Cast(LPARAM, StrPtr(wsz)) _
+        )
+
+    Next
+
+    SendMessage(hRichEdit, WM_SETREDRAW, TRUE, 0)
+
+    InvalidateRect(hRichEdit, NULL, TRUE)
+    UpdateWindow(hRichEdit)
+
+End Sub
+
 '[FrmLog]事件 : 窗口完全显示后。
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'UserData  来自显示窗口最后1个参数，例： Form2.Show(父窗口句柄,模式,UserData)
-Sub FrmLog_Shown(hWndForm As hWnd,UserData As Integer)
-    txtLog.Text = strLog
+Sub FrmLog_Shown(hWndForm As hWnd, UserData As Integer)
+    SafeSetRichEditTextW txtLog.hWnd, strLog
 End Sub
+
 
 

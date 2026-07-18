@@ -653,7 +653,7 @@ Sub ParseMBRAndMapVolumes(ByVal diskIndex As Integer, _
             With diskInfo->partitions(partCount)
                 .partitionIndex = i + 1
                 .startLBA = startLBA
-                .totalSectors = .totalSectors
+                .totalSectors = mbr->partitions(i).totalSectors
                 .bytesPerSector = bytesPerSec
                 .fsType = detectedFS
                 .drvLetter = drvLetter

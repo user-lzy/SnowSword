@@ -760,7 +760,7 @@ Tag=
 Name=mnuTaskScheduler
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuTaskScheduler_mnuRefresh0-10-FrmMain_mnuTaskScheduler_mnuStep10-10启用FrmMain_mnuTaskScheduler_mnuEnable0-10运行FrmMain_mnuTaskScheduler_mnuRun0-10删除FrmMain_mnuTaskScheduler_mnuDelete0-10-FrmMain_mnuTaskScheduler_mnuStep20-10转到进程FrmMain_mnuTaskScheduler_mnuGotoProcess0-10
+Menu=刷新FrmMain_mnuTaskScheduler_mnuRefersh0-10-FrmMain_mnuTaskScheduler_mnuStep10-10启用FrmMain_mnuTaskScheduler_mnuEnable0-10运行FrmMain_mnuTaskScheduler_mnuRun0-10删除FrmMain_mnuTaskScheduler_mnuDelete0-10-FrmMain_mnuTaskScheduler_mnuStep20-10转到进程FrmMain_mnuTaskScheduler_mnuGotoProcess0-10
 Left=460
 Top=280
 Tag=
@@ -1023,10 +1023,6 @@ Dim Shared gLayoutMode As UI_LAYOUT_MODE
 Dim Shared gMainView   As UI_MAIN_VIEW
 
 Const MAX_LEN = 200
-Const MIN_WIDTH = 350
-Const MIN_HEIGHT = 500
-Const MAX_WIDTH = 350
-Const MAX_HEIGHT = 500
 Const GWL_WNDPROC = -4
 
 #define WM_SignVerify (WM_USER + &H100)
@@ -1522,27 +1518,36 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     End If
     
     InitLog
+    /'For i As Integer = 0 To &H10000
+        MyLog.PrintLog LOG_INFO,,, WStr(i)
+    Next'/
     InitNtUserFunction
     InitAllModuleCache
-    'MyLog.PrintLog GetSystemVersion
-    'SetMenuText mnuProcess, FrmMain_mnuProcess_mnuTerminateProcess, "1"
-    'If SymInit(GetCurrentProcess) = True Then QuerySymbol Cast(PULONG64, &HFFFFF8011B8F0000), NULL
-    prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WNDPROC))
+    prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WndProc))
     InitCustomTooltip hWndForm
-    'Dim bytData() As Byte
-    'If Not ReadFile2("C:\WINDOWS\System32\config\SOFTWARE", bytData()) Then AfxMsg "读取失败!"
-    
     
     InitThreadPool
-    'CheckUpdate
     bFrmMainShowed = True
     
     SymEngine_Init
-    Dim a1 As WString * MAX_PATH = "C:\Users\21607\source\repos\Project1\x64\Debug\Project1.exe"
-    'TestCreateProcess
-    'Print WinErrorMsg(GetLastError)
-    'Print SizeOf(EProcessInfo)
-    'Print SizeOf(TRACE_PROVIDER_INSTANCE_INFO)
+    
+    Dim hFile As HANDLE = CreateFileW("C:\Test1.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile <= 0 Then Print "第一次创建失败,err=" & GetLastError
+    Dim hToken As HANDLE = NULL
+    If CollectHighPrivToken(hToken, "C:\", GENERIC_WRITE) Then
+        Print "收集令牌成功"
+        If ImpersonateLoggedOnUser(hToken) <> 0 Then
+            Print "模拟令牌成功"
+            hFile = CreateFileW("C:\Test1.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+            If hFile <= 0 Then
+                Print "第二次创建失败,err=" & GetLastError
+            Else
+                Print "第二次创建成功"
+                CloseHandle hFile
+            End If
+        End If
+    End If
+    
 End Sub
 
 '[Form1.ListView1]事件 : 鼠标右键单击
@@ -2491,17 +2496,18 @@ End Sub
 'wID      菜单项命令ID
 Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
    Select Case wID
-       Case FrmMain_TopMenu1_mnuUnlockFile ' 解锁文件
+        Case FrmMain_TopMenu1_mnuUnlockFile ' 解锁文件
             Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = UnlockTheFile
             FrmListView.Show,, Cast(Integer, CurrentInfo)
-       Case FrmMain_TopMenu1_mnuCreateProcess ' 创建进程
+        Case FrmMain_TopMenu1_mnuCreateProcess ' 创建进程
             'CreateSYSTEMPriviegeProcess "C:\Windows\System32\cmd.exe"
             'RestartasAdmin
             FrmCreateProcess.Show
         'Case FrmMain_TopMenu1_mnuFireWall ' 防火墙
         '    FrmFireWall.Show
         Case FrmMain_TopMenu1_mnuViewLog ' 显示日志
+           UltimateTest
             FrmLog.Show
         Case FrmMain_TopMenu1_mnuCheckUpdate ' 检测更新
             CheckUpdate
@@ -2922,7 +2928,7 @@ Sub FrmMain_ListView1_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mo
             Dim CurrentPath As StringW = ""
             GetPathByNodeW TreeView.Selection, TreeView, CurrentPath ' 获取当前文件路径
             CurrentPath = CurrentPath & ListView1.GetItemText(SelectIndex, 0)
-            Print "CurrentPath:" & CurrentPath
+            'Print "CurrentPath:" & CurrentPath
             ShellExecute NULL, NULL, CurrentPath, NULL, NULL, 1 ' 以默认方式打开文件
         'Case TaskScheduler
 
@@ -2952,7 +2958,7 @@ Function FrmMain_txtFilePath_WM_KeyUp(hWndForm As hWnd, hWndControl As hWnd, nVi
                     If CurrentNode <> NULL Then
                         SendMessage TreeView.hWnd, TVM_SELECTITEM, TVGN_CARET, Cast(lParam, CurrentNode) ' 选中这项
                     Else
-                        Print "[FrmMain_txtFilePath_WM_KeyUp]CurrentNode = NULL"
+                        'Print "[FrmMain_txtFilePath_WM_KeyUp]CurrentNode = NULL"
                     End If
                 Else ' 是文件,直接打开
                     GetPathByNodeW CurrentNode, TreeView, CurrentPath ' 获取当前文件路径 
@@ -3338,6 +3344,10 @@ End Sub
 
 ' 窗口过程：处理消息
 Function WndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+    Const MIN_WIDTH = 350
+    Const MIN_HEIGHT = 500
+    Const MAX_WIDTH = 350
+    Const MAX_HEIGHT = 500
     Select Case uMsg
         Case WM_SIZING
             ' lParam是RECT结构体指针（拟调整的窗口矩形）
@@ -4295,7 +4305,7 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
             Else
-                If MyCopyFile(SourcePath, TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
+                If CopyFolder(SourcePath, TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
             End If
         Case FrmMain_mnuFolder_mnuDeleteFolder ' 删除
             If RmDir(CurrentPath) = 0 Then
@@ -4451,7 +4461,7 @@ End Sub
 Sub FrmMain_mnuTaskScheduler_WM_Command(hWndForm As hWnd, wID As ULong)
    Dim SelectIndex As Long = ListView1.SelectedItem 
    Select Case wID
-        Case FrmMain_mnuTaskScheduler_mnuRefresh ' 刷新
+        Case FrmMain_mnuTaskScheduler_mnuRefersh ' 刷新
 
         Case FrmMain_mnuTaskScheduler_mnuEnable ' 启用
 

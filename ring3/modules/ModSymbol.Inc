@@ -85,8 +85,9 @@ Dim Shared g_hSymProcess As HANDLE = 0
 Const MAX_LOADED_MODULES = 32
 
 Type LOADED_MODULE
-    modulePath As WString * 1024  ' 模块全路径
-    baseAddr   As ULONG64         ' 符号基址
+    modulePath As Wstring * 1024  ' 模块全路径
+    baseAddr As ULONG64 ' 符号基址
+    SymBase As ULONG64 ' DbgHelp返回地址
     isLoaded   As Boolean         ' 加载标记
 End Type
 Dim Shared g_LoadedModules(0 To MAX_LOADED_MODULES - 1) As LOADED_MODULE
@@ -142,7 +143,7 @@ Sub SymEngine_Cleanup()
 End Sub
 
 ' 通用加载模块（全锁保护，连续加载无崩溃）
-Function SymEngine_LoadModule(ByVal modulePath As WString Ptr) As ULONG64
+Function SymEngine_LoadModule(ByVal modulePath As WString Ptr, ByVal ImageBase As ULONG64 = 0) As ULONG64
     If modulePath = 0 Then Return 0
 
     ' 【全局锁】DbgHelp非线程安全，所有操作必须加锁
@@ -152,9 +153,9 @@ Function SymEngine_LoadModule(ByVal modulePath As WString Ptr) As ULONG64
     For i As Integer = 0 To MAX_LOADED_MODULES - 1
         If g_LoadedModules(i).isLoaded AndAlso _
             wcscmp(@g_LoadedModules(i).modulePath, modulePath) = 0 Then
-            Dim baseAddr As ULONG64 = g_LoadedModules(i).baseAddr
+            Dim SymBase As ULONG64 = g_LoadedModules(i).SymBase
             LeaveCriticalSection(@g_SymCriticalSection)
-            Return baseAddr
+            Return SymBase
         End If
     Next
 
@@ -162,13 +163,14 @@ Function SymEngine_LoadModule(ByVal modulePath As WString Ptr) As ULONG64
     For i As Integer = 0 To MAX_LOADED_MODULES - 1
         If g_LoadedModules(i).isLoaded = False Then
             g_LoadedModules(i).modulePath = *modulePath
-            g_LoadedModules(i).baseAddr = SymLoadModuleExW(g_hSymProcess, 0, modulePath, 0, 0, 0, 0, 0)
-            g_LoadedModules(i).isLoaded = (g_LoadedModules(i).baseAddr <> 0)
+            g_LoadedModules(i).baseAddr = ImageBase
+            g_LoadedModules(i).SymBase = SymLoadModuleExW(g_hSymProcess, 0, modulePath, 0, ImageBase, 0, 0, 0)
+            g_LoadedModules(i).isLoaded = (g_LoadedModules(i).SymBase <> 0)
             If g_LoadedModules(i).isLoaded Then
                 Print "模块加载成功: " & *modulePath
             End If
             LeaveCriticalSection(@g_SymCriticalSection)
-            Return g_LoadedModules(i).baseAddr
+            Return g_LoadedModules(i).SymBase
         End If
     Next
 
@@ -176,20 +178,29 @@ Function SymEngine_LoadModule(ByVal modulePath As WString Ptr) As ULONG64
     For i As Integer = 0 To MAX_LOADED_MODULES - 1
         g_LoadedModules(i).isLoaded = False
     Next
-    Dim newBase As ULONG64 = SymLoadModuleExW(g_hSymProcess, 0, modulePath, 0, 0, 0, 0, 0)
-    g_LoadedModules(0).modulePath = *modulePath
-    g_LoadedModules(0).baseAddr = newBase
-    g_LoadedModules(0).isLoaded = (newBase <> 0)
+    Dim newSymBase As ULONG64 = SymLoadModuleExW( _
+            g_hSymProcess, _
+            0, _
+            modulePath, _
+            0, _
+            ImageBase, _
+            0, _
+            0, _
+            0)
+
+    g_LoadedModules(0).baseAddr = ImageBase
+    g_LoadedModules(0).SymBase = newSymBase
+    g_LoadedModules(0).isLoaded = (newSymBase <> 0)
     
     LeaveCriticalSection(@g_SymCriticalSection)
-    Return newBase
+    Return newSymBase
 End Function
 
 ' ====================== 1. 符号 → 地址（线程安全） ======================
 Function SymEngine_SymbolToAddr(ByVal modulePath As WString Ptr, ByVal symbolName As WString Ptr) As ULONG64
     If symbolName = 0 Or modulePath = 0 Then Return 0
-    Dim baseAddr As ULONG64 = SymEngine_LoadModule(modulePath)
-    If baseAddr = 0 Then Return 0
+    Dim symBase As ULONG64 = SymEngine_LoadModule(modulePath)
+    If symBase = 0 Then Return 0
 
     EnterCriticalSection(@g_SymCriticalSection)
     Dim symbolOffset As ULONG64 = 0
@@ -201,7 +212,7 @@ Function SymEngine_SymbolToAddr(ByVal modulePath As WString Ptr, ByVal symbolNam
         pSym->MaxNameLen = MAX_SYM_NAME
         If SymFromNameW(g_hSymProcess, symbolName, pSym) Then
             ' 【核心改动】返回 符号相对模块基址的偏移，不是绝对地址！
-            symbolOffset = pSym->ADDRESS - baseAddr
+            symbolOffset = pSym->ADDRESS - symBase
         End If
         Deallocate(pSym)
     End If
@@ -237,6 +248,40 @@ Function SymEngine_AddrToSymbol(ByVal modulePath As WString Ptr, ByVal offset As
     LeaveCriticalSection(@g_SymCriticalSection)
     Return result
 End Function
+
+Function EnumTypeCallback( _
+    ByVal pSymInfo As PSYMBOL_INFO, _
+    ByVal SymbolSize As ULONG, _
+    ByVal UserContext As PVOID _
+) As WINBOOL
+
+
+    'If InStr(UCase(pSymInfo->Name),"SESSION") Then
+        Print pSymInfo->Name
+    'End If
+
+    Return True
+
+End Function
+
+Sub DumpAllTypes(ByVal modulePath As WString Ptr, ByVal ImageBase As ULONG64)
+
+    Dim SymBase As ULONG64 = SymEngine_LoadModule(modulePath, ImageBase)
+
+    If SymBase = 0 Then
+        Print "load failed"
+        Exit Sub
+    End If
+
+
+    If SymEnumTypes( _
+        g_hSymProcess, _
+        SymBase, _
+        @EnumTypeCallback, _
+        0 _
+    ) = 0 Then Print "SymEnumTypesW失败,err=" & GetLastError
+
+End Sub
 
 ' 结构体偏移（【修复】内存泄漏 + 全锁保护）
 Function SymEngine_GetStructOffset( _
@@ -301,13 +346,75 @@ Cleanup:
     Return offset
 End Function
 
+Function SymEngine_DumpStruct( _
+    ByVal modulePath As WString Ptr, _
+    ByVal structName As Wstring Ptr _
+) As Long
+    If modulePath = 0 Or structName = 0 Then Return -1
+    Dim baseAddr As ULONG64 = SymEngine_LoadModule(modulePath)
+    If baseAddr = 0 Then Return -1
+
+    EnterCriticalSection(@g_SymCriticalSection)
+    Dim offset As Long = -1
+    Dim symInfoSize As ULONG = SizeOf(SYMBOL_INFOW) + MAX_SYM_NAME * SizeOf(WCHAR)
+    Dim pSym As PSYMBOL_INFOW = CAllocate(symInfoSize)
+    Dim buffer As Byte Ptr = 0
+    Dim pName As PWCHAR = 0
+
+    If pSym = 0 Then GoTo Cleanup
+
+    pSym->SizeOfStruct = SizeOf(SYMBOL_INFOW)
+    pSym->MaxNameLen = MAX_SYM_NAME
+
+    If SymGetTypeFromNameW(g_hSymProcess, baseAddr, structName, pSym) = 0 Then
+        SymGetTypeFromNameW(g_hSymProcess, 0, structName, pSym)
+    End If
+
+    If SymGetTypeFromNameW(g_hSymProcess, baseAddr, structName, pSym) Then
+        Dim numChildren As ULONG = 0
+        If SymGetTypeInfo(g_hSymProcess, baseAddr, pSym->TypeIndex, TI_GET_CHILDRENCOUNT, @numChildren) Then
+            Dim bufferSize As ULONG = SizeOf(TI_FINDCHILDREN_PARAMS) + numChildren * SizeOf(ULONG)
+            buffer = CAllocate(bufferSize)
+            If buffer Then
+                Dim params As TI_FINDCHILDREN_PARAMS Ptr = CPtr(TI_FINDCHILDREN_PARAMS Ptr, buffer)
+                params->Start = 0
+                params->Count = numChildren
+
+                If SymGetTypeInfo(g_hSymProcess, baseAddr, pSym->TypeIndex, TI_FINDCHILDREN, buffer) Then
+                    Dim typeIdArray As ULONG Ptr = CPtr(ULONG Ptr, buffer + SizeOf(TI_FINDCHILDREN_PARAMS))
+                    For i As ULONG = 0 To numChildren - 1
+                        pName = 0
+                        If SymGetTypeInfo(g_hSymProcess, baseAddr, typeIdArray[i], TI_GET_SYMNAME, @pName) Then
+                            If pName Then
+                                SymGetTypeInfo(g_hSymProcess, baseAddr, typeIdArray[i], TI_GET_OFFSET, @offset)
+                                Print Hex(offset); " "; *pName
+                                LocalFree(pName) ' 【修复】必释放，杜绝内存泄漏
+                                pName = 0
+                            End If
+                        End If
+                    Next
+                End If
+            End If
+        End If
+    End If
+
+Cleanup:
+    ' 【修复】兜底释放所有内存，连续查询无泄漏
+    If buffer Then Deallocate(buffer)
+    If pSym Then Deallocate(pSym)
+    LeaveCriticalSection(@g_SymCriticalSection)
+    Return offset
+End Function
+
 ' ###########################################################################
 ' 4. 测试函数 → ✅【允许修改，新增地址→符号测试】
 ' ###########################################################################
 Sub UltimateTest()
     ' ====================== 测试1：加载ntoskrnl（无硬编码） ======================
     Dim ntPath As WString * 1024 = "C:\Windows\System32\ntoskrnl.exe"
-    Dim symbolName As WString * 256 = "PsInitialSystemProcess"
+    Dim win32kPath As WString * 1024 = "C:\Windows\System32\win32k.sys"
+    Dim symbolName As WString * 256 = "PspExitProcess"
+    Dim symbolName1 As WString * 256 = "W32GetUserSessionState"
     
     ' 测试：符号→地址
     Dim addr As ULONG64 = SymEngine_SymbolToAddr(@ntPath, @symbolName)
@@ -335,10 +442,38 @@ Sub UltimateTest()
     Else
         Print "查询失败！"
     End If
+    
+    Dim win32kBase As ULONG64, win32kSize As ULong
+    win32kBase = Cast(ULONG64, GetKernelModuleBase("win32k.sys", win32kSize))
+    Print "win32kBase:0x" & WHex(win32kBase)
+    
+    ' 测试类型枚举
+    /'DumpAllTypes @win32kPath, win32kBase
+    
+    Dim mi As IMAGEHLP_MODULEW64
 
-    ' 测试ntfs（验证多模块支持）
-    'Dim strFunctionName As WString * 1024 = ""
-    'If SymEngine_AddrToSymbol(StrPtrW("C:\Windows\System32\win32kfull.sys"), &H1C0279580, @strFunctionName, 1024) Then Print "&H1C0279580->" & strFunctionName
+    mi.SizeOfStruct = SizeOf(mi)
+    
+    If SymGetModuleInfoW64(g_hSymProcess, win32kBase, @mi) <> 0 Then
+        Print "Loaded PDB:"
+        Print mi.LoadedPdbName
+        Print "TypeInfo:"
+        Print mi.TypeInfo
+    Else
+        Print "err:" & GetLastError
+    End If'/
+    
+    addr = SymEngine_SymbolToAddr("C:\Windows\System32\win32kfull.sys", "W32GetThreadWin32Thread")
+    Print "==================== 符号→地址 ===================="
+    If addr Then
+        Dim dwSize As ULong
+        Print "W32GetThreadWin32Thread" & " = 0x"; Hex(addr)
+    Else
+        Print "查询失败！"
+    End If
+    
+    ' 测试结构体成员枚举
+    'SymEngine_DumpStruct @win32kPath, "tagWIN32KSESSIONSTATE"
 End Sub
 
 Function OpenSymbolDevice() As Boolean

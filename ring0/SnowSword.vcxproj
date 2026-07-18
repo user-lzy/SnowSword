@@ -90,7 +90,7 @@
     <ClCompile>
       <DisableSpecificWarnings>4201;4218;4131;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <TreatWarningAsError>false</TreatWarningAsError>
-      <PreprocessorDefinitions>_AMD64_</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_AMD64_;ZYDIS_STATIC_BUILD</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
@@ -124,22 +124,23 @@
     <ClInclude Include="include\File.h" />
     <ClInclude Include="include\GDT.h" />
     <ClInclude Include="include\global.h" />
-    <ClInclude Include="include\Hook.h" />
-    <ClInclude Include="include\HookSysenter.h" />
     <ClInclude Include="include\IDT.h" />
     <ClInclude Include="include\ioctl.h" />
     <ClInclude Include="include\Memory.h" />
     <ClInclude Include="include\Module.h" />
     <ClInclude Include="include\Netstat.h" />
     <ClInclude Include="include\ObjectInfo.h" />
+    <ClInclude Include="include\OffsetScanner.h" />
     <ClInclude Include="include\OtherFunctions.h" />
     <ClInclude Include="include\OtherTools.h" />
     <ClInclude Include="include\Process.h" />
     <ClInclude Include="include\Registry.h" />
     <ClInclude Include="include\SSDT.h" />
     <ClInclude Include="include\Symbol.h" />
+    <ClInclude Include="include\Test.h" />
     <ClInclude Include="include\Thread.h" />
     <ClInclude Include="include\Window.h" />
+    <ClInclude Include="include\Zydis.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources\DriverControl.c" />
@@ -149,9 +150,8 @@
     <ClCompile Include="sources\File.c" />
     <ClCompile Include="sources\GDT.c" />
     <ClCompile Include="sources\global.c" />
-    <ClCompile Include="sources\GUI.c" />
-    <ClCompile Include="sources\Hook.c" />
-    <ClCompile Include="sources\HookSysenter.c" />
+    <ClCompile Include="sources\OffsetScanner.c" />
+    <ClCompile Include="sources\Test.c" />
     <ClCompile Include="sources\IDT.c" />
     <ClCompile Include="sources\main\Driver.c" />
     <ClCompile Include="sources\Memory.c" />
@@ -166,6 +166,7 @@
     <ClCompile Include="sources\Symbol.c" />
     <ClCompile Include="sources\Thread.c" />
     <ClCompile Include="sources\Window.c" />
+    <ClCompile Include="sources\Zydis.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

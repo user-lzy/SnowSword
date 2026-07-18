@@ -28,7 +28,7 @@ static PVOID GetKiSystemServiceRepeat()
 	}
 	offset = *(PULONG)((PUCHAR)result + 1);
 	PVOID KiServiceInternalAddr = (PVOID)((PUCHAR)result + 5 + offset);
-	DbgPrint("KiServiceInternalAddr:0x%p", KiServiceInternalAddr);
+	//DbgPrint("KiServiceInternalAddr:0x%p", KiServiceInternalAddr);
 
 	//获取KiSystemServiceStart地址
 	/*
@@ -42,7 +42,7 @@ static PVOID GetKiSystemServiceRepeat()
 	}
 	offset = *(PULONG)((PUCHAR)result + 3);
 	PVOID KiSystemServiceStartAddr = (PVOID)((PUCHAR)result + 7 + offset);
-	DbgPrint("KiSystemServiceStartAddr:0x%p", KiSystemServiceStartAddr);
+	//DbgPrint("KiSystemServiceStartAddr:0x%p", KiSystemServiceStartAddr);
 
 	//获取KiSystemServiceRepeat地址
 	/*
@@ -57,7 +57,7 @@ static PVOID GetKiSystemServiceRepeat()
 	}
 	LONG offset2 = *(PLONG)((PUCHAR)result + 9);
 	PVOID KiSystemServiceRepeatAddr = (PVOID)((PUCHAR)result + 13 + offset2);
-	DbgPrint("KiSystemServiceRepeatAddr:0x%p", KiSystemServiceRepeatAddr);
+	//DbgPrint("KiSystemServiceRepeatAddr:0x%p", KiSystemServiceRepeatAddr);
 	return KiSystemServiceRepeatAddr;
 }
 
@@ -81,7 +81,7 @@ PVOID GetKeServiceDescriptorTable()
 	}
 	ULONG offset = *(PULONG)((PUCHAR)result + 3);
 	PVOID KeServiceDescriptorTableAddr = (PVOID)((PUCHAR)result + 7 + offset);
-	DbgPrint("KeServiceDescriptorTableAddr: 0x%p \n", KeServiceDescriptorTableAddr);
+	//DbgPrint("KeServiceDescriptorTableAddr: 0x%p \n", KeServiceDescriptorTableAddr);
 	return KeServiceDescriptorTableAddr;
 }
 
@@ -105,7 +105,7 @@ PVOID GetKeServiceDescriptorTableShadow()
 	}
 	ULONG offset = *(PULONG)((PUCHAR)result + 3);
 	PVOID KeServiceDescriptorTableShadowAddr = (PVOID)((PUCHAR)result + 7 + offset);
-	DbgPrint("KeServiceDescriptorTableShadowAddr: 0x%p \n", KeServiceDescriptorTableShadowAddr);
+	//DbgPrint("KeServiceDescriptorTableShadowAddr: 0x%p \n", KeServiceDescriptorTableShadowAddr);
 	return KeServiceDescriptorTableShadowAddr;
 }
 

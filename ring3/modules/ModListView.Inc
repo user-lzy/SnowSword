@@ -505,6 +505,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "周期(ms)",, 150
                 .AddColumn "状态",, 100
                 .AddColumn "所属模块",, 300
+                .AddColumn "上下文",, 300
             Case IOFunction
                 .AddColumn "名称",, 250
                 .AddColumn "当前地址",, 300
@@ -1188,17 +1189,6 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
         Next
     End If
     
-    ' 1. 先按完整数据恢复所有行（不要用 pVisibleIndex）
-    For i As Integer = 0 To snap->RowCount - 1
-        Dim row As LVRow Ptr = snap->Rows[i]
-        If row = 0 Then Continue For
-        Dim rowIdx As Long = AddItemEx(lvw, *row->Cols[0], row->Fore, row->Back)
-        For c As Integer = 1 To row->ColCount - 1
-            If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
-        Next
-        SetItemIconEx lvw, i, row->iconIndex
-    Next
-    
     ' ===================== 核心：按保存时的可见索引映射顺序恢复数据 =====================
     ' 如果存在排序/筛选映射，按映射顺序添加；否则按原始顺序
     Dim i As Long, c As Long
@@ -1215,6 +1205,7 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
             For c = 1 To row->ColCount - 1
                 If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
             Next
+            SetItemIconEx lvw, rowIdx, row->iconIndex
         Next
         
         ' 恢复排序标记到 ctx（让用户知道当前是排序状态）
@@ -1234,6 +1225,7 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
             For c = 1 To row->ColCount - 1
                 If row->Cols[c] <> 0 Then SetItemTextEx lvw, rowIdx, c, *row->Cols[c]
             Next
+            SetItemIconEx lvw, rowIdx, row->iconIndex
         Next
     End If
     
@@ -1260,7 +1252,7 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
         If cache->List_SavedCountPerPage > 0 Then
             Dim targetTopIndex As Long = cache->List_TopVisibleIndex
             Dim maxIndex As Long = lvw.ItemCount - 1
-            Dim scrollToIndex As Long = targetTopIndex + cache->List_SavedCountPerPage
+            Dim scrollToIndex As Long = targetTopIndex + cache->List_SavedCountPerPage - 1
             If scrollToIndex > maxIndex Then scrollToIndex = maxIndex
             ListView_EnsureVisible(lvw.hWnd, scrollToIndex, True)
         End If
@@ -1843,61 +1835,91 @@ Private Function GetMedian( _
     End If
 End Function
 
-' 快速排序核心：尾递归优化 + 小区间插入排序
-Private Sub ListView_QuickSort( _
+' 迭代版快速排序：用自定义栈替代递归，彻底避免栈溢出
+Private Sub ListView_QuickSort_Iterative( _
     arr() As Long, _
-    nLeft As Long, _
-    nRight As Long, _
     ctx As ListViewContext Ptr, _
     sortCol As Long, _
     isNumber As Boolean, _
     isAsc As Boolean _
 )
-    ' 小区间（≤16）直接用插入排序，减少递归开销
-    If nRight - nLeft + 1 <= 16 Then
-        For i As Long = nLeft + 1 To nRight
-            Dim key As Long = arr(i)
-            Dim j As Long = i - 1
-            While j >= nLeft
-                Dim cmp As Long = CompareRow(ctx, arr(j), key, sortCol, isNumber)
-                If (isAsc AndAlso cmp > 0) OrElse (Not isAsc AndAlso cmp < 0) Then
-                    arr(j + 1) = arr(j)
-                    j -= 1
-                Else
-                    Exit While
-                End If
-            Wend
-            arr(j + 1) = key
-        Next
-        Exit Sub
-    End If
+    Dim nLeft As Long = 0
+    Dim nRight As Long = UBound(arr)
+    If nRight - nLeft + 1 <= 1 Then Exit Sub
     
-    ' 三数取中选择基准
-    Dim nMid As Long = nLeft + (nRight - nLeft) \ 2
-    Dim pivotIdx As Long = GetMedian(arr(), nLeft, nMid, nRight, ctx, sortCol, isNumber, isAsc)
-    Swap arr(pivotIdx), arr(nRight)
-    Dim pivotVal As Long = arr(nRight)
+    ' 显式栈：每个元素存(left, right)对
+    ' 最大深度约 log2(n)，对于10万数据只需约17层
+    Const MAX_STACK As Long = 64  ' 足够处理 2^64 规模的数据
+    Dim stackL(0 To MAX_STACK - 1) As Long
+    Dim stackR(0 To MAX_STACK - 1) As Long
+    Dim sp As Long = 0  ' 栈指针
     
-    ' 分区操作
-    Dim i As Long = nLeft - 1
-    For j As Long = nLeft To nRight - 1
-        Dim cmp As Long = CompareRow(ctx, arr(j), pivotVal, sortCol, isNumber)
-        If (isAsc AndAlso cmp <= 0) OrElse (Not isAsc AndAlso cmp >= 0) Then
-            i += 1
-            Swap arr(i), arr(j)
+    ' 初始区间入栈
+    stackL(sp) = nLeft
+    stackR(sp) = nRight
+    sp += 1
+    
+    While sp > 0
+        sp -= 1
+        Dim l As Long = stackL(sp)
+        Dim r As Long = stackR(sp)
+        
+        ' 小区间直接用插入排序
+        If r - l + 1 <= 16 Then
+            For i As Long = l + 1 To r
+                Dim key As Long = arr(i)
+                Dim j As Long = i - 1
+                While j >= l
+                    Dim cmp As Long = CompareRow(ctx, arr(j), key, sortCol, isNumber)
+                    If (isAsc AndAlso cmp > 0) OrElse (Not isAsc AndAlso cmp < 0) Then
+                        arr(j + 1) = arr(j)
+                        j -= 1
+                    Else
+                        Exit While
+                    End If
+                Wend
+                arr(j + 1) = key
+            Next
+            Continue While
         End If
-    Next
-    Swap arr(i + 1), arr(nRight)
-    Dim partitionIdx As Long = i + 1
-    
-    ' 尾递归优化：优先递归短区间，最大限度降低栈深度
-    If partitionIdx - nLeft < nRight - partitionIdx Then
-        ListView_QuickSort(arr(), nLeft, partitionIdx - 1, ctx, sortCol, isNumber, isAsc)
-        ListView_QuickSort(arr(), partitionIdx + 1, nRight, ctx, sortCol, isNumber, isAsc)
-    Else
-        ListView_QuickSort(arr(), partitionIdx + 1, nRight, ctx, sortCol, isNumber, isAsc)
-        ListView_QuickSort(arr(), nLeft, partitionIdx - 1, ctx, sortCol, isNumber, isAsc)
-    End If
+        
+        ' 三数取中 + 分区（和之前一样）
+        ' 如果某列有大量相同值（如状态列全是"运行中"），标准快排会退化。可改用三路划分：
+        ' [l, lt) < pivot, [lt, gt] == pivot, (gt, r] > pivot
+        Dim nMid As Long = l + (r - l) \ 2
+        Dim pivotIdx As Long = GetMedian(arr(), l, nMid, r, ctx, sortCol, isNumber, isAsc)
+        Swap arr(pivotIdx), arr(r)
+        Dim pivotVal As Long = arr(r)
+        
+        Dim i As Long = l - 1
+        For j As Long = l To r - 1
+            Dim cmp As Long = CompareRow(ctx, arr(j), pivotVal, sortCol, isNumber)
+            If (isAsc AndAlso cmp <= 0) OrElse (Not isAsc AndAlso cmp >= 0) Then
+                i += 1
+                Swap arr(i), arr(j)
+            End If
+        Next
+        Swap arr(i + 1), arr(r)
+        Dim p As Long = i + 1
+        
+        ' 优先将长区间入栈，短区间直接处理（减少栈深度）
+        If p - 1 > l Then
+            If r > p + 1 Then
+                ' 两边都有元素，长的先入栈
+                If (p - 1 - l) > (r - p - 1) Then
+                    stackL(sp) = l : stackR(sp) = p - 1 : sp += 1
+                    stackL(sp) = p + 1 : stackR(sp) = r : sp += 1
+                Else
+                    stackL(sp) = p + 1 : stackR(sp) = r : sp += 1
+                    stackL(sp) = l : stackR(sp) = p - 1 : sp += 1
+                End If
+            Else
+                stackL(sp) = l : stackR(sp) = p - 1 : sp += 1
+            End If
+        ElseIf r > p + 1 Then
+            stackL(sp) = p + 1 : stackR(sp) = r : sp += 1
+        End If
+    Wend
 End Sub
 
 Private Function IsValidNumberW(pwStr As WString Ptr, ByRef isHex As Boolean = False) As Boolean
@@ -2019,18 +2041,17 @@ Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
     Dim sortCol As Long = ctx->SortedColumn
     Dim isAsc As Boolean = ctx->SortAscending
     
-    ' 缓存容错：缺失则自动生成
     If UBound(ctx->ColumnIsNumber) < 0 Then
         CacheColumnTypes(ctx)
     End If
     If sortCol > UBound(ctx->ColumnIsNumber) Then Exit Sub
     Dim isNumber As Boolean = ctx->ColumnIsNumber(sortCol)
     
-    ' 自适应选择排序算法
+    ' 改用迭代版快排
     If ctx->VisibleCount <= 32 Then
         InsertionSort(ctx->VisibleIndex(), ctx, sortCol, isNumber, isAsc)
     Else
-        ListView_QuickSort(ctx->VisibleIndex(), 0, ctx->VisibleCount - 1, ctx, sortCol, isNumber, isAsc)
+        ListView_QuickSort_Iterative(ctx->VisibleIndex(), ctx, sortCol, isNumber, isAsc)
     End If
 End Sub
 

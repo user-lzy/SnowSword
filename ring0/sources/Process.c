@@ -90,83 +90,83 @@ BOOLEAN IsProcessAlive(HANDLE ProcessId) {
 
 //NTHALAPI KIRQL KeGetCurrentIRQL();
 
-NTSTATUS GetProcessChangedPath(HANDLE PID, PWCHAR* FilePath)
-{
-#define EPROCESS_IMAGEFILEOBJECT_OFFSET 0x330
-    NTSTATUS status = STATUS_SUCCESS;
-    PFILE_OBJECT pFileObject = NULL;
-    POBJECT_NAME_INFORMATION pNameInfo = NULL;
-	PEPROCESS Process = NULL;
-    ULONG returnLength = 0;
-
-	// 查找进程
-	status = PsLookupProcessByProcessId(PID, &Process);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)PID, status);
-        return status;
-    }
-
-    if (!FilePath) return STATUS_INVALID_PARAMETER;
-
-    // 从EPROCESS获取ImageFileObject
-    pFileObject = *(PFILE_OBJECT*)((PUCHAR)Process + EPROCESS_IMAGEFILEOBJECT_OFFSET);
-
-    if (!pFileObject)
-    {
-        DbgPrint("Failed to get FileObject from EPROCESS\n");
-        return STATUS_NOT_FOUND;
-    }
-
-    // 增加引用计数防止对象被释放
-    ObReferenceObject(pFileObject);
-
-    __try
-    {
-        // 获取文件路径信息
-        status = ObQueryNameString(pFileObject, NULL, 0, &returnLength);
-        if (status != STATUS_INFO_LENGTH_MISMATCH)
-        {
-            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
-            __leave;
-        }
-
-        // 分配缓冲区
-        pNameInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, returnLength, 'Path');
-        if (!pNameInfo) {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            DbgPrint("Memory allocation failed\n");
-            __leave;
-        }
-        // 获取完整路径
-        status = ObQueryNameString(pFileObject, pNameInfo, returnLength, &returnLength);
-        if (!NT_SUCCESS(status))
-        {
-            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
-            __leave;
-        }
-        // 分配输出缓冲区
-        *FilePath = ExAllocatePool2(POOL_FLAG_NON_PAGED, pNameInfo->Name.Length + sizeof(WCHAR), 'Path');
-        if (!*FilePath)
-        {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            DbgPrint("Output buffer allocation failed\n");
-            __leave;
-        }
-
-        // 复制路径
-        memcpy(*FilePath, pNameInfo->Name.Buffer, pNameInfo->Name.Length);
-        (*FilePath)[pNameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
-
-        DbgPrint("Process path: %wZ\n", &pNameInfo->Name);
-    }
-    __finally
-    {
-        if (pNameInfo) ExFreePoolWithTag(pNameInfo, 'Path');
-        ObDereferenceObject(pFileObject);
-    }
-
-    return status;
-}
+//NTSTATUS GetProcessChangedPath(HANDLE PID, PWCHAR* FilePath)
+//{
+//#define EPROCESS_IMAGEFILEOBJECT_OFFSET 0x330
+//    NTSTATUS status = STATUS_SUCCESS;
+//    PFILE_OBJECT pFileObject = NULL;
+//    POBJECT_NAME_INFORMATION pNameInfo = NULL;
+//	PEPROCESS Process = NULL;
+//    ULONG returnLength = 0;
+//
+//	// 查找进程
+//	status = PsLookupProcessByProcessId(PID, &Process);
+//    if (!NT_SUCCESS(status)) {
+//        DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)PID, status);
+//        return status;
+//    }
+//
+//    if (!FilePath) return STATUS_INVALID_PARAMETER;
+//
+//    // 从EPROCESS获取ImageFileObject
+//    pFileObject = *(PFILE_OBJECT*)((PUCHAR)Process + EPROCESS_IMAGEFILEOBJECT_OFFSET);
+//
+//    if (!pFileObject)
+//    {
+//        DbgPrint("Failed to get FileObject from EPROCESS\n");
+//        return STATUS_NOT_FOUND;
+//    }
+//
+//    // 增加引用计数防止对象被释放
+//    ObReferenceObject(pFileObject);
+//
+//    __try
+//    {
+//        // 获取文件路径信息
+//        status = ObQueryNameString(pFileObject, NULL, 0, &returnLength);
+//        if (status != STATUS_INFO_LENGTH_MISMATCH)
+//        {
+//            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
+//            __leave;
+//        }
+//
+//        // 分配缓冲区
+//        pNameInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, returnLength, 'Path');
+//        if (!pNameInfo) {
+//            status = STATUS_INSUFFICIENT_RESOURCES;
+//            DbgPrint("Memory allocation failed\n");
+//            __leave;
+//        }
+//        // 获取完整路径
+//        status = ObQueryNameString(pFileObject, pNameInfo, returnLength, &returnLength);
+//        if (!NT_SUCCESS(status))
+//        {
+//            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
+//            __leave;
+//        }
+//        // 分配输出缓冲区
+//        *FilePath = ExAllocatePool2(POOL_FLAG_NON_PAGED, pNameInfo->Name.Length + sizeof(WCHAR), 'Path');
+//        if (!*FilePath)
+//        {
+//            status = STATUS_INSUFFICIENT_RESOURCES;
+//            DbgPrint("Output buffer allocation failed\n");
+//            __leave;
+//        }
+//
+//        // 复制路径
+//        memcpy(*FilePath, pNameInfo->Name.Buffer, pNameInfo->Name.Length);
+//        (*FilePath)[pNameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
+//
+//        DbgPrint("Process path: %wZ\n", &pNameInfo->Name);
+//    }
+//    __finally
+//    {
+//        if (pNameInfo) ExFreePoolWithTag(pNameInfo, 'Path');
+//        ObDereferenceObject(pFileObject);
+//    }
+//
+//    return status;
+//}
 
 VOID RemoveProcessHandleAccess(PACCESS_MASK pDesiredAccess) {
 	if (*pDesiredAccess & PROCESS_TERMINATE) *pDesiredAccess &= ~PROCESS_TERMINATE;

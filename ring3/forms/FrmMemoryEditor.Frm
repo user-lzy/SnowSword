@@ -459,6 +459,8 @@ Const HEX_LINE_LENGTH As Integer = 87
 Const HEX_AREA_START   As Integer = 20
 Const HEX_AREA_END As Integer = 67
 
+Dim Shared prevFrmMemoryEditorProc As LONG_PTR = NULL
+
 #define MemoryInfo_Index 0
 #define OldTxtDataProc_Index 1
 
@@ -1015,6 +1017,282 @@ Sub UpdateTextBoxFromBytes( _
     SendMessage TextBox.hWnd, EM_SETREADONLY, disasm, 0
 End Sub
 
+Function FrmMemoryEditor_SubclassProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM, ByVal uIdSubclass As UINT_PTR, ByVal dwRefData As DWORD_PTR) As LRESULT
+    Const MIN_WIDTH As Integer = 500
+    Const MIN_HEIGHT As Integer = 350
+    
+    Dim pForm As TypeOf(FrmMemoryEditor) Ptr
+    pForm = Cast(TypeOf(FrmMemoryEditor) Ptr, GetWindowLongPtr(hWnd, GWLP_USERDATA))
+    
+    Select Case uMsg
+        Case WM_SIZING
+            Dim pRect As RECT Ptr = Cast(RECT Ptr, lParam)
+            Dim newWidth As Integer = pRect->right - pRect->left
+            Dim newHeight As Integer = pRect->bottom - pRect->top
+
+            If newWidth < MIN_WIDTH Then
+                If wParam = WMSZ_LEFT Or wParam = WMSZ_TOPLEFT Or wParam = WMSZ_BOTTOMLEFT Then
+                    pRect->left = pRect->right - MIN_WIDTH
+                Else
+                    pRect->right = pRect->left + MIN_WIDTH
+                End If
+            End If
+            If newHeight < MIN_HEIGHT Then
+                If wParam = WMSZ_TOP Or wParam = WMSZ_TOPLEFT Or wParam = WMSZ_TOPRIGHT Then
+                    pRect->top = pRect->bottom - MIN_HEIGHT
+                Else
+                    pRect->bottom = pRect->top + MIN_HEIGHT
+                End If
+            End If
+            Return 1
+
+        Case WM_SIZE
+            If wParam <> SIZE_MINIMIZED Then
+                FrmMemoryEditor_UpdateLayout *pForm
+            End If
+
+        Case WM_NCDESTROY
+            RemoveWindowSubclass hWnd, @FrmMemoryEditor_SubclassProc, uIdSubclass
+    End Select
+
+    Return DefSubclassProc(hWnd, uMsg, wParam, lParam)
+End Function
+
+' 仅对需要防闪烁的控件禁用重绘，且用 SetWindowPos 替代 Visible 属性
+Sub FrmMemoryEditor_BeginControlUpdate()
+    ' 只禁用会频繁变化的控件，且始终可见的 treMain 不禁用
+    /'SendMessage ListView.hWnd, WM_SETREDRAW, False, 0
+    SendMessage mCtrlTreeList1.hWnd, WM_SETREDRAW, False, 0
+    SendMessage TreeView.hWnd, WM_SETREDRAW, False, 0'/
+    ' txtFilePath 通常尺寸固定，不需要禁用
+End Sub
+
+Sub FrmMemoryEditor_EndControlUpdate()
+    ' 恢复重绘
+    /'SendMessage ListView1.hWnd, WM_SETREDRAW, True, 0
+    SendMessage mCtrlTreeList1.hWnd, WM_SETREDRAW, True, 0
+    SendMessage TreeView.hWnd, WM_SETREDRAW, True, 0'/
+    
+    ' 只刷新当前可见的控件，避免不必要的绘制
+    /'If ListView1.Visible Then
+        InvalidateRect ListView1.hWnd, NULL, True
+    End If
+    If mCtrlTreeList1.Visible Then
+        InvalidateRect mCtrlTreeList1.hWnd, NULL, True
+    End If
+    If TreeView.Visible Then
+        InvalidateRect TreeView.hWnd, NULL, True
+    End If'/
+    
+    ' 统一更新，减少闪烁
+    UpdateWindow FrmMain.hWnd
+End Sub
+
+' 新增：获取窗体DPI缩放比例（返回Double，1.0=100%，1.5=150%）
+Function GetFormDpiScale(hWndForm As HWND) As Double
+    Dim hdc As HDC = GetDC(hWndForm)
+    Dim dpiX As Integer = GetDeviceCaps(hdc, LOGPIXELSX)
+    ReleaseDC(hWndForm, hdc)
+    ' 标准96DPI为100%缩放
+    Return dpiX / 96.0
+End Function
+
+Sub FrmMemoryEditor_UpdateLayout(Form As TypeOf(FrmMemoryEditor))
+    Static inited As Boolean
+
+    '======================
+    ' DPI缩放后的布局参数
+    '======================
+    Static MARGIN As Integer
+    Static TOP_GAP As Integer
+    Static GAP1 As Integer
+    Static GAP2 As Integer
+    Static GAP3 As Integer
+
+    Static LABEL_H As Integer
+    Static EDIT_H As Integer
+    Static BTN_H As Integer
+    Static FRAME2_H As Integer
+
+    Static LABEL1_W As Integer
+    Static LABEL2_W As Integer
+    Static TXTSIZE_W As Integer
+    Static TXTPID_W As Integer
+    Static PROCNAME_W As Integer
+    Static OPTHEX_W As Integer
+    Static OPTDISASM_W As Integer
+
+    Static FRAME1_TOP As Integer
+
+    Static DATA_OFF_X As Integer
+    Static DATA_OFF_Y As Integer
+    Static DATA_OFF_R As Integer
+    Static DATA_OFF_B As Integer
+    
+    With Form
+        If Not inited Then
+
+            inited = TRUE
+
+            '======== 尺寸 ========
+            LABEL_H = .Label1.Height
+            EDIT_H = .txtAddr.Height
+            BTN_H = .CmdRead.Height
+            FRAME2_H = .Frame2.Height
+
+            LABEL1_W = .Label1.Width
+            LABEL2_W = .Label2.Width
+            TXTSIZE_W = .txtSize.Width
+            TXTPID_W = .txtPID.Width
+            PROCNAME_W = .txtProcessName.Width
+            OPTHEX_W = .optHex.Width
+            OPTDISASM_W = .optDisasm.Width
+
+            '======== 边距 ========
+            MARGIN = .Label1.Left
+
+            FRAME1_TOP = .Frame1.Top
+
+            GAP1 = .Frame2.Top - (.Frame1.Top + .Frame1.Height)
+            GAP2 = .CmdRead.Top - (.Frame2.Top + .Frame2.Height)
+            GAP3 = .txtPID.Top - (.CmdRead.Top + .CmdRead.Height)
+
+            '顶部控件距离
+            TOP_GAP = .txtAddr.Left - (.Label1.Left + .Label1.Width)
+
+            'txtData在Frame1内部偏移
+            DATA_OFF_X = .txtData.Left - .Frame1.Left
+            DATA_OFF_Y = .txtData.Top - .Frame1.Top
+
+            DATA_OFF_R = .Frame1.Width - DATA_OFF_X - .txtData.Width
+            DATA_OFF_B = .Frame1.Height - DATA_OFF_Y - .txtData.Height
+
+        End If
+
+
+        Dim rc As RECT
+        GetClientRect(.hWnd, @rc)
+
+        Dim cw As Integer = rc.right
+        Dim ch As Integer = rc.bottom
+
+        FrmMemoryEditor_BeginControlUpdate()
+
+        '======================
+        ' 第一行
+        '======================
+        .Label1.Move MARGIN, MARGIN, LABEL1_W, LABEL_H
+
+        .txtAddr.Left = .Label1.Left + LABEL1_W + TOP_GAP
+        .txtAddr.Top = MARGIN
+        .txtAddr.Height = EDIT_H
+
+        .txtSize.Width = TXTSIZE_W
+        .txtSize.Height = EDIT_H
+        .txtSize.Left = cw - MARGIN - TXTSIZE_W
+        .txtSize.Top = MARGIN
+
+        .Label2.Width = LABEL2_W
+        .Label2.Height = LABEL_H
+        .Label2.Left = .txtSize.Left - TOP_GAP - LABEL2_W
+        .Label2.Top = MARGIN
+
+        .txtAddr.Width = .Label2.Left - .txtAddr.Left - TOP_GAP
+
+        '======================
+        ' 底部固定区域高度
+        '======================
+        Dim bottomHeight As Integer
+
+        bottomHeight = _
+            GAP1 + _
+            FRAME2_H + _
+            GAP2 + _
+            BTN_H + _
+            GAP3 + _
+            EDIT_H + _
+            MARGIN
+
+        '======================
+        ' Frame1
+        '======================
+        .Frame1.Left = MARGIN
+        .Frame1.Top = FRAME1_TOP
+        .Frame1.Width = cw - MARGIN * 2
+        .Frame1.Height = ch - FRAME1_TOP - bottomHeight
+
+        If .Frame1.Height < 100 Then .Frame1.Height = 100
+
+        .txtData.Left = .Frame1.Left + DATA_OFF_X
+        .txtData.Top = .Frame1.Top + DATA_OFF_Y
+
+        .txtData.Width = _
+            .Frame1.Width - DATA_OFF_X - DATA_OFF_R
+
+        .txtData.Height = _
+            .Frame1.Height - DATA_OFF_Y - DATA_OFF_B
+
+        '======================
+        ' Frame2
+        '======================
+        .Frame2.Left = MARGIN
+        .Frame2.Top = .Frame1.Top + .Frame1.Height + GAP1
+        .Frame2.Width = cw - MARGIN * 2
+        .Frame2.Height = FRAME2_H
+
+        .optHex.Left = .Frame2.Left + DATA_OFF_X
+        .optHex.Top = .Frame2.Top + (.Frame2.Height - .optHex.Height) \ 2
+        .optHex.Width = OPTHEX_W
+
+        .optDisasm.Width = OPTDISASM_W
+        .optDisasm.Left = .Frame2.Left + .Frame2.Width - OPTDISASM_W - DATA_OFF_X
+        .optDisasm.Top = .optHex.Top
+
+        '======================
+        ' 按钮
+        '======================
+        Dim btnWidth As Integer
+
+        btnWidth = (cw - MARGIN * 3) \ 2
+
+        .CmdRead.Move _
+            MARGIN, _
+            .Frame2.Top + FRAME2_H + GAP2, _
+            btnWidth, _
+            BTN_H
+
+        .CmdWrite.Move _
+            cw - MARGIN - btnWidth, _
+            .CmdRead.Top, _
+            btnWidth, _
+            BTN_H
+
+        '======================
+        ' 底部
+        '======================
+        .Label3.Move _
+            MARGIN, _
+            .CmdRead.Top + BTN_H + GAP3, _
+            .Label3.Width, _
+            LABEL_H
+
+        .txtPID.Move _
+            .Label3.Left + .Label3.Width, _
+            .Label3.Top, _
+            TXTPID_W, _
+            EDIT_H
+
+        .txtProcessName.Move _
+            cw - MARGIN - PROCNAME_W, _
+            .Label3.Top, _
+            PROCNAME_W, _
+            LABEL_H
+    End With
+
+    FrmMemoryEditor_EndControlUpdate()
+
+End Sub
+
 '[FrmMemoryEditor.CmdRead]事件 : 单击
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码。
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
@@ -1068,7 +1346,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             CloseHandle(hProcess)
             Exit Sub
         Else
-            Print "[API读取]ReadProcessMemory失败：" & WinErrorMsg(GetLastError)
+            Print "[API读取]ReadProcessMemory失败：" & bytesRead & "/" & dwSize & " " & WinErrorMsg(GetLastError)
         End If
         CloseHandle(hProcess)
     End If
@@ -1233,6 +1511,9 @@ Sub FrmMemoryEditor_Shown(hWndForm As hWnd, UserData As Integer)
     txtProcessName.Caption = "进程名:" & GetNameByPath(GetProcessPath(Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId))))
     
     Me.UserData(OldTxtDataProc_Index) = Cast(Integer, SetWindowLongPtr(txtData.hWnd, GWLP_WNDPROC, Cast(LONG_PTR, @TxtDataWndProc)))
+    
+    SetWindowLongPtr Me.hWnd, GWLP_USERDATA, Cast(LONG_PTR, @FrmMemoryEditor)
+    SetWindowSubclass Me.hWnd, @FrmMemoryEditor_SubclassProc, 1, 0
 End Sub
 
 '[FrmMemoryEditor.txtPID]事件 : 文本已经被修改

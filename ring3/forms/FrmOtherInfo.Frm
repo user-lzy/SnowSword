@@ -111,4 +111,17 @@ Sub FrmOtherInfo_Shown(hWndForm As hWnd, UserData As Integer)
     End Select
 End Sub
 
+'[FrmOtherInfo]事件 : 窗口已经改变了大小
+'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'fwSizeType = SIZE_MAXHIDE     SIZE_MAXIMIZED   SIZE_MAXSHOW    SIZE_MINIMIZED    SIZE_RESTORED  
+''            其他窗口最大化   窗口已最大化     其他窗口恢复    窗口已最小化      窗口已调整大小
+'nWidth nHeight  是客户区大小，不是全部窗口大小。
+Sub FrmOtherInfo_WM_Size(hWndForm As hWnd, fwSizeType As Long, nWidth As Long, nHeight As Long)
+    If fwSizeType = SIZE_MINIMIZED Then Return 
+    'xxx.Move DpiScaleI(5), DpiScaleI(5), nWidth - DpiScaleI(10), nHeight - DpiScaleI(30)
+    txtOtherInfo.Width = nWidth
+    txtOtherInfo.Height = nHeight
+End Sub
+
+
 

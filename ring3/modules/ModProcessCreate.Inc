@@ -285,12 +285,66 @@ Cleanup:
     Return (nResult = 1)
 End Function
 
+Function CheckTokenFileAccess( _
+    hToken As HANDLE, _
+    FileName As StringW, _
+    DesiredAccess As DWORD _
+) As Boolean
+
+    Dim As PSECURITY_DESCRIPTOR pSD = NULL
+    Dim As PACL pDacl = NULL
+
+    Dim As DWORD dwResult
+    Dim As GENERIC_MAPPING gm
+
+    Dim As PRIVILEGE_SET ps
+    Dim As DWORD psSize = SizeOf(PRIVILEGE_SET)
+
+    Dim As DWORD GrantedAccess
+    Dim As BOOL AccessOK
+
+    dwResult = GetNamedSecurityInfoW( _
+        StrPtrW(FileName), _
+        SE_FILE_OBJECT, _
+        DACL_SECURITY_INFORMATION, _
+        NULL,NULL, _
+        @pDacl, _
+        NULL, _
+        @pSD)
+
+    If dwResult <> ERROR_SUCCESS Then Return False
+
+    gm.GenericRead = FILE_GENERIC_READ
+    gm.GenericWrite = FILE_GENERIC_WRITE
+    gm.GenericExecute = FILE_GENERIC_EXECUTE
+    gm.GenericAll = FILE_ALL_ACCESS
+
+    MapGenericMask(@DesiredAccess,@gm)
+
+    If AccessCheck( _
+        pSD, _
+        hToken, _
+        DesiredAccess, _
+        @gm, _
+        @ps, _
+        @psSize, _
+        @GrantedAccess, _
+        @AccessOK) = 0 Then
+
+        LocalFree(pSD)
+        Return False
+    End If
+
+    LocalFree(pSD)
+    Return AccessOK <> 0
+End Function
+
 ' -----------------------------------------------------------------------------
 ' 核心函数：遍历系统进程，采集高权限令牌
 ' 参数：pTokenHandle - 输出采集到的令牌句柄
 ' 返回值：True=成功，False=失败
 ' -----------------------------------------------------------------------------
-Function CollectHighPrivToken(ByRef pTokenHandle As HANDLE, lpPrivilegeName As StringW) As Boolean
+Function CollectHighPrivToken Overload(ByRef pTokenHandle As HANDLE, lpPrivilegeName As StringW) As Boolean
     Dim As HANDLE hSnapshot = NULL, hProcess = NULL, hToken = NULL, hDupToken = NULL
     Dim As PROCESSENTRY32W pe32
     Dim As WString * 520 szProcessPath = ""
@@ -387,6 +441,189 @@ Function CollectHighPrivToken(ByRef pTokenHandle As HANDLE, lpPrivilegeName As S
 
 Success:
     CollectHighPrivToken = (pTokenHandle <> NULL)
+    
+Cleanup:
+    ' 资源释放
+    If hProcess Then CloseHandle(hProcess)
+    If hToken Then CloseHandle(hToken)
+    If hDupToken Then CloseHandle(hDupToken)
+    If hSnapshot Then CloseHandle(hSnapshot)
+End Function
+
+' -----------------------------------------------------------------------------
+' 核心函数：遍历系统进程，采集高权限令牌
+' 参数：pTokenHandle - 输出采集到的令牌句柄
+' 返回值：True=成功，False=失败
+' -----------------------------------------------------------------------------
+Function CollectHighPrivToken Overload(ByRef pTokenHandle As HANDLE, lpFilePath As StringW, ByVal DesiredAccess As ACCESS_MASK) As Boolean
+    Dim As HANDLE hSnapshot = NULL, hProcess = NULL, hToken = NULL, hDupToken = NULL
+    Dim As PROCESSENTRY32W pe32
+    Dim As WString * 520 szProcessPath = ""
+    Dim As DWORD dwProcessId = 0, dwAccess = 0, dwError = 0
+    Dim As Boolean bIsVista = CheckWindowsVersion()
+    
+    pTokenHandle = NULL
+    Function = False
+    
+    ' 创建进程快照
+    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    If hSnapshot = INVALID_HANDLE_VALUE Then
+        dwError = GetLastError
+        Print "CreateToolhelp32Snapshot失败：" & dwError
+        GoTo Cleanup
+    End If
+    
+    ' 初始化进程遍历结构体
+    pe32.dwSize = SizeOf(PROCESSENTRY32W)
+    If Process32FirstW(hSnapshot, @pe32) = 0 Then
+        dwError = GetLastError
+        Print "Process32FirstW失败：" & dwError
+        GoTo Cleanup
+    End If
+    
+    ' 遍历所有进程
+    Do
+        ' 释放上一轮的句柄
+        If hProcess Then CloseHandle(hProcess) : hProcess = NULL
+        If hToken Then CloseHandle(hToken) : hToken = NULL
+        If hDupToken Then CloseHandle(hDupToken) : hDupToken = NULL
+        
+        dwProcessId = pe32.th32ProcessID
+        
+        ' 过滤无效进程（PID=0/4）
+        If (dwProcessId = 0) Or (dwProcessId = 4) Then
+            Continue Do
+        End If
+        
+        ' 确定进程访问权限（Vista+用4096，XP用1040）
+        dwAccess = PROCESS_QUERY_LIMITED_INFORMATION ' PROCESS_ALL_ACCESS' PROCESS_QUERY_INFORMATION
+        
+        ' 打开目标进程
+        hProcess = OpenProcess(dwAccess, False, dwProcessId)
+        If hProcess = NULL Then
+            Continue Do
+        End If
+        
+        ' 读取进程路径
+        /'If GetModuleFileNameExW(hProcess, NULL, @szProcessPath, 520) = 0 Then
+            Continue Do
+        End If'/
+        
+        ' 尝试打开进程令牌（先TOKEN_QUERY，失败则TOKEN_READ）
+        If OpenProcessToken(hProcess, TOKEN_IMPERSONATE Or TOKEN_DUPLICATE Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE, @hToken) = 0 Then
+            Print "OpenProcessToken1(" & dwProcessId & ")失败:" & GetLastError
+            If OpenProcessToken(hProcess, TOKEN_DUPLICATE Or TOKEN_READ, @hToken) = 0 Then
+                Print "OpenProcessToken2(" & dwProcessId & ")失败:" & GetLastError
+                Continue Do
+            End If
+        End If
+        
+        ' 校验令牌特权
+        If Not CheckTokenFileAccess(hToken, lpFilePath, DesiredAccess) Then
+            Continue Do
+        End If
+        Print "PID:" & dwProcessId
+        
+        If DuplicateTokenEx(hToken, READ_CONTROL Or TOKEN_ADJUST_PRIVILEGES Or TOKEN_ADJUST_DEFAULT _
+            Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE Or TOKEN_IMPERSONATE Or TOKEN_DUPLICATE, NULL, _
+            SecurityImpersonation, TokenPrimary, @hDupToken) <> 0 Then
+            
+            Print "找到高权限进程：PID=" & dwProcessId & " 路径=" & szProcessPath
+            pTokenHandle = hDupToken
+            hDupToken = NULL ' 避免Cleanup释放
+            Function = True
+            Goto SUCCESS
+        Else
+            Print "[CollectHighPrivToken]DuplicateTokenEx(" & dwProcessId & "):" & GetLastError
+        End If
+        
+    Loop While Process32NextW(hSnapshot, @pe32)
+
+Success:
+    CollectHighPrivToken = (pTokenHandle <> NULL)
+    
+Cleanup:
+    ' 资源释放
+    If hProcess Then CloseHandle(hProcess)
+    If hToken Then CloseHandle(hToken)
+    If hDupToken Then CloseHandle(hDupToken)
+    If hSnapshot Then CloseHandle(hSnapshot)
+End Function
+
+Function CollectProcessToken(ByRef pTokenHandle As HANDLE, ProcessName As StringW) As Boolean
+    Dim As HANDLE hSnapshot = NULL, hProcess = NULL, hToken = NULL, hDupToken = NULL
+    Dim As PROCESSENTRY32W pe32
+    Dim As WString * 520 szProcessPath = ""
+    Dim As DWORD dwProcessId = 0, dwAccess = 0, dwError = 0
+    Dim As Boolean bIsVista = CheckWindowsVersion()
+    
+    pTokenHandle = NULL
+    Function = False
+    
+    ' 创建进程快照
+    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    If hSnapshot = INVALID_HANDLE_VALUE Then
+        dwError = GetLastError
+        Print "CreateToolhelp32Snapshot失败：" & dwError
+        GoTo Cleanup
+    End If
+    
+    ' 初始化进程遍历结构体
+    pe32.dwSize = SizeOf(PROCESSENTRY32W)
+    If Process32FirstW(hSnapshot, @pe32) = 0 Then
+        dwError = GetLastError
+        Print "Process32FirstW失败：" & dwError
+        GoTo Cleanup
+    End If
+    
+    ' 遍历所有进程
+    Do
+        ' 释放上一轮的句柄
+        If hProcess Then CloseHandle(hProcess) : hProcess = NULL
+        If hToken Then CloseHandle(hToken) : hToken = NULL
+        If hDupToken Then CloseHandle(hDupToken) : hDupToken = NULL
+        
+        dwProcessId = pe32.th32ProcessID
+        
+        If RightW(pe32.szExeFile, LenW(ProcessName)) <> ProcessName Then Continue Do
+        
+        ' 确定进程访问权限（Vista+用4096，XP用1040）
+        dwAccess = PROCESS_QUERY_LIMITED_INFORMATION
+        
+        ' 打开目标进程
+        hProcess = OpenProcess(dwAccess, False, dwProcessId)
+        If hProcess = NULL Then
+            Continue Do
+        End If
+        
+        ' 尝试打开进程令牌（先TOKEN_QUERY，失败则TOKEN_READ）
+        If OpenProcessToken(hProcess, TOKEN_IMPERSONATE Or TOKEN_DUPLICATE Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE, @hToken) = 0 Then
+            Print "OpenProcessToken1(" & dwProcessId & ")失败:" & GetLastError
+            If OpenProcessToken(hProcess, TOKEN_DUPLICATE Or TOKEN_READ, @hToken) = 0 Then
+                Print "OpenProcessToken2(" & dwProcessId & ")失败:" & GetLastError
+                Continue Do
+            End If
+        End If
+        
+        Print "PID:" & dwProcessId
+        
+        If DuplicateTokenEx(hToken, READ_CONTROL Or TOKEN_ADJUST_PRIVILEGES Or TOKEN_ADJUST_DEFAULT _
+            Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE Or TOKEN_IMPERSONATE Or TOKEN_DUPLICATE, NULL, _
+            SecurityImpersonation, TokenPrimary, @hDupToken) <> 0 Then
+            
+            Print "找到高权限进程：PID=" & dwProcessId & " 路径=" & szProcessPath
+            pTokenHandle = hDupToken
+            hDupToken = NULL ' 避免Cleanup释放
+            Function = True
+            Goto SUCCESS
+        Else
+            Print "[CollectHighPrivToken]DuplicateTokenEx(" & dwProcessId & "):" & GetLastError
+        End If
+        
+    Loop While Process32NextW(hSnapshot, @pe32)
+
+Success:
+    CollectProcessToken = (pTokenHandle <> NULL)
     
 Cleanup:
     ' 资源释放
@@ -585,7 +822,7 @@ End Function
 ' 参数：hOriginalToken - 原始令牌句柄
 ' 返回值：定制后的令牌句柄（NULL=失败）
 ' -----------------------------------------------------------------------------
-Function CreateCustomToken(ByVal hSourceToken As HANDLE) As HANDLE
+Function CreateCustomToken(ByVal hSmssToken As HANDLE, ByVal hSourceToken As HANDLE) As HANDLE
 
     Dim hNewToken As HANDLE = NULL
 
@@ -625,7 +862,7 @@ Function CreateCustomToken(ByVal hSourceToken As HANDLE) As HANDLE
     ' 模拟原始令牌用户（提升NtCreateToken调用权限） 
     Dim hLsassToken As HANDLE = NULL
     'If Not CollectHighPrivToken(hLsassToken, "SeCreateTokenPrivilege") Then Return NULL
-    If ImpersonateLoggedOnUser(hSourceToken) = 0 Then
+    If ImpersonateLoggedOnUser(hSmssToken) = 0 Then
         Dim As DWORD dwError = GetLastError
         Print "ImpersonateLoggedOnUser失败：" & dwError
         'Goto Cleanup 
@@ -723,18 +960,18 @@ Function CreateCustomToken(ByVal hSourceToken As HANDLE) As HANDLE
     ' === TrustLevelSid补全结束 ===
     
     ' === 新增：修改令牌会话ID为1（活动控制台会话），开始 ===
-    Dim As DWORD dwTargetSessionId = 1 ' 控制台用户的活动会话ID，固定为1（可通过WTSGetActiveConsoleSessionId动态获取）
+    'Dim As DWORD dwTargetSessionId = 1 ' 控制台用户的活动会话ID，固定为1（可通过WTSGetActiveConsoleSessionId动态获取）
     ' 可选：动态获取活动控制台会话ID，适配多会话场景
     ' dwTargetSessionId = WTSGetActiveConsoleSessionId()
     ' If dwTargetSessionId = DWORD(-1) Then dwTargetSessionId = 1
 
-    If SetTokenInformation(hNewToken, TokenSessionId, @dwTargetSessionId, SizeOf(DWORD)) = 0 Then
+    /'If SetTokenInformation(hNewToken, TokenSessionId, @dwTargetSessionId, SizeOf(DWORD)) = 0 Then
         Dim As DWORD dwError = GetLastError()
         Print "修改令牌会话ID为" & dwTargetSessionId & "失败：" & WinErrorMsg(dwError) & dwError
         CloseHandle(hNewToken)
         Return NULL
     End If
-    Print "令牌会话ID成功修改为：" & dwTargetSessionId
+    Print "令牌会话ID成功修改为：" & dwTargetSessionId'/
     
     /'Dim As TOKEN_ELEVATION_TYPE ElevationType
     ElevationType = TokenElevationTypeFull  ' 设置为完全提升的管理员权限
@@ -807,7 +1044,7 @@ Function CreateHighPrivProcess( _
     ZeroMemory(@si, SizeOf(STARTUPINFOW))
     ZeroMemory(@pi, SizeOf(PROCESS_INFORMATION))
     si.cb = SizeOf(STARTUPINFOW)
-    si.lpDesktop = StrPtrW("winsta0\default")
+    'si.lpDesktop = StrPtrW("winsta0\default")
     
     ' ========================================================
     ' 1. 处理命令行参数（关键修改点）
@@ -869,7 +1106,7 @@ Function CreateHighPrivProcess( _
     End If
     
     Print "hCustomToken:0x" & WHex(hCustomToken) & " hDupTokenForProcess:0x" & WHex(hDupTokenForProcess)
-    AfxMsg "Pause"
+    'AfxMsg "Pause"
     
     ' ========================================================
     ' 6. 创建进程（关键修改：使用 szCmdLine 而非硬编码）
@@ -877,7 +1114,7 @@ Function CreateHighPrivProcess( _
     ' 方案A: CreateProcessWithTokenW（需要 SeImpersonatePrivilege）
     If CreateProcessWithTokenW( _
         hDupTokenForProcess, _
-        LOGON_WITH_PROFILE, _
+        0, _
         lpApplicationName, _                                    ' ← 程序路径为NULL，从命令行解析
         lpCommandLine, _                              ' ← 使用动态命令行
         dwFlags, _
@@ -946,24 +1183,29 @@ Function CreateSYSTEMPriviegeProcess( _
     ) As Boolean
     
     Function = True
-    Dim As HANDLE hOriginalToken = NULL, hCustomToken = NULL
+    Dim As HANDLE hOriginalToken = NULL, hSmssToken = NULL, hCustomToken = NULL
     Dim As DWORD dwCmdPid = 0
     
     Print "=== 高权限CMD创建工具 ==="
     Print "开始采集高权限令牌..."
     
     ' 步骤1：采集高权限原始令牌
-    If Not CollectHighPrivToken(hOriginalToken, "SeTcbPrivilege") Then
+    If Not CollectHighPrivToken(hSmssToken, "SeTcbPrivilege") Then
+        Print "采集高权限令牌失败！"
+        Function = False
+        GoTo Cleanup
+    End If
+    If Not CollectProcessToken(hOriginalToken, "winlogon.exe") Then
         Print "采集高权限令牌失败！"
         Function = False
         GoTo Cleanup
     End If
     Print "高权限令牌采集成功！"
-    If Not EnablePrivilege(hOriginalToken, "SeCreateTokenPrivilege") Then Return NULL
+    If Not EnablePrivilege(hSmssToken, "SeCreateTokenPrivilege") Then Return NULL
     
     ' 步骤2：定制化创建新令牌
     Print "开始定制高权限令牌..."
-    hCustomToken = CreateCustomToken(hOriginalToken) ' hOriginalToken
+    hCustomToken = CreateCustomToken(hSmssToken, hSmssToken) ' hOriginalToken
     If hCustomToken = NULL Then
         Print "定制高权限令牌失败！"
         Function = False

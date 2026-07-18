@@ -1,24 +1,44 @@
-﻿Type REGF_HEADER 
-    Signature      As ULong
-    Seq1           As ULong
-    Seq2           As ULong
-    LastWriteTime  As LongInt
-    Major          As ULong
-    Minor          As ULong
-    Type           As ULong
-    Format         As ULong
-    RootCellOffset As ULong
-    HiveBinsSize   As ULong
+﻿'Type REGF_HEADER 
+'    Signature      As ULong
+'    Seq1           As ULong
+'    Seq2           As ULong
+'    LastWriteTime  As LongInt
+'    Major          As ULong
+'    Minor          As ULong
+'    Type           As ULong
+'    Format         As ULong
+'    RootCellOffset As ULong
+'    HiveBinsSize   As ULong
+'End Type
+
+Type REGF_HEADER Field = 1
+
+    Sig(0 To 3) As UByte
+
+    Sequence1 As ULong
+    Sequence2 As ULong
+
+    TimeStamp(0 To 7) As UByte
+
+    MajorVersion As ULong
+    MinorVersion As ULong
+
+    TypeValue As ULong
+    Format As ULong
+
+    RootCell As ULong
+
+    HiveLength As ULong
+
+    ClusterFactor As ULong
+
 End Type
 
 Type HBIN_HEADER Field = 1
-    Sig(3)      As UByte   ' "hbin"
-    Offset      As ULong
-    Size        As ULong
-    Reserved1   As ULong
-    Reserved2   As ULong
-    TimeStamp   As LongInt
-    Spare       As ULong
+    Sig(0 To 3)     As UByte   ' 0x00: "hbin"
+    FileOffset      As ULong   ' 0x04
+    Size            As ULong   ' 0x08: 这是HBIN总大小！
+    Reserved(0 To 3) As ULong  ' 0x0C-0x1B: 4个保留DWORD
 End Type
 
 Type CELL_HEADER
@@ -48,6 +68,42 @@ Type NK_FULL Field = 1
     ClassNameLen            As UShort
 End Type
 
+/'Type NK_FULL
+    Sig(0 To 1) As UByte
+
+    Flags As UShort
+
+    LastWriteTime(0 To 7) As UByte
+
+    AccessBits As ULong
+
+    ParentOffset As ULong
+
+    SubKeyCount As ULong
+    VolatileSubKeyCount As ULong
+
+    SubKeyListOff As ULong
+    VolatileSubKeyListOff As ULong
+
+    ValueCount As ULong
+    ValueListOff As ULong
+
+    SecurityOff As ULong
+    ClassOff As ULong
+
+    LargestSubKeyNameLen As ULong
+    LargestSubKeyClassLen As ULong
+
+    LargestValueNameLen As ULong
+    LargestValueDataLen As ULong
+
+    WorkVar As ULong
+    Reserved As ULong     ' <-- 添加
+
+    NameLen As UShort
+    ClassNameLen As UShort
+End Type'/
+
 Type VK_FULL
     Sig(1)      As UByte    ' "vk"
     NameLen     As UShort
@@ -75,7 +131,8 @@ Type ROOT_HIVE_INFO
     RootName As String         ' 根键名称，如 "HKLM\SOFTWARE"
     HiveSubPath As String      ' hive内的根路径
     HiveFilePath As String     ' hive文件本地路径
-    IsUserHive As Boolean      ' 是否为用户配置hive
+    IsUserHive As Boolean ' 是否为用户配置hive
+    LogicalRoot As String
 End Type
 
 Const HBIN_BASE As UInteger = &H1000
@@ -98,33 +155,63 @@ Function CellDataPtrFromFileOffset(hiveData() As UByte, fileOffset As ULong) As 
     Return @hiveData(fileOffset + 4)
 End Function
 
-Function ScanForRootNK(hiveData() As UByte) As ULong
-    Dim pos1 As ULong = &h1000
-    While pos1 + SizeOf(HBIN_HEADER) < UBound(hiveData) + 1
-        Dim h As HBIN_HEADER Ptr = Cast(HBIN_HEADER Ptr, @hiveData(pos1))
-        If h->Sig(0) <> Asc("h") Or h->Sig(1) <> Asc("b") _
-           Or h->Sig(2) <> Asc("i") Or h->Sig(3) <> Asc("n") Then
-            Exit While
-        End If
-        Dim dataSize As ULong = h->Size - SizeOf(HBIN_HEADER)
-        Dim cellPos As ULong = pos1 + SizeOf(HBIN_HEADER)
-        Dim remain As ULong = dataSize
-        While remain > 4
-            Dim size As Long = *Cast(Long Ptr, @hiveData(cellPos))
-            If size < 0 Then
-                Dim sig0 As UByte = hiveData(cellPos + 4)
-                Dim sig1 As UByte = hiveData(cellPos + 5)
-                If sig0 = Asc("n") And sig1 = Asc("k") Then
-                    Return cellPos
-                End If
-            End If
-            If Abs(size) = 0 Then Exit While
-            cellPos += Abs(size)
-            remain -= Abs(size)
-        Wend
-        pos1 += h->size
-    Wend
-    Return 0
+Function GetRootNKOffset(hiveData() As UByte) As ULong
+
+    If UBound(hiveData) < &H1000 Then
+        Return 0
+    End If
+
+
+    Dim regf As REGF_HEADER Ptr = _
+        Cast(REGF_HEADER Ptr, @hiveData(0))
+
+
+    If regf->Sig(0) <> Asc("r") Or _
+       regf->Sig(1) <> Asc("e") Or _
+       regf->Sig(2) <> Asc("g") Or _
+       regf->Sig(3) <> Asc("f") Then
+
+        Print "ERROR: invalid REGF"
+        Return 0
+
+    End If
+
+
+    Print "DEBUG REGF RootCell="
+    Print Hex(regf->RootCell)
+
+
+    ' RootCell 是 HBIN 相对偏移
+    Dim nkFileOffset As ULong = &H1000 + regf->RootCell
+
+
+    Print "DEBUG RootNK FileOffset="
+    Print Hex(nkFileOffset)
+
+
+    If nkFileOffset + 4 >= UBound(hiveData)+1 Then
+
+        Print "ERROR: RootCell out of hive"
+        Return 0
+
+    End If
+
+
+    ' 验证cell
+    Dim nkp As UByte Ptr = _
+        @hiveData(nkFileOffset + 4)
+
+
+    If nkp[0] <> Asc("n") Or nkp[1] <> Asc("k") Then
+
+        Print "ERROR: RootCell is not NK"
+        Return 0
+
+    End If
+
+
+    Return nkFileOffset
+
 End Function
 
 Function StringFromBytes(bytPtr As UByte Ptr, nameLen As UShort) As String
@@ -169,7 +256,7 @@ End Function
 
 Function GetVkName(hiveData() As UByte, vk As VK_FULL Ptr) As String
     If vk->NameLen = 0 Then
-        Return "(Default)"
+        Return ""
     End If
     Dim namePtr As UByte Ptr = Cast(UByte Ptr, vk) + SizeOf(VK_FULL)
     Dim isAnsi As Boolean = (vk->Flags And &h1) <> 0
@@ -190,6 +277,7 @@ Function GetVkName(hiveData() As UByte, vk As VK_FULL Ptr) As String
         Return s
     End If
 End Function
+
 ' 新增：从子键列表同时获取名称+逻辑偏移（核心支撑逐级查找）
 Sub GetSubKeyNamesAndOffsets(hiveData() As UByte, listLogicOffset As ULong, names() As String, offsets() As ULong)
     Dim listp As UByte Ptr = CellPtrFromLogicOffset(hiveData(), listLogicOffset)
@@ -316,6 +404,14 @@ Private Function FindNKByPath(hiveData() As UByte, rootNKFileOffset As ULong, re
     Return currentNKOffset
 End Function
 
+Function IsValidLogicOffset(hiveData() As UByte, logicOffset As ULong) As Boolean
+    Dim hiveSize As ULong = UBound(hiveData) + 1
+    Dim fileOffset As ULong = HBIN_BASE + logicOffset
+    
+    If fileOffset + 4 > hiveSize Then Return False
+    Return True
+End Function
+
 ' 新增：从NK节点获取当前键的完整信息（仅当前键，不递归）
 Private Function GetKeyItemFromNK(hiveData() As UByte, nkFileOffset As ULong, fullKeyPath As String) As REG_KEY_ITEM
     Dim result As REG_KEY_ITEM
@@ -325,46 +421,89 @@ Private Function GetKeyItemFromNK(hiveData() As UByte, nkFileOffset As ULong, fu
     Dim nk As NK_FULL Ptr = Cast(NK_FULL Ptr, nkp)
     If nk->Sig(0) <> Asc("n") Or nk->Sig(1) <> Asc("k") Then Return result
     
+    Print "DEBUG RootNK Offset DEC = "; nkFileOffset
+    Print "DEBUG RootNK Offset HEX = "; Hex(nkFileOffset)
+    Print "NK ptr="; Hex(Cast(ULongInt,nk))
+    Print "DEBUG NK:"
+    Print "SubKeyCount="; nk->SubKeyCount
+    Print "ValueCount="; nk->ValueCount
+    Print "SubKeyList="; Hex(nk->SubKeyListOff)
+    Print "ValueList="; Hex(nk->ValueListOff)
+    Print "NK base="
+    Print Hex(Cast(ULongInt,nk))
+
+    Print "SubKeyList addr="
+    Print Hex(Cast(ULongInt,@nk->SubKeyListOff))
+
+    Print "ValueList addr="
+    Print Hex(Cast(ULongInt,@nk->ValueListOff))
+    
+    Print "RAW NK DATA:"
+
+    For i As Integer = 0 To &H50-1
+        If i Mod 16 = 0 Then
+            Print
+            Print Hex(i); ": ";
+        End If
+
+        Print Right("0" + Hex(nkp[i]),2); " ";
+    Next
+
+    Print
+    
     ' 填充基础信息
     result.KeyPath = fullKeyPath
     result.KeyPathUpper = PathToUpper(fullKeyPath)
     result.IsSymLink = (nk->Flags And &H10) <> 0
     
     ' 枚举值
-    If nk->ValueCount > 0 And nk->ValueListOff <> &hFFFFFFFF Then
-        Dim listp As UByte Ptr = CellPtrFromLogicOffset(hiveData(), nk->ValueListOff)
-        If listp <> 0 Then
-            Dim vkBase As UByte Ptr = listp + 4
-            Dim valCount As Integer = 0
-            ReDim result.Values(0 To nk->ValueCount - 1)
-            For i As Integer = 0 To nk->ValueCount - 1
-                Dim vkLogicOffset As Long = *Cast(Long Ptr, vkBase + i * 4)
-                If vkLogicOffset < 0 Then Continue For
-                Dim vkCellPtr As UByte Ptr = CellPtrFromLogicOffset(hiveData(), vkLogicOffset)
-                If vkCellPtr = 0 Then Continue For
-                Dim vk As VK_FULL Ptr = Cast(VK_FULL Ptr, vkCellPtr + 4)
-                If *Cast(UShort Ptr, @vk->Sig(0)) <> &h6B76 Then Continue For
-                result.Values(valCount).ValueName = GetVkName(hiveData(), vk)
-                result.Values(valCount).ValueType = vk->DataType
-                valCount += 1
-            Next
-            If valCount > 0 Then
-                ReDim Preserve result.Values(0 To valCount - 1)
-            Else
-                Erase result.Values
+    If nk->ValueCount > 0 And nk->ValueListOff <> &HFFFFFFFF Then
+        If IsValidLogicOffset(hiveData(), nk->ValueListOff) = False Then
+            Print "ERROR: invalid ValueListOff = "; Hex(nk->ValueListOff)
+        Else
+            Dim listp As UByte Ptr = CellPtrFromLogicOffset(hiveData(), nk->ValueListOff)
+            If listp <> 0 Then
+                Dim vkBase As UByte Ptr = listp + 4
+                Dim valCount As Integer = 0
+                ReDim result.Values(0 To nk->ValueCount - 1)
+                For i As Integer = 0 To nk->ValueCount - 1
+                    Dim vkLogicOffset As Long = *Cast(Long Ptr, vkBase + i * 4)
+                    If vkLogicOffset < 0 Then Continue For
+                    Dim vkCellPtr As UByte Ptr = CellPtrFromLogicOffset(hiveData(), vkLogicOffset)
+                    If vkCellPtr = 0 Then Continue For
+                    Dim vk As VK_FULL Ptr = Cast(VK_FULL Ptr, vkCellPtr + 4)
+                    Print "VK"
+Print "Name="; GetVkName(hiveData(), vk)
+Print "Type="; Hex(vk->DataType)
+Print "DataLen="; Hex(vk->DataLen)
+Print "DataOffset="; Hex(vk->DataOffset)
+                    If *Cast(UShort Ptr, @vk->Sig(0)) <> &h6B76 Then Continue For
+                    result.Values(valCount).ValueName = GetVkName(hiveData(), vk)
+                    result.Values(valCount).ValueType = vk->DataType
+                    valCount += 1
+                Next
+                If valCount > 0 Then
+                    ReDim Preserve result.Values(0 To valCount - 1)
+                Else
+                    Erase result.Values
+                End If
             End If
         End If
     End If
     
     ' 枚举直接子键
-    If nk->SubKeyCount > 0 And nk->SubKeyListOff <> &hFFFFFFFF Then
-        Dim subNames() As String
-        GetSubKeyNamesFromList hiveData(), nk->SubKeyListOff, subNames()
-        If UBound(subNames) >= 0 Then
-            ReDim result.SubKeys(UBound(subNames))
-            For i As Integer = 0 To UBound(subNames)
-                result.SubKeys(i) = subNames(i)
-            Next
+    If nk->SubKeyCount > 0 And nk->SubKeyListOff <> &HFFFFFFFF Then
+        If IsValidLogicOffset(hiveData(), nk->SubKeyListOff) = False Then
+            Print "ERROR: invalid SubKeyListOff = "; Hex(nk->SubKeyListOff)
+        Else
+            Dim subNames() As String
+            GetSubKeyNamesFromList hiveData(), nk->SubKeyListOff, subNames()
+            If UBound(subNames) >= 0 Then
+                ReDim result.SubKeys(UBound(subNames))
+                For i As Integer = 0 To UBound(subNames)
+                    result.SubKeys(i) = subNames(i)
+                Next
+            End If
         End If
     End If
     
@@ -373,7 +512,7 @@ End Function
 
 Sub EnumHiveKey(hiveData() As UByte, nkFileOffset As ULong, parentPath As String, _
                 hiveArr() As REG_KEY_ITEM, ByRef keyCount As Integer, _
-                ByVal isRoot As Boolean = FALSE, ByVal isFromUserHive As Boolean = FALSE)
+                ByVal isRoot As Boolean = False, ByVal isFromUserHive As Boolean = False)
 
     Dim nkp As UByte Ptr = CellDataPtrFromFileOffset(hiveData(), nkFileOffset)
     If nkp = 0 Then Exit Sub
@@ -459,6 +598,34 @@ Sub EnumHiveKey(hiveData() As UByte, nkFileOffset As ULong, parentPath As String
     hiveArr(keyCount - 1) = keyItem
 End Sub
 
+/'Private Function NormalizeRegistryRoot(ByVal path As String) As String
+
+    Dim p As String = UCase(path)
+
+    If Left(p,18)="HKEY_LOCAL_MACHINE" Then
+        Return "HKLM" & Mid(p,19)
+    End If
+
+    If Left(p,17)="HKEY_CURRENT_USER" Then
+        Return "HKCU" & Mid(p,18)
+    End If
+
+    If Left(p,10)="HKEY_USERS" Then
+        Return "HKU" & Mid(p,11)
+    End If
+
+    If Left(p,17)="HKEY_CLASSES_ROOT" Then
+        Return "HKCR" & Mid(p,18)
+    End If
+
+    If Left(p,20)="HKEY_CURRENT_CONFIG" Then
+        Return "HKCC" & Mid(p,21)
+    End If
+
+    Return p
+
+End Function'/
+
 ' 新增：根据注册表路径获取对应hive信息
 Private Function GetHiveInfoFromPath(fullPath As String, ByRef outHiveInfo As ROOT_HIVE_INFO) As Boolean
     Dim pathUpper As String = PathToUpper(fullPath)
@@ -490,6 +657,8 @@ Private Function GetHiveInfoFromPath(fullPath As String, ByRef outHiveInfo As RO
             Case "SYSTEM"
                 outHiveInfo.RootName = "HKLM\SYSTEM"
                 outHiveInfo.HiveFilePath = systemRoot & "SYSTEM"
+                outHiveInfo.LogicalRoot = "HKEY_LOCAL_MACHINE\SYSTEM"
+                outHiveInfo.HiveSubPath = ""
                 Return True
             Case "HARDWARE"
                 Return False ' 动态生成，无对应hive文件
@@ -498,7 +667,9 @@ Private Function GetHiveInfoFromPath(fullPath As String, ByRef outHiveInfo As RO
     ElseIf Left(pathUpper, 17) = "HKEY_CURRENT_USER" Or Left(pathUpper, 4) = "HKCU" Then
         If currentUserSid = "" Then Return False
         outHiveInfo.RootName = "HKU\" & currentUserSid
+        outHiveInfo.LogicalRoot = "HKEY_CURRENT_USER"
         outHiveInfo.HiveFilePath = userProfile & "NTUSER.DAT"
+        outHiveInfo.HiveSubPath = ""
         outHiveInfo.IsUserHive = TRUE
         Return True
     ' HKU 根键
@@ -530,8 +701,10 @@ Private Function GetHiveInfoFromPath(fullPath As String, ByRef outHiveInfo As RO
             Return True
         End If
     ' HKCC 根键
-    ElseIf Left(pathUpper, 20) = "HKEY_CURRENT_CONFIG" Or Left(pathUpper, 4) = "HKCC" Then
+    ElseIf Left(pathUpper,20) = "HKEY_CURRENT_CONFIG" Or Left(pathUpper, 4) = "HKCC" Then
         outHiveInfo.RootName = "HKLM\SYSTEM"
+        outHiveInfo.LogicalRoot = "HKEY_CURRENT_CONFIG"
+        outHiveInfo.HiveSubPath = "CurrentControlSet\Hardware Profiles\Current"
         outHiveInfo.HiveFilePath = systemRoot & "SYSTEM"
         Return True
     End If
@@ -554,10 +727,38 @@ Function LoadHive(ByRef hiveInfo As ROOT_HIVE_INFO, ByRef outCacheItem As HIVE_C
     
     ' 缓存未命中，加载hive文件
     Dim hiveData() As UByte
+    EnumerateAllDisks
     If Not ReadFile2(hiveInfo.HiveFilePath, hiveData()) Then
         Print "加载hive失败: " & hiveInfo.HiveFilePath
         Return False
     End If
+    
+    /'Print "HBIN RAW"
+
+    For i As Integer = &H1000 To &H101F
+        If i Mod 16 = 0 Then
+            Print
+            Print Hex(i); ": ";
+        End If
+        Print Right("0" + Hex(hiveData(i)),2); " ";
+    Next
+
+    Print '/
+    
+    Print "REGF RAW"
+
+    For i As Integer = 0 To &H40-1
+
+        If i Mod 16 = 0 Then
+            Print
+            Print Hex(i); ": ";
+        End If
+
+        Print Right("0"+Hex(hiveData(i)),2);" ";
+
+    Next
+
+    Print
     
     ' 验证REGF签名
     If *Cast(ULong Ptr, @hiveData(0)) <> &H66676572 Then
@@ -566,7 +767,9 @@ Function LoadHive(ByRef hiveInfo As ROOT_HIVE_INFO, ByRef outCacheItem As HIVE_C
     End If
     
     ' 查找根NK节点
-    Dim rootNK As ULong = ScanForRootNK(hiveData())
+    Dim rootNK As ULong = GetRootNKOffset(hiveData())
+    Print "DEBUG RootNK Offset = "; Hex(rootNK)
+    Print "DEBUG Hive Size = "; UBound(hiveData)+1
     If rootNK = 0 Then
         Print "找不到根NK节点: " & hiveInfo.HiveFilePath
         Return False

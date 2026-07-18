@@ -576,21 +576,22 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
     If RightW(sNormalizedPath, 1) = "\" Then
         sNormalizedPath = LeftW(sNormalizedPath, LenW(sNormalizedPath) - 1)
     End If
-    
+
     ' 分割路径
     Dim sParts() As StringW
     Dim iNumParts As Integer
     iNumParts = vbSplitW(sNormalizedPath, "\", sParts())
-    
+
     If iNumParts < 1 Then Return NULL
-    
+
     ' ==================================================================
     ' 第一步：判断路径类型
     ' ==================================================================
     Dim bIsPhysicalPath As Boolean = False
     Dim sTargetDisk As StringW = ""
     Dim sTargetPartition As StringW = ""
-    
+    Dim sTargetDrive As StringW = ""
+
     If LeftW(sParts(0), 14) = "PhysicalDrive" Then
         ' 无盘符物理路径: PhysicalDrive0\Partition1\...
         bIsPhysicalPath = True
@@ -599,72 +600,81 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
     ElseIf RightW(sParts(0), 1) = ":" Then
         ' 有盘符路径: C:\Windows\... 或 C:
         bIsPhysicalPath = False
-        sTargetDisk = sParts(0)
+        sTargetDrive = sParts(0)
     Else
         Return NULL
     End If
-    
+
     ' ==================================================================
-    ' 第二步：匹配根节点（磁盘或分区）
+    ' 第二步：匹配根节点（磁盘节点）
     ' ==================================================================
     Dim hCurrentNode As HTREEITEM = treFolder.GetRoot()
     Dim hRootNode As HTREEITEM = NULL
     Dim hPartitionNode As HTREEITEM = NULL
     Dim sNodeText As StringW
-    
+
     While hCurrentNode <> NULL
         sNodeText = treFolder.Text(hCurrentNode)
-        
-        If bIsPhysicalPath Then
-            ' ========== 物理模式：匹配磁盘根节点 "磁盘0 [GPT]" ==========
-            Dim posDisk As Integer = InStrW(sNodeText, "磁盘")
-            If posDisk > 0 Then
-                Dim j As Integer = posDisk + 2
-                Dim diskNum As StringW = ""
-                While j <= LenW(sNodeText)
-                    Dim ch As StringW = MidW(sNodeText, j, 1)
-                    If IsNumeric(ch) Then
-                        diskNum &= ch
-                    Else
-                        Exit While
-                    End If
-                    j += 1
-                Wend
+
+        ' ========== 统一匹配磁盘根节点 "磁盘0 [GPT]" ==========
+        Dim posDisk As Integer = InStrW(sNodeText, "磁盘")
+        If posDisk > 0 Then
+            Dim j As Integer = posDisk + 2
+            Dim diskNum As StringW = ""
+            While j <= LenW(sNodeText)
+                Dim ch As StringW = MidW(sNodeText, j, 1)
+                If IsNumeric(ch) Then
+                    diskNum &= ch
+                Else
+                    Exit While
+                End If
+                j += 1
+            Wend
+
+            If bIsPhysicalPath Then
+                ' 物理模式：直接匹配磁盘号
                 If diskNum = sTargetDisk Then
                     hRootNode = hCurrentNode
                     Exit While
                 End If
-            End If
-        Else
-            ' ========== 非物理模式：根节点本身就是分区，匹配盘符 ==========
-            Dim pos1 As Integer = InStrRevW(sNodeText, "(")
-            Dim pos2 As Integer = InStrRevW(sNodeText, ")")
-            If pos1 > 0 And pos2 > pos1 Then
-                Dim sDriveInNode As StringW = MidW(sNodeText, pos1 + 1, pos2 - pos1 - 1)
-                If UCaseW(sDriveInNode) = UCaseW(sTargetDisk) Then
-                    ' 非物理模式下根节点就是分区节点
-                    hRootNode = hCurrentNode
-                    hPartitionNode = hCurrentNode
-                    Exit While
-                End If
+            Else
+                ' 盘符模式：需要遍历该磁盘下的分区节点，找匹配的盘符
+                Dim hTestPartition As HTREEITEM = treFolder.GetChild(hCurrentNode)
+                Dim bDriveFound As Boolean = False
+                While hTestPartition <> NULL
+                    Dim sPartText As StringW = treFolder.Text(hTestPartition)
+                    Dim pos1 As Integer = InStrRevW(sPartText, "(")
+                    Dim pos2 As Integer = InStrRevW(sPartText, ")")
+                    If pos1 > 0 And pos2 > pos1 Then
+                        Dim sDriveInNode As StringW = MidW(sPartText, pos1 + 1, pos2 - pos1 - 1)
+                        If UCaseW(sDriveInNode) = UCaseW(sTargetDrive) Then
+                            hRootNode = hCurrentNode
+                            hPartitionNode = hTestPartition
+                            bDriveFound = True
+                            Exit While
+                        End If
+                    End If
+                    hTestPartition = treFolder.GetNextSiblin(hTestPartition)
+                Wend
+                If bDriveFound Then Exit While
             End If
         End If
-        
+
         hCurrentNode = treFolder.GetNextSiblin(hCurrentNode)
     Wend
-    
+
     If hRootNode = NULL Then Return NULL
-    
+
     ' ==================================================================
     ' 第三步：物理模式下需要额外匹配分区节点
     ' ==================================================================
     If bIsPhysicalPath Then
         hPartitionNode = NULL
         hCurrentNode = treFolder.GetChild(hRootNode)
-        
+
         While hCurrentNode <> NULL
             sNodeText = treFolder.Text(hCurrentNode)
-            
+
             ' 无盘符：匹配 Partition1 → 找节点中包含 (0) 的
             If LeftW(sTargetPartition, 9) = "Partition" Then
                 Dim targetPartIdx As Integer = ValInt(MidW(sTargetPartition, 10)) - 1
@@ -678,24 +688,24 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
                     End If
                 End If
             End If
-            
+
             hCurrentNode = treFolder.GetNextSiblin(hCurrentNode)
         Wend
-        
+
         If hPartitionNode = NULL Then Return NULL
-        
+
         ' 只有两级（PhysicalDrive0\Partition1），返回分区节点
         If iNumParts = 2 Then Return hPartitionNode
     Else
-        ' 非物理模式下只有一级（C:），直接返回分区节点
+        ' 非物理模式下：盘符节点在磁盘下，已在上一步找到
         If iNumParts = 1 Then Return hPartitionNode
     End If
-    
+
     ' ==================================================================
     ' 第四步：逐级匹配子目录
     ' ==================================================================
     hCurrentNode = hPartitionNode
-    
+
     ' 确定子目录起始索引
     Dim startIdx As Integer
     If bIsPhysicalPath Then
@@ -703,162 +713,50 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
     Else
         startIdx = 1  ' C:\子目录1\...（有盘符时第二部分就是子目录）
     End If
-    
+
     ' 先展开分区节点
-    GetFileList hCurrentNode, treFolder, lvwFile, True, False, _
-        GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+    GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
     treFolder.ExpandEx hCurrentNode, TVE_EXPAND
-    
+    treFolder.EnsureVisible hCurrentNode
+
     Dim i As Integer
     Dim hChildNode As HTREEITEM
     Dim bFound As Boolean
-    
+
     For i = startIdx To iNumParts - 1
         If sParts(i) = "" Then Continue For
-        
+
         bFound = False
         hChildNode = treFolder.GetChild(hCurrentNode)
-        
+
         While hChildNode <> NULL
             sNodeText = treFolder.Text(hChildNode)
-            
+
             If UCaseW(sNodeText) = UCaseW(sParts(i)) Then
                 bFound = True
                 hCurrentNode = hChildNode
-                
+
                 If i < iNumParts - 1 Then
                     If Not treFolder.Expand(hCurrentNode) Then
-                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, _
-                            GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
                         treFolder.ExpandEx hCurrentNode, TVE_EXPAND
+                        treFolder.Selection = hCurrentNode
                     End If
                 End If
                 Exit While
             End If
-            
+
             hChildNode = treFolder.GetNextSiblin(hChildNode)
         Wend
-        
+
         If Not bFound Then
             Print "Not found: " & sParts(i)
             Return NULL
         End If
     Next
-    
+
     Return hCurrentNode
 End Function
-
-/'Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeView, lvwFile As Class_ListView) As HTREEITEM
-    ' 规范化路径：替换斜杠、去除末尾分隔符
-    Dim sNormalizedPath As StringW = sPath
-    If RightW(sNormalizedPath, 1) = "\" Then
-        sNormalizedPath = LeftW(sNormalizedPath, LenW(sNormalizedPath) - 1)
-    End If
-    
-    ' 将路径分割成部分
-    Dim sParts() As StringW
-    Dim iNumParts As Integer
-    iNumParts = vbSplitW(sNormalizedPath, "\", sParts())
-    
-    ' 如果路径无效，直接返回 NULL
-    If iNumParts < 1 Then Return NULL
-    
-    ' 第一步：找到匹配的根节点（驱动器）
-    Dim hCurrentNode As HTREEITEM = treFolder.GetRoot()
-    Dim hRootNode As HTREEITEM = NULL
-    Dim sNodeText As StringW
-    Dim pos1 As Integer, pos2 As Integer
-    
-    ' 遍历所有根节点
-    While hCurrentNode <> NULL
-        sNodeText = treFolder.Text(hCurrentNode)
-        
-        ' 从根节点文本中提取驱动器号（如从"本地磁盘 (C:)"中提取"C:"）
-        pos1 = InStrRevW(sNodeText, "(")
-        pos2 = InStrRevW(sNodeText, ")")
-        If pos1 > 0 And pos2 > pos1 Then
-            Dim sDriveLetter As StringW = MidW(sNodeText, pos1 + 1, pos2 - pos1 - 1)
-            
-            ' 比较提取的驱动器号与路径的第一部分
-            If UCaseW(sDriveLetter) = UCaseW(sParts(0)) Then
-                hRootNode = hCurrentNode
-                'Print sDriveLetter
-                If iNumParts > 1 Then
-                    GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
-                    treFolder.ExpandEx hCurrentNode, TVE_EXPAND
-                    'hCurrentNode = treFolder.GetChild(hCurrentNode)
-                Else
-                    Return hCurrentNode
-                End If
-                Exit While
-            End If
-        End If
-        
-        hCurrentNode = treFolder.GetNextSiblin(hCurrentNode)
-    Wend
-    
-    If hRootNode = NULL Then Return NULL
-    
-    ' 第二步：从根节点开始，逐级匹配路径的剩余部分
-    hCurrentNode = hRootNode
-    Dim i As Integer
-    Dim hChildNode As HTREEITEM
-    Dim bFound As Boolean
-    
-    ' 从路径的第二部分开始遍历（第一部分是驱动器号，已经匹配过了）
-    For i = 1 To iNumParts - 1
-        'Print "sParts(" & i & "):" & sParts(i)
-        If sParts(i) = "" Then Continue For
-        
-        bFound = False
-        
-        ' 获取当前节点的第一个子节点
-        hChildNode = treFolder.GetChild(hCurrentNode)
-        
-        ' 如果当前节点没有子节点，且不是最后一级，则尝试展开
-        /'If hChildNode = NULL And i < iNumParts - 1 Then
-            GetFileList hCurrentNode, treFolder, lvwFile, True, False
-            treFolder.ExpandEx hCurrentNode, TVE_EXPAND
-            hChildNode = treFolder.GetChild(hCurrentNode)
-        End If'/
-        
-        ' 遍历所有子节点
-        While hChildNode <> NULL
-            sNodeText = treFolder.Text(hChildNode)
-            
-            'Print "Comparing: " & sNodeText & " with " & sParts(i)
-            
-            ' 比较节点文本与当前路径部分（子目录节点通常没有卷标，直接比较）
-            If UCaseW(sNodeText) = UCaseW(sParts(i)) Then
-                bFound = True
-                hCurrentNode = hChildNode
-                
-                ' 如果不是最后一部分，确保节点已展开
-                If i < iNumParts - 1 Then
-                    ' 如果节点未展开，则展开
-                    If Not treFolder.Expand(hCurrentNode) Then
-                        GetFileList hCurrentNode, treFolder, lvwFile, True, False, GetMenuCheckState(FrmMain.mnuFile, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
-                        treFolder.ExpandEx hCurrentNode, TVE_EXPAND
-                        Exit While
-                    End If
-                Else
-                    Return hCurrentNode
-                End If
-                
-                Exit While
-            End If
-            
-            hChildNode = treFolder.GetNextSiblin(hChildNode)
-        Wend
-        
-        If Not bFound Then
-            Print "Not found: " & sParts(i)
-            Return NULL
-        End If
-    Next
-    
-    Return hCurrentNode
-End Function'/
 
 Function MyDeleteFile(ByVal lpFilePath As LPCWSTR) As NTSTATUS
     Dim ObjectAttributes As OBJECT_ATTRIBUTES, unicodeFilePath As UNICODE_STRING, st As NTSTATUS

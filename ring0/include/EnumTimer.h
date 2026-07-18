@@ -6,6 +6,7 @@
 typedef struct _SYSTEM_TIMER {
     wchar_t Name[10];
     PVOID TimerObject;
+    PVOID pDpc;
     PVOID Func;
     ULONG Period;
     SHORT Type;
@@ -17,7 +18,6 @@ typedef struct _IO_TIMER
 {
     INT16        Type;
     INT16        TimerFlag;
-    LONG32       Unknown;
     LIST_ENTRY   TimerList;
     PVOID        TimerRoutine;
     PVOID        Context;
@@ -48,12 +48,5 @@ typedef struct _PROCESS_TIMER_INFO {
     PROCESS_TIMER Timers[1];
 }PROCESS_TIMER_INFO, * PPROCESS_TIMER_INFO;
 
-PVOID FindIopTimerQueueHead();
-
-void EnumIoTimers(PSYSTEM_TIMER SystemTimers);
-
-PVOID FindKeSetTimerEx();
-
-VOID FindKiWaitXXX(PVOID KeSetTimerEx, PVOID* KiWaitNever, PVOID* KiWaitAlways);
-
+BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers);
 void EnumDpcTimers(PSYSTEM_TIMER SystemTimers);

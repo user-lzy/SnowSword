@@ -4,19 +4,20 @@
 #include "EnumTimer.h"
 #include "File.h"
 #include "GDT.h"
-#include "Hook.h"
 #include "IDT.h"
 #include "ioctl.h"
 #include "Memory.h"
 #include "Module.h"
 #include "Netstat.h"
 #include "ObjectInfo.h"
+#include "OffsetScanner.h"
 #include "OtherFunctions.h"
 #include "Process.h"
 #include "Registry.h"
 #include "SSDT.h"
 #include "Symbol.h"
 #include "Thread.h"
+//#include "Test.h"
 #include "Window.h"
 
 typedef struct _EProcessInfo {
@@ -343,6 +344,9 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
 
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
+
+    
+
     return STATUS_SUCCESS;
 }
 
@@ -782,31 +786,41 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         break;
     case IOCTL_EnumIoTimers:
 		SYSTEM_TIMER SystemTimers[64] = { 0 };
-		EnumIoTimers(SystemTimers);
-        if (pOutputData != NULL && OutputDataLength >= sizeof(SystemTimers))
-        {
-            memcpy(pOutputData, SystemTimers, sizeof(SystemTimers));
-            Information = sizeof(SystemTimers);
-            status = STATUS_SUCCESS;
+        if (EnumIoTimers(SystemTimers)) {
+            if (pOutputData != NULL && OutputDataLength >= sizeof(SystemTimers))
+            {
+                memcpy(pOutputData, SystemTimers, sizeof(SystemTimers));
+                Information = sizeof(SystemTimers);
+                status = STATUS_SUCCESS;
+            }
+            else
+            {
+                status = STATUS_INFO_LENGTH_MISMATCH;
+            }
         }
-        else
-        {
-            status = STATUS_INFO_LENGTH_MISMATCH;
+        else {
+            status = STATUS_NOT_FOUND;
         }
         break;
     case IOCTL_EnumDpcTimers:
-		SYSTEM_TIMER DpcTimers[64] = { 0 };
-		EnumDpcTimers(DpcTimers);
-		if (pOutputData != NULL && OutputDataLength >= sizeof(DpcTimers))
-		{
-			memcpy(pOutputData, DpcTimers, sizeof(DpcTimers));
-			Information = sizeof(DpcTimers);
-			status = STATUS_SUCCESS;
-		}
-		else
-		{
-			status = STATUS_INFO_LENGTH_MISMATCH;
-		}
+		PSYSTEM_TIMER pDpcTimers = ExAllocatePool2(POOL_FLAG_NON_PAGED, 512 * sizeof(SYSTEM_TIMER), 'syst');
+        if (pDpcTimers) {
+            EnumDpcTimers(pDpcTimers);
+            if (pOutputData != NULL && OutputDataLength >= 512 * sizeof(SYSTEM_TIMER))
+            {
+                memcpy(pOutputData, pDpcTimers, 512 * sizeof(SYSTEM_TIMER));
+                Information = 512 * sizeof(SYSTEM_TIMER);
+                status = STATUS_SUCCESS;
+            }
+            else
+            {
+                DbgPrint("OutputDataLength:%d", OutputDataLength);
+                status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+        else {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
 		break;
     case IOCTL_GetDriverObjectByBaseAddress:
 		if (pInputData != NULL && InputDataLength > 0)

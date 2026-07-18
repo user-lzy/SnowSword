@@ -895,6 +895,18 @@ Private Function GetProcessIdOfProcessHandle(ByVal dwProcessId As DWORD, ByVal d
     Return True
 End Function
 
+Private Function GetProcessIdOfOwnProcessHandle(ByVal dwHandle As HANDLE, ByRef ProcessId As DWORD) As Boolean
+    Dim st As NTSTATUS
+    Dim pbi As PROCESS_BASIC_INFORMATION, ret As DWORD
+    st = ZwQueryInformationProcess(dwHandle, BasicInformation, @pbi, SizeOf(pbi), ret)
+    If Not NT_SUCCESS(st) Then
+        Print "[GetProcessIdOfOwnProcessHandle]ZwQueryInformationProcess:" & Hex(st)
+        Return False
+    End If
+    ProcessId = Cast(DWORD, Cast(UInteger, pbi.UniqueProcessId))
+    Return True
+End Function
+
 Private Function GetThreadIdOfThreadHandle(ByVal dwProcessId As DWORD, ByVal dwHandle As HANDLE, ByRef ThreadId As DWORD, ByRef ProcessId As DWORD) As Boolean
     Dim hProcess As HANDLE, hTargetHandle As HANDLE, st As NTSTATUS
     If IsDriverLoaded Then

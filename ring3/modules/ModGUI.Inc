@@ -142,7 +142,7 @@ Function GetVkKeyStr(ByVal vkCode As DWORD) As StringW
 End Function
 
 ' 消息钩子枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHook As Class_ListView)
+Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHook As Class_ListView) As Boolean
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -152,37 +152,20 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
     IoControl hDrv, IOCTL_EnumMsgHook, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetMsgHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
-        Exit Sub
+        Return False
     End If
 
     dataSize = lpRet
     If dataSize = 0 Then
         Print "未发现任何消息钩子"
-        'InitListViewData lvwMsgHook
-        '' ====================== 消息钩子 PID列处理 ======================
-        '' PID列索引：5 | 列名：PID
-        'Const MSGHOOK_PID_COL_INDEX = 5
-        'If PID <> Cast(DWORD, -1) Then
-        '    ' 删除前校验：确保该列是PID列
-        '    If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) = "PID" Then
-        '        lvwMsgHook.DeleteColumn(MSGHOOK_PID_COL_INDEX)
-        '    End If
-        'Else
-        '    ' 添加前校验：确保PID列不存在
-        '    If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) <> "PID" Then
-        '        lvwMsgHook.InsertColumn(MSGHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
-        '    End If
-        'End If
-        '' =================================================================
-        'CommitListViewView lvwMsgHook
-        Exit Sub
+        Return False
     End If
 
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
         Print "内存分配失败"
-        Exit Sub
+        Return False
     End If
 
     ' 第二次IOCTL：获取钩子数据
@@ -190,7 +173,7 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
     If GetLastError <> 0 Then
         Print "[GetMsgHookList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
         Deallocate pData
-        Exit Sub
+        Return False
     End If
 
     ' 解析数据
@@ -209,8 +192,6 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
             lvwMsgHook.InsertColumn(MSGHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
         End If
     End If
-    ' =================================================================
-    'Print "==================== 消息钩子列表 ===================="
 
     For i As Integer = 0 To hookCount - 1
         Dim info As WIN32K_MSG_HOOK_INFO = pHook[i]
@@ -227,13 +208,13 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
         Else
             hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, info.ProcessId)
         End If
-        Print "正在解析钩子数据..."
         ' ====================== 核心：地址解析逻辑 ======================
         If LenW(info.ModulePath) = 0 Then
             realVA = info.pfn
             finalModulePath = GetModuleOfAddress(hProcess, Cast(PVOID, realVA)) 
         ElseIf LenW(info.ModulePath) > 0 Then
             Dim baseAddr As ULONG64 = Cast(ULONG64, GetModuleBaseByPath(hProcess, info.ModulePath))
+            If baseAddr = NULL Then Print info.ModulePath & "解析失败"
             realVA = baseAddr + info.pfn
             finalModulePath = info.ModulePath
         Else
@@ -248,8 +229,8 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
             WStr(scopeStr), _
             "0x" & WHex(realVA), _
             finalModulePath, _
-            WStr(info.ThreadId), _
-            WStr(info.ProcessId)
+            WStr(info.ProcessId), _
+            WStr(info.ThreadId)
 
         ' 调试打印
         MyLog.PrintLog LOG_INFO, "GetMsgHook",, "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
@@ -260,11 +241,11 @@ Public Sub GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHo
 
     CommitListViewView lvwMsgHook
     Deallocate pData
-    Print "======================================================"
-End Sub
+    Return True
+End Function
 
 ' 事件钩子枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEventHook As Class_ListView)
+Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEventHook As Class_ListView) As Boolean
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -274,7 +255,7 @@ Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEve
     IoControl hDrv, IOCTL_EnumEventHook, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetEventHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
-        Exit Sub
+        Return False
     End If
     
     InitListViewData lvwEventHook
@@ -296,14 +277,14 @@ Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEve
     If dataSize = 0 Then
         Print "未发现任何事件钩子"
         CommitListViewView lvwEventHook
-        Exit Sub
+        Return False
     End If
 
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
         Print "内存分配失败"
-        Exit Sub
+        Return False
     End If
 
     ' 第二次IOCTL：获取数据
@@ -311,7 +292,7 @@ Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEve
     If GetLastError <> 0 Then
         Print "[GetEventHookList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
         Deallocate pData
-        Exit Sub
+        Return False
     End If
 
     ' 解析数据
@@ -375,10 +356,11 @@ Public Sub GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwEve
 
     CommitListViewView lvwEventHook
     Deallocate pData
-End Sub
+    Return True
+End Function
 
 ' 热键枚举 - 改造版（PID列动态显示/隐藏）
-Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey As Class_ListView)
+Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey As Class_ListView) As Boolean
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -388,8 +370,8 @@ Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey
     IoControl hDrv, IOCTL_EnumHotkey, NULL, 0, NULL, 0, @lpRet
     If GetLastError <> 0 Then
         Print "[GetHotkeyList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
-        Print "lpRet:" & lpRet
-        Exit Sub
+        'Print "lpRet:" & lpRet
+        Return False
     End If
     
     InitListViewData lvwHotkey
@@ -410,14 +392,14 @@ Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey
     If dataSize = 0 Then
         Print "未发现任何系统热键"
         CommitListViewView lvwHotkey
-        Exit Sub
+        Return False
     End If
 
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
         Print "内存分配失败"
-        Exit Sub
+        Return False
     End If
 
     ' 第二次IOCTL：获取热键数据
@@ -425,7 +407,7 @@ Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey
     If GetLastError <> 0 Then
         Print "[GetHotkeyList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
         Deallocate pData
-        Exit Sub
+        Return False
     End If
 
     ' 解析数据
@@ -483,4 +465,5 @@ Public Sub GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwHotkey
 
     CommitListViewView lvwHotkey
     Deallocate pData
-End Sub
+    Return True
+End Function

@@ -1360,7 +1360,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 strEProcess = "0x" & WHex(EProcessInfo.EProcess)
             End If
             strPath = ProcessPath(i + 1)
-            strPath1 = GetProcessPath(dwPID)
+            strPath1 = GetProcessPathCached(dwPID)
             If InStr(strPath, ":") = 0 Then
                 If InStr(strPath1, ":") = 0 Then
                     strName = ProcessPath(i + 1)
@@ -1375,6 +1375,13 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             End If
             'Print dwPID & ":" & strPath
             strName = GetNameByPath(strPath)
+            
+            Dim hProcess As HANDLE = SnowSword_OpenProcess(dwPID)
+            If hProcess Then
+                strName = strName & IIf(IsProcessWow64_Ex(hProcess), " *32", "")
+                CloseHandle hProcess
+            End If
+            
             strCompany = GetFileCompanyCached(strPath)
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
@@ -1412,6 +1419,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 strName = GetNameByPath(strPath)
                 strCompany = GetFileCompanyCached(strPath)
             End If
+            
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
             strUserName = GetProcessUserNameCached(dwPID)
@@ -1458,6 +1466,13 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 End If
             End If
             strName = GetNameByPath(strPath)
+            
+            Dim hProcess As HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, dwPID)
+            If hProcess Then
+                strName = strName & IIf(IsProcessWow64_Ex(hProcess), " *32", "")
+                CloseHandle hProcess
+            End If
+            
             strCompany = GetFileCompanyCached(strPath)
             Dim dwSessionId As DWORD = 0
             If Not GetProcessSessionId(dwPID, dwSessionId) Then strSessionId = "?" Else strSessionId = WStr(dwSessionId)
@@ -1497,11 +1512,11 @@ Public Function SuspendProcess(ByVal dwProcessId As DWORD) As Boolean
         st = ZwOpenProcess(@hProcess, PROCESS_SUSPEND_RESUME, @ObjectAttributes, @ClientId)
     End If
     If (hProcess = 0) Then
-        Print "打开进程失败,原因:" & Hex(st)
+        MyLog.PrintNtError "SuspendProcess", "ZwOpenProcess", st, "PID=" & dwProcessId
         Goto Err1
     End If
     If (ZwSuspendProcess(hProcess) <> 0) Then
-        Print "挂起进程失败,原因:" & Hex(st)
+        MyLog.PrintNtError "SuspendProcess", "ZwOpenProcess", st, "PID=" & dwProcessId
         Goto Err1
     End If
     Return True

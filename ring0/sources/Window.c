@@ -3,6 +3,7 @@
 #include "Module.h"
 #include "ntstrsafe.h"
 #include "Symbol.h"
+#include "OffsetScanner.h"
 
 // SYSTEM_THREAD_INFORMATION 结构体定义（适用于大部分Windows版本）
 typedef struct _SYSTEM_THREAD_INFORMATION {
@@ -183,17 +184,18 @@ NTSTATUS EnumProcessTimers(
                     if (!pti) continue;
 
                     // Win10/11 偏移（你的原有逻辑）
-                    ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
+                    /*ULONG processOffset = g_TimerCtx.isV2 ? 0x1D0 : 0x1A8;
                     if (!MmIsAddressValid((PUCHAR)pti + processOffset)) continue;
                     PVOID ProcessInfo = *(PVOID*)((PUCHAR)pti + processOffset);
                     if (!ProcessInfo || !MmIsAddressValid(ProcessInfo)) continue;
                     PEPROCESS pEprocess = *(PEPROCESS*)ProcessInfo;
                     if (!pEprocess) continue;
-                    HANDLE currentPid = PsGetProcessId(pEprocess);
+                    HANDLE currentPid = PsGetProcessId(pEprocess);*/
 
                     // 线程ID（你的原有逻辑）
                     PETHREAD pEthread = *(PETHREAD*)((PUCHAR)pti + 0x0);
                     if (!pEthread) continue;
+					HANDLE dwProcessId = PsGetThreadProcessId(pEthread);
                     HANDLE dwThreadId = PsGetThreadId(pEthread);
 
                     // ====================== 内存分配（你的原有逻辑完全保留）======================
@@ -217,7 +219,7 @@ NTSTATUS EnumProcessTimers(
                     pNewArray[timerCount].nTimeout = g_TimerCtx.isV2 ? pTimer.Win11->nTimeout : pTimer.Win10->nTimeout;
                     pNewArray[timerCount].nIDEvent = g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent;
                     pNewArray[timerCount].ThreadId = dwThreadId;
-                    pNewArray[timerCount].ProcessId = currentPid;
+                    pNewArray[timerCount].ProcessId = dwProcessId;
                     
                     PVOID pWnd = NULL;
                     pNewArray[timerCount].hWnd = NULL;
@@ -234,7 +236,7 @@ NTSTATUS EnumProcessTimers(
 
                     // 打印日志（保留）
                     DbgPrint("[TIMER_ENUM] 找到定时器！pTimer=0x%p, PID=%llu, TID=%llu, nIDEvent=%lld, pWnd=0x%p, hWnd=0x%p\n",
-                        pTimer, (ULONG64)currentPid, (ULONG64)dwThreadId,
+                        pTimer, (ULONG64)dwProcessId, (ULONG64)dwThreadId,
                         g_TimerCtx.isV2 ? pTimer.Win11->nIDEvent : pTimer.Win10->nIDEvent, 
                         pWnd, pNewArray[timerCount].hWnd);
 
@@ -271,48 +273,57 @@ NTSTATUS EnumProcessTimers(
 }
 
 PVOID FindGetHmodTableIndex() {
-    // ====================== 修改点1：替换基址函数 ======================
-    // 原错误：NtUserUnhookWindowsHookEx
-    // 新正确：NtUserSetWindowsHookEx（你的汇编明确使用这个函数）
-    PVOID NtUserSetWindowsHookExAddr = KernelGetProcAddress("win32kfull.sys", "NtUserSetWindowsHookEx");
-    if (!NtUserSetWindowsHookExAddr) {
-        DbgPrint("NtUserSetWindowsHookEx 未找到！\n");
-        return NULL;
+    ULONG64 addr = 0;
+    NTSTATUS status = KernelQuerySymbolAddress(L"win32kfull.sys", L"GetHmodTableIndex", &addr);
+    if (status == STATUS_SUCCESS && addr)
+    {
+        DbgPrint("Symbol: GetHmodTableIndex=%p\n", (PVOID)addr);
+        return (PVOID)addr;
     }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    return NULL;
+ //   // ====================== 修改点1：替换基址函数 ======================
+ //   // 原错误：NtUserUnhookWindowsHookEx
+ //   // 新正确：NtUserSetWindowsHookEx（你的汇编明确使用这个函数）
+ //   PVOID NtUserSetWindowsHookExAddr = KernelGetProcAddress("win32kfull.sys", "NtUserSetWindowsHookEx");
+ //   if (!NtUserSetWindowsHookExAddr) {
+ //       DbgPrint("NtUserSetWindowsHookEx 未找到！\n");
+ //       return NULL;
+ //   }
 
-    // ====================== 修改点2：特征码1 → 匹配 call zzzSetWindowsHookEx ======================
-    // 汇编：call zzzSetWindowsHookEx + 后续 test rax, rax
-    // 机器码：E8 xx xx xx xx 48 85 C0
-    UCHAR pattern1[] = { 0xE8, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC0 };
-    UCHAR mask1[] = { 1,    0,    0,    0,    0,    1,    1,    1 };
-    PVOID result = SearchSpecialCodeWithMask(NtUserSetWindowsHookExAddr, 0x400, pattern1, mask1, sizeof(pattern1));
-    if (!result) {
-        DbgPrint("特征码1(call zzzSetWindowsHookEx) 未找到！\n");
-        return NULL;
-    }
+ //   // ====================== 修改点2：特征码1 → 匹配 call zzzSetWindowsHookEx ======================
+ //   // 汇编：call zzzSetWindowsHookEx + 后续 test rax, rax
+ //   // 机器码：E8 xx xx xx xx 48 85 C0
+ //   UCHAR pattern1[] = { 0xE8, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC0 };
+ //   UCHAR mask1[] = { 1,    0,    0,    0,    0,    1,    1,    1 };
+ //   PVOID result = SearchSpecialCodeWithMask(NtUserSetWindowsHookExAddr, 0x400, pattern1, mask1, sizeof(pattern1));
+ //   if (!result) {
+ //       DbgPrint("特征码1(call zzzSetWindowsHookEx) 未找到！\n");
+ //       return NULL;
+ //   }
 
-    // 解析call指令 → 获取 zzzSetWindowsHookEx 函数地址
-    ULONG call_offset = *(ULONG*)((PUCHAR)result + 1);
-    PVOID zzzSetWindowsHookExAddr = (PVOID)((PUCHAR)result + 5 + call_offset);
-    DbgPrint("zzzSetWindowsHookEx: 0x%p\n", zzzSetWindowsHookExAddr);
+ //   // 解析call指令 → 获取 zzzSetWindowsHookEx 函数地址
+ //   ULONG call_offset = *(ULONG*)((PUCHAR)result + 1);
+ //   PVOID zzzSetWindowsHookExAddr = (PVOID)((PUCHAR)result + 5 + call_offset);
+ //   DbgPrint("zzzSetWindowsHookEx: 0x%p\n", zzzSetWindowsHookExAddr);
 
-    // ====================== 保留：特征码2 → 匹配 call GetHmodTableIndex ======================
-    // 你的汇编：call GetHmodTableIndex + mov [rdi+44h], eax
-    // 机器码：E8 xx xx xx xx 89 47 44
-    UCHAR pattern2[] = { 0xE8, 0x00, 0x00, 0x00, 0x00, 0x89, 0x47, 0x44 };
-    UCHAR mask2[] = { 1,    0,    0,    0,    0,    1,    1,    1 };
-	// 之前是0x2000，现在改回0x200，足够找到目标且更快
-    result = SearchSpecialCodeWithMask(zzzSetWindowsHookExAddr, 0x200, pattern2, mask2, sizeof(pattern2));
-    if (!result) {
-        DbgPrint("特征码2(call GetHmodTableIndex) 未找到！\n");
-        return NULL;
-    }
+ //   // ====================== 保留：特征码2 → 匹配 call GetHmodTableIndex ======================
+ //   // 你的汇编：call GetHmodTableIndex + mov [rdi+44h], eax
+ //   // 机器码：E8 xx xx xx xx 89 47 44
+ //   UCHAR pattern2[] = { 0xE8, 0x00, 0x00, 0x00, 0x00, 0x89, 0x47, 0x44 };
+ //   UCHAR mask2[] = { 1,    0,    0,    0,    0,    1,    1,    1 };
+	//// 之前是0x2000，现在改回0x200，足够找到目标且更快
+ //   result = SearchSpecialCodeWithMask(zzzSetWindowsHookExAddr, 0x200, pattern2, mask2, sizeof(pattern2));
+ //   if (!result) {
+ //       DbgPrint("特征码2(call GetHmodTableIndex) 未找到！\n");
+ //       return NULL;
+ //   }
 
-    // 解析call指令 → 获取 GetHmodTableIndex 函数地址
-    call_offset = *(ULONG*)((PUCHAR)result + 1);
-    PVOID GetHmodTableIndexAddr = (PVOID)((PUCHAR)result + 5 + call_offset);
-    DbgPrint("GetHmodTableIndex: 0x%p\n", GetHmodTableIndexAddr);
-    return GetHmodTableIndexAddr;
+ //   // 解析call指令 → 获取 GetHmodTableIndex 函数地址
+ //   call_offset = *(ULONG*)((PUCHAR)result + 1);
+ //   PVOID GetHmodTableIndexAddr = (PVOID)((PUCHAR)result + 5 + call_offset);
+ //   DbgPrint("GetHmodTableIndex: 0x%p\n", GetHmodTableIndexAddr);
+ //   return GetHmodTableIndexAddr;
 }
 
 PVOID FindaatomSysLoaded() {
@@ -328,67 +339,247 @@ PVOID FindaatomSysLoaded() {
     // -------------------------------------------
     // ====================== 保留：特征码3 → 匹配 lea r8, aatomSysLoaded ======================
     // 你的汇编：lea r8, ?aatomSysLoaded@@3PAGA + test eax,eax
-    UCHAR pattern3[] = {
-        0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,  // lea r8, [rip+offset]
-        0x85, 0xC0                                  // test eax, eax
-    };
-    UCHAR mask3[] = {
-        1, 1, 1, 0, 0, 0, 0,
-        1, 1
-    };
-    PVOID result = SearchSpecialCodeWithMask(FindGetHmodTableIndex(), 0x200, pattern3, mask3, sizeof(pattern3));
-    if (!result) {
-        DbgPrint("特征码3(lea aatomSysLoaded) 未找到！\n");
-        return NULL;
+    //UCHAR pattern3[] = {
+    //    0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,  // lea r8, [rip+offset]
+    //    0x85, 0xC0                                  // test eax, eax
+    //};
+    //UCHAR mask3[] = {
+    //    1, 1, 1, 0, 0, 0, 0,
+    //    1, 1
+    //};
+    //PVOID result = SearchSpecialCodeWithMask(FindGetHmodTableIndex(), 0x200, pattern3, mask3, sizeof(pattern3));
+    //if (!result) {
+    //    DbgPrint("特征码3(lea aatomSysLoaded) 未找到！\n");
+    //    return NULL;
+    //}
+
+    //// 解析lea指令 → 最终目标：aatomSysLoaded
+    //ULONG lea_offset = *(ULONG*)((PUCHAR)result + 3);
+    //PVOID aatomSysLoadedAddr = (PVOID)((PUCHAR)result + 7 + lea_offset);
+
+    //DbgPrint("成功找到 aatomSysLoaded: 0x%p\n", aatomSysLoadedAddr);
+    //return aatomSysLoadedAddr;
+}
+
+ULONG FindAtomArrayOffset(
+    PUCHAR FunctionBase,
+    ULONG FunctionSize
+)
+{
+    for (ULONG i = 0; i < FunctionSize - 8; i++)
+    {
+        PUCHAR p = FunctionBase + i;
+
+        _try{
+            //
+            // cmp word ptr [rax+rbx+disp32], si
+            //
+            if (p[0] == 0x66 &&
+                p[1] == 0x39 &&
+                p[2] == 0xB4 &&
+                p[3] == 0x18)
+            {
+                return *(ULONG*)(p + 4);
+            }
+        }
+        _except(EXCEPTION_EXECUTE_HANDLER) {
+            DbgPrint("err1");
+        }
+
+        _try{
+            //
+            // mov [rax+rbx*2+disp32], si
+            //
+            if (p[0] == 0x66 &&
+                p[1] == 0x89 &&
+                p[2] == 0xB4 &&
+                p[3] == 0x58)
+            {
+                return *(ULONG*)(p + 4);
+            }
+        }
+        _except(EXCEPTION_EXECUTE_HANDLER) {
+            DbgPrint("err2");
+        }
     }
 
-    // 解析lea指令 → 最终目标：aatomSysLoaded
-    ULONG lea_offset = *(ULONG*)((PUCHAR)result + 3);
-    PVOID aatomSysLoadedAddr = (PVOID)((PUCHAR)result + 7 + lea_offset);
+    return 0;
+}
 
-    DbgPrint("成功找到 aatomSysLoaded: 0x%p\n", aatomSysLoadedAddr);
-    return aatomSysLoadedAddr;
+ULONG FindUserLibmgmtAtomTableOffset(
+    PUCHAR FunctionBase,
+    ULONG FunctionSize
+)
+{
+    for (ULONG i = 0; i < FunctionSize - 7; i++)
+    {
+        PUCHAR p = FunctionBase + i;
+
+
+        //
+        // mov rcx,[rax+disp32]
+        //
+        if (p[0] == 0x48 &&
+            p[1] == 0x8B &&
+            p[2] == 0x88)
+        {
+            ULONG Offset = *(ULONG*)(p + 3);
+
+
+            //
+            // 合理性检查
+            //
+            if (Offset > 0x8000 &&
+                Offset < 0x20000)
+            {
+                return Offset;
+            }
+        }
+    }
+
+    return 0;
+}
+
+typedef struct _WIN32K_HMOD_LAYOUT
+{
+    BOOLEAN Initialized;
+
+    ULONG AtomArrayOffset;
+    ULONG AtomTableOffset;
+
+    PFN_W32GetUserSessionState W32GetUserSessionState;
+} WIN32K_HMOD_LAYOUT;
+
+static WIN32K_HMOD_LAYOUT g_HmodLayout = { 0 };
+
+NTSTATUS InitWin32kHmodLayout()
+{
+    if (g_HmodLayout.Initialized)
+        return STATUS_SUCCESS;
+
+
+    g_HmodLayout.W32GetUserSessionState =
+        (PFN_W32GetUserSessionState)
+        KernelGetProcAddress(
+            "win32k.sys",
+            "W32GetUserSessionState"
+        );
+
+
+    if (!g_HmodLayout.W32GetUserSessionState ||
+        !MmIsAddressValid((PVOID)g_HmodLayout.W32GetUserSessionState))
+    {
+        DbgPrint("W32GetUserSessionState not found\n");
+        return STATUS_NOT_FOUND;
+    }
+
+
+    PVOID HmodFunc = FindGetHmodTableIndex();
+
+    if (!HmodFunc)
+    {
+        DbgPrint("GetHmodTableIndex not found\n");
+        return STATUS_NOT_FOUND;
+    }
+
+
+    g_HmodLayout.AtomArrayOffset =
+        FindAtomArrayOffset(
+            (PUCHAR)HmodFunc,
+            0x200
+        );
+
+
+    g_HmodLayout.AtomTableOffset =
+        FindUserLibmgmtAtomTableOffset(
+            (PUCHAR)HmodFunc,
+            0x200
+        );
+
+
+    DbgPrint(
+        "AtomArrayOffset=0x%X AtomTableOffset=0x%X\n",
+        g_HmodLayout.AtomArrayOffset,
+        g_HmodLayout.AtomTableOffset
+    );
+
+
+    if (!g_HmodLayout.AtomArrayOffset ||
+        !g_HmodLayout.AtomTableOffset)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+
+    g_HmodLayout.Initialized = TRUE;
+
+    return STATUS_SUCCESS;
 }
 
 // 从模块索引获取基址
-NTSTATUS GetModuleNameFromihMod(BOOLEAN bWin11, int ihmod, LPWSTR NameBuffer)
+NTSTATUS GetModuleNameFromihMod(
+    BOOLEAN bWin11,
+    int ihmod,
+    LPWSTR NameBuffer
+)
 {
 #define MAX_PATH 260
-    // 在win11上变为*(_WORD *)(W32GetUserSessionState() + 0xA17C)
+
     static ATOM* aatomSysLoaded = NULL;
-    static PFN_W32GetUserSessionState W32GetUserSessionState = NULL;
-    if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) {
-        if (bWin11) {
-            if (!W32GetUserSessionState || !MmIsAddressValid((PVOID)W32GetUserSessionState)) {
-                W32GetUserSessionState = (PFN_W32GetUserSessionState)KernelGetProcAddress("win32k.sys", "W32GetUserSessionState");
-                if (!W32GetUserSessionState || !MmIsAddressValid((PVOID)W32GetUserSessionState)) {
-                    DbgPrint("W32GetUserSessionState not found!\n");
-                    return STATUS_INVALID_ADDRESS;
-                }
-            }
-            aatomSysLoaded = (ATOM*)(((PUCHAR)W32GetUserSessionState()) + 0xA17C);
-        }
-        else {
+    static PVOID AtomTable = NULL;
+
+    if (bWin11)
+    {
+        NTSTATUS Status = InitWin32kHmodLayout();
+        if (!NT_SUCCESS(Status)) return Status;
+
+        PVOID UserSessionState = g_HmodLayout.W32GetUserSessionState();
+
+        if (!UserSessionState) return STATUS_INVALID_ADDRESS;
+
+        aatomSysLoaded =
+            (ATOM*)((PUCHAR)UserSessionState +
+                g_HmodLayout.AtomArrayOffset);
+
+        AtomTable =
+            *(PVOID*)((PUCHAR)UserSessionState +
+                g_HmodLayout.AtomTableOffset);
+    }
+    else
+    {
+        if (!aatomSysLoaded)
+        {
             aatomSysLoaded = (ATOM*)FindaatomSysLoaded();
+            if (!aatomSysLoaded) return STATUS_INVALID_ADDRESS;
         }
-        if (!aatomSysLoaded || !MmIsAddressValid(aatomSysLoaded)) return STATUS_INVALID_ADDRESS;
-    }
-    static PVOID UserLibmgmtAtomTableHandle = NULL;
-    if (!UserLibmgmtAtomTableHandle || !MmIsAddressValid(UserLibmgmtAtomTableHandle)) {
-        UserLibmgmtAtomTableHandle = (PVOID)KernelGetProcAddress("win32kbase.sys", "UserLibmgmtAtomTableHandle");
-        if (!UserLibmgmtAtomTableHandle || !MmIsAddressValid(UserLibmgmtAtomTableHandle)) {
-            UserLibmgmtAtomTableHandle = (PVOID)(((PUCHAR)W32GetUserSessionState()) + 0xA170);
-            if (!UserLibmgmtAtomTableHandle || !MmIsAddressValid(UserLibmgmtAtomTableHandle)) return STATUS_INVALID_ADDRESS;
+
+        if (!AtomTable)
+        {
+            AtomTable = KernelGetProcAddress(
+                "win32kbase.sys", "UserLibmgmtAtomTableHandle");
+
+            if (!AtomTable) return STATUS_INVALID_ADDRESS;
+
+            AtomTable = *(PVOID*)AtomTable;
         }
     }
-    static PFN_RtlQueryAtomInAtomTable RtlQueryAtomInAtomTable = NULL;
-    if (!RtlQueryAtomInAtomTable || !MmIsAddressValid((PVOID)RtlQueryAtomInAtomTable)) {
-        RtlQueryAtomInAtomTable = (PFN_RtlQueryAtomInAtomTable)KernelGetProcAddress("ntoskrnl.exe", "RtlQueryAtomInAtomTable");
-        if (!RtlQueryAtomInAtomTable || !MmIsAddressValid((PVOID)RtlQueryAtomInAtomTable)) return STATUS_INVALID_ADDRESS;
-    }
+
+    if (!aatomSysLoaded || !AtomTable) return STATUS_INVALID_ADDRESS;
+
+    ATOM Atom = aatomSysLoaded[ihmod];
+
+    if (!Atom) return STATUS_NOT_FOUND;
+
+    PFN_RtlQueryAtomInAtomTable RtlQueryAtomInAtomTable =
+        (PFN_RtlQueryAtomInAtomTable)
+        KernelGetProcAddress("ntoskrnl.exe","RtlQueryAtomInAtomTable");
+
+    if (!RtlQueryAtomInAtomTable) return STATUS_NOT_FOUND;
+
     ULONG MaxLength = sizeof(WCHAR) * MAX_PATH;
-    //DbgPrint("aatomSysLoaded[%d]:%d", ihmod, aatomSysLoaded[ihmod]);
-    return RtlQueryAtomInAtomTable(*(PVOID*)UserLibmgmtAtomTableHandle, aatomSysLoaded[ihmod], 0, 0, NameBuffer, &MaxLength);
+
+    return RtlQueryAtomInAtomTable(AtomTable, Atom, 0,
+        0, NameBuffer, &MaxLength);
 }
 
 PVOID FindHMValidateHandle() {
@@ -489,30 +680,41 @@ PVOID FindPtiCurrent() {
     return pPtiCurrent;
 }
 
-BOOLEAN IsValidHook(PVOID pHookBase)
+BOOLEAN IsValidHook(
+    PVOID pHookBase,
+    IN PWIN32K_OFFSETS pOffsets      // 【新增】传入偏移结构体
+)
 {
-    if (pHookBase == NULL)
+    if (pHookBase == NULL || !pOffsets)
         return FALSE;
 
     __try {
-        // 1. 校验钩子类型范围 (0~15)
-        if (!MmIsAddressValid((PUCHAR)pHookBase + WIN11_HOOK_OFFSET_TYPE))
+        // 【修正】使用结构体偏移：Hook_nHookType
+        if (!MmIsAddressValid((PUCHAR)pHookBase + pOffsets->Hook_nHookType))
             return FALSE;
-        LONG hookType = *(PLONG)((PUCHAR)pHookBase + WIN11_HOOK_OFFSET_TYPE);
+        LONG hookType = *(PLONG)((PUCHAR)pHookBase + pOffsets->Hook_nHookType);
         if (hookType < 0 || hookType >= MAX_HOOK_TYPES)
             return FALSE;
 
-        // 2. HookProc 非空即可（允许用户态地址）
-        if (!MmIsAddressValid((PUCHAR)pHookBase + WIN11_HOOK_OFFSET_HOOKPROC))
+        // 【修正】使用结构体偏移：Hook_offPfn
+        // 注意：Hook_offPfn 是偏移量(offPfn)，不是直接地址
+        // 如果为0表示没有设置钩子过程，视为无效
+        if (!MmIsAddressValid((PUCHAR)pHookBase + pOffsets->Hook_offPfn))
             return FALSE;
-        ULONG64 hookProc = *(PULONG64)((PUCHAR)pHookBase + WIN11_HOOK_OFFSET_HOOKPROC);
-        if (hookProc == 0)
+        ULONG64 offPfn = *(PULONG64)((PUCHAR)pHookBase + pOffsets->Hook_offPfn);
+        if (offPfn == 0)
             return FALSE;
 
-        // 3. 【修正】仅校验 next 指针域本身可读取，不校验其指向的地址
-        //    (因为最后一个钩子的 next 是 NULL，这是合法的)
-        if (!MmIsAddressValid((PUCHAR)pHookBase + WIN11_HOOK_OFFSET_NEXT_HOOK))
+        // 【修正】使用结构体偏移：Hook_phkNext
+        if (!MmIsAddressValid((PUCHAR)pHookBase + pOffsets->Hook_phkNext))
             return FALSE;
+
+        // 【新增】可选：校验 ihmod 范围（0xFFFFFFFF 是系统钩子，其他应小于某个合理值）
+        ULONG ihmod = *(PULONG)((PUCHAR)pHookBase + pOffsets->Hook_ihmod);
+        if (ihmod != 0xFFFFFFFF && ihmod >= 0x1000) {
+            // 可疑值，但不一定是错误，仅记录
+            // return FALSE; 
+        }
 
         return TRUE;
     }
@@ -553,26 +755,29 @@ VOID DebugPrintHookMemory(PVOID pBase, ULONG uPrintSize)
 }
 
 // 【验证通过】从tagHOOK获取安装线程的TID/PID
-NTSTATUS GetHookOwnerId(PVOID pTagHook, OUT PULONG pPid, OUT PULONG pTid)
+NTSTATUS GetHookOwnerId(
+    PVOID pTagHook,
+    OUT PULONG pPid,
+    OUT PULONG pTid,
+    IN PWIN32K_OFFSETS pOffsets      // 【新增】传入偏移结构体
+)
 {
-    if (!pTagHook || !pPid || !pTid)
+    if (!pTagHook || !pPid || !pTid || !pOffsets)
         return STATUS_INVALID_PARAMETER;
 
     *pPid = 0;
     *pTid = 0;
 
     __try {
-        // 1. 读取二级指针：tagHOOK+0x10 -> PETHREAD*
-        PVOID pEthreadPtr = *(PVOID*)((PUCHAR)pTagHook + WIN11_HOOK_OFFSET_PETHREAD_PTR);
+        // 【修正】使用结构体偏移：Hook_pti
+        PVOID pEthreadPtr = *(PVOID*)((PUCHAR)pTagHook + pOffsets->Hook_pti);
         if (!pEthreadPtr || !MmIsAddressValid(pEthreadPtr))
             return STATUS_INVALID_ADDRESS;
 
-        // 2. 解引用拿到真正的ETHREAD地址
         PETHREAD pEthread = *(PETHREAD*)pEthreadPtr;
         if (!pEthread || !MmIsAddressValid(pEthread))
             return STATUS_INVALID_ADDRESS;
 
-        // 3. 调用内核导出函数获取TID/PID（ntoskrnl.exe直接导出，无需手动解析）
         *pTid = (ULONG)(ULONG_PTR)PsGetThreadId(pEthread);
         *pPid = (ULONG)(ULONG_PTR)PsGetThreadProcessId(pEthread);
 
@@ -583,9 +788,6 @@ NTSTATUS GetHookOwnerId(PVOID pTagHook, OUT PULONG pPid, OUT PULONG pTid)
     }
 }
 
-// ==========================================
-// 【完整修正版】EnumerateHooksFromPti
-// ==========================================
 NTSTATUS EnumerateHooksFromPti(
     PVOID pContext,
     BOOLEAN IsGlobal,
@@ -593,27 +795,37 @@ NTSTATUS EnumerateHooksFromPti(
     HANDLE hTid,
     PWIN32K_MSG_HOOK_INFO pHookArray,
     PULONG puFoundHookCount,
-    ULONG uMaxCount
+    ULONG uMaxCount,
+    PWIN32K_OFFSETS pOffsets        // 【新增】传入偏移结构体
 )
 {
-    if (!pContext || !pHookArray || !puFoundHookCount || uMaxCount == 0)
+    if (!pContext || !pHookArray || !puFoundHookCount || uMaxCount == 0 || !pOffsets)
         return STATUS_INVALID_PARAMETER;
-
-    // 全局钩子：PLIST_ENTRY 数组（每个元素是链表头指针）
-    // 线程钩子：tagHOOK* 数组（每个元素是直接指针，可能为NULL）
 
     if (IsGlobal) {
         // ==========================================
         // 全局钩子枚举（链表结构）
         // ==========================================
-        PVOID* pHookHeadArray = (PVOID*)((PUCHAR)pContext + GLOBAL_HOOK_ARRAY_BASE);
 
-        //DbgPrint("[调试] 全局钩子容器: 0x%p, 数组基址: 0x%p\n", pContext, pHookHeadArray);
+        // 【关键修正】pContext 是 pti，需要先解引用得到 pDeskInfo
+        PVOID pDeskInfo = *(PVOID*)((PUCHAR)pContext + pOffsets->Pti_pDeskInfo);
+        if (!pDeskInfo || !MmIsAddressValid(pDeskInfo)) {
+            DbgPrint("[!] pDeskInfo 无效\n");
+            return STATUS_INVALID_ADDRESS;
+        }
+
+        // 从 pDeskInfo 获取全局钩子数组基址
+        PVOID* pHookHeadArray = (PVOID*)((PUCHAR)pDeskInfo + pOffsets->DeskInfo_aphkStart);
+        if (!MmIsAddressValid(pHookHeadArray)) {
+            DbgPrint("[!] aphkStart 数组无效\n");
+            return STATUS_INVALID_ADDRESS;
+        }
 
         for (ULONG hookTypeIdx = 0; hookTypeIdx < MAX_HOOK_TYPES; hookTypeIdx++)
         {
             __try {
-                PVOID pCurrentHook = *(PVOID*)&pHookHeadArray[hookTypeIdx];
+                // 每个元素是 PLIST_ENTRY / tagHOOK* 链表头
+                PVOID pCurrentHook = pHookHeadArray[hookTypeIdx];
                 ULONG dwDepth = 0;
                 const ULONG MAX_HOOK_DEPTH = 256;
 
@@ -626,17 +838,10 @@ NTSTATUS EnumerateHooksFromPti(
                         break;
                     }
 
-                    // 验证钩子有效性
-                    if (!IsValidHook(pCurrentHook)) {
-                        pCurrentHook = *(PVOID*)((PUCHAR)pCurrentHook + WIN11_HOOK_OFFSET_NEXT_HOOK);
+                    if (!IsValidHook(pCurrentHook, pOffsets)) {
+                        pCurrentHook = *(PVOID*)((PUCHAR)pCurrentHook + pOffsets->Hook_phkNext);
                         continue;
                     }
-
-#if HOOK_DEBUG_PRINT_MEMORY
-                    DbgPrint("\n[调试] 全局合法钩子，类型[%2d] 深度[%d] tagHOOK: 0x%p\n",
-                        hookTypeIdx, dwDepth, pCurrentHook);
-                    DebugPrintHookMemory(pCurrentHook, 0x80);
-#endif
 
                     if (*puFoundHookCount >= uMaxCount)
                         break;
@@ -648,30 +853,20 @@ NTSTATUS EnumerateHooksFromPti(
                         RtlZeroMemory(pEntry, sizeof(WIN32K_MSG_HOOK_INFO));
 
                         // 读取钩子成员
-                        pEntry->HookType = *(PLONG)(pHookBase + WIN11_HOOK_OFFSET_TYPE);
-                        pEntry->HookProc = *(PULONG64)(pHookBase + WIN11_HOOK_OFFSET_HOOKPROC);
-                        pEntry->HookFlags = *(PULONG)(pHookBase + WIN11_HOOK_OFFSET_FLAGS);
-                        ULONG ihmod = *(PULONG)(pHookBase + WIN11_HOOK_OFFSET_IHMOD);
+                        pEntry->HookType = *(PLONG)(pHookBase + pOffsets->Hook_nHookType);
+                        pEntry->HookProc = *(PULONG64)(pHookBase + pOffsets->Hook_offPfn);
+                        pEntry->HookFlags = *(PULONG)(pHookBase + pOffsets->Hook_flags);
+                        ULONG ihmod = *(PULONG)(pHookBase + pOffsets->Hook_ihmod);
 
                         RtlZeroMemory(pEntry->ModulePath, sizeof(pEntry->ModulePath));
 
-                        // ihmod: 0xFFFFFFFF 为系统钩子
                         if (ihmod != 0xFFFFFFFF && ihmod < 0x1000) {
                             GetModuleNameFromihMod(TRUE, (INT)ihmod, pEntry->ModulePath);
                         }
 
                         pEntry->IsGlobal = TRUE;
-                        GetHookOwnerId(pCurrentHook, &pEntry->ProcessId, &pEntry->ThreadId);
-                        pEntry->HookHandle = *(HANDLE*)(pHookBase + WIN11_HOOK_OFFSET_HHOOK);
-
-                        /*DbgPrint("[Global] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
-                            GetHookTypeName(pEntry->HookType),
-                            pEntry->HookType,
-                            pEntry->HookFlags,
-                            (PVOID)pEntry->HookProc,
-                            pEntry->HookHandle,
-                            ihmod,
-                            pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");*/
+                        GetHookOwnerId(pCurrentHook, &pEntry->ProcessId, &pEntry->ThreadId, pOffsets);
+                        pEntry->HookHandle = *(HANDLE*)(pHookBase + pOffsets->Hook_hHook);
 
                         (*puFoundHookCount)++;
                     }
@@ -680,7 +875,7 @@ NTSTATUS EnumerateHooksFromPti(
                     }
 
                     // 取下一个钩子
-                    pCurrentHook = *(PVOID*)((PUCHAR)pCurrentHook + WIN11_HOOK_OFFSET_NEXT_HOOK);
+                    pCurrentHook = *(PVOID*)((PUCHAR)pCurrentHook + pOffsets->Hook_phkNext);
                 }
 
                 if (dwDepth >= MAX_HOOK_DEPTH) {
@@ -695,35 +890,27 @@ NTSTATUS EnumerateHooksFromPti(
     }
     else {
         // ==========================================
-        // 【修正】线程钩子枚举（直接指针数组，非链表）
+        // 线程钩子枚举（直接指针数组）
         // ==========================================
-        PVOID* pHookPtrArray = (PVOID*)((PUCHAR)pContext + WIN11_TI_THREAD_HOOK_ARRAY);
+        // 【修正】使用结构体偏移：Pti_aphkStart
+        PVOID* pHookPtrArray = (PVOID*)((PUCHAR)pContext + pOffsets->Pti_aphkStart);
 
-        //DbgPrint("[调试] 线程PTI: 0x%p, 数组基址: 0x%p\n", pContext, pHookPtrArray);
-
-        for (ULONG hookTypeIdx = 0; hookTypeIdx < MAX_HOOK_TYPES; hookTypeIdx++)
+        for (ULONG hookIndex = 0; hookIndex < MAX_HOOK_TYPES + 1; hookIndex++)
         {
             __try {
-                // 直接取tagHOOK*指针
-                PVOID pHook = pHookPtrArray[hookTypeIdx];
+                PVOID pHook = pHookPtrArray[hookIndex];
 
-                // 调试：打印所有非空指针
                 if (pHook != NULL) {
-                    DbgPrint("[调试] 线程类型[%2d] 原始指针: 0x%p\n", hookTypeIdx, pHook);
+                    DbgPrint("[调试] 线程类型[%2d] 原始指针: 0x%p\n", hookIndex, pHook);
                 }
 
                 if (!pHook || !MmIsAddressValid(pHook)) {
                     continue;
                 }
 
-                // 验证钩子有效性
-                if (!IsValidHook(pHook)) {
+                if (!IsValidHook(pHook, pOffsets)) {    // 【修正】
                     continue;
                 }
-#if HOOK_DEBUG_PRINT_MEMORY
-                DbgPrint("\n[调试] 线程直接钩子，类型[%2d] tagHOOK: 0x%p\n", hookTypeIdx, pHook);
-                DebugPrintHookMemory(pHook, 0x80);
-#endif
 
                 if (*puFoundHookCount >= uMaxCount)
                     continue;
@@ -734,10 +921,11 @@ NTSTATUS EnumerateHooksFromPti(
                 __try {
                     RtlZeroMemory(pEntry, sizeof(WIN32K_MSG_HOOK_INFO));
 
-                    pEntry->HookType = *(PLONG)(pHookBase + WIN11_HOOK_OFFSET_TYPE);
-                    pEntry->HookProc = *(PULONG64)(pHookBase + WIN11_HOOK_OFFSET_HOOKPROC);
-                    pEntry->HookFlags = *(PULONG)(pHookBase + WIN11_HOOK_OFFSET_FLAGS);
-                    ULONG ihmod = *(PULONG)(pHookBase + WIN11_HOOK_OFFSET_IHMOD);
+                    // 【修正】统一使用结构体偏移
+                    pEntry->HookType = *(PLONG)(pHookBase + pOffsets->Hook_nHookType);
+                    pEntry->HookProc = *(PULONG64)(pHookBase + pOffsets->Hook_offPfn);
+                    pEntry->HookFlags = *(PULONG)(pHookBase + pOffsets->Hook_flags);
+                    ULONG ihmod = *(PULONG)(pHookBase + pOffsets->Hook_ihmod);
 
                     RtlZeroMemory(pEntry->ModulePath, sizeof(pEntry->ModulePath));
 
@@ -748,26 +936,17 @@ NTSTATUS EnumerateHooksFromPti(
                     pEntry->IsGlobal = FALSE;
                     pEntry->ProcessId = (ULONG)(ULONG_PTR)hPid;
                     pEntry->ThreadId = (ULONG)(ULONG_PTR)hTid;
-                    pEntry->HookHandle = *(HANDLE*)(pHookBase + WIN11_HOOK_OFFSET_HHOOK);
-
-                    /*DbgPrint("[Thread] Type: %s (%d), Flags: 0x%08X, HookProc: 0x%p, hHook=0x%p, ihmod=%d, Module: %ws\n",
-                        GetHookTypeName(pEntry->HookType),
-                        pEntry->HookType,
-                        pEntry->HookFlags,
-                        (PVOID)pEntry->HookProc,
-						pEntry->HookHandle,
-                        ihmod,
-                        pEntry->ModulePath[0] ? pEntry->ModulePath : L"(System/LL Hook)");*/
+                    pEntry->HookHandle = *(HANDLE*)(pHookBase + pOffsets->Hook_hHook);
 
                     (*puFoundHookCount)++;
                 }
                 __except (EXCEPTION_EXECUTE_HANDLER) {
                     DbgPrint("[!] 读取线程直接钩子成员异常\n");
                 }
-                
+
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
-                DbgPrint("[!] 线程类型[%2d] 访问异常\n", hookTypeIdx);
+                DbgPrint("[!] 线程类型[%2d] 访问异常\n", hookIndex);
                 continue;
             }
         }
@@ -784,6 +963,31 @@ NTSTATUS EnumerateMsgHook_Win11(
     OUT PULONG                   pulHookCount
 )
 {
+    PVOID xxxCallHook = NULL, zzzSetWindowsHookEx = NULL;
+    if (KernelQuerySymbolAddress(L"win32kfull.sys", L"xxxCallHook", (PULONG64)&xxxCallHook) != STATUS_SUCCESS || !xxxCallHook)
+    {
+        DbgPrint("[-] xxxCallHook not found!\n");
+        return STATUS_NOT_FOUND;    // 【修正】返回错误码
+    }
+    if (KernelQuerySymbolAddress(L"win32kfull.sys", L"zzzSetWindowsHookEx", (PULONG64)&zzzSetWindowsHookEx) != STATUS_SUCCESS || !zzzSetWindowsHookEx)
+    {
+        DbgPrint("[-] zzzSetWindowsHookEx not found!\n");
+        return STATUS_NOT_FOUND;
+    }
+    if (!MmIsAddressValid(xxxCallHook) || !MmIsAddressValid(zzzSetWindowsHookEx))
+    {
+        DbgPrint("[-] xxxCallHook or zzzSetWindowsHookEx is not valid!\n");
+        return STATUS_INVALID_ADDRESS;
+    }
+
+    WIN32K_OFFSETS Offsets = { 0 };
+    if (!NT_SUCCESS(Win32kOffsetScanner_Initialize(zzzSetWindowsHookEx, NULL, xxxCallHook, NULL, &Offsets)))
+    {
+        DbgPrint("[-] Win32kOffsetScanner_Initialize failed!\n");
+        return STATUS_UNSUCCESSFUL;
+    }
+    //Win32kOffsetScanner_Dump(&Offsets);
+
     NTSTATUS status = STATUS_SUCCESS;
     PWIN32K_MSG_HOOK_INFO pHookArray = NULL;
     ULONG uFoundHookCount = 0;
@@ -823,28 +1027,20 @@ NTSTATUS EnumerateMsgHook_Win11(
     PVOID pCurrentPti = PtiCurrent();
     if (pCurrentPti)
     {
-#if HOOK_DEBUG_PRINT_MEMORY
-        DbgPrint("\n[调试] tagTHREADINFO 基地址: 0x%p\n", pCurrentPti);
-        DebugPrintHookMemory(pCurrentPti, 0x500);
-#endif
-
         __try {
+            // WIN11_TI_GLOBAL_HOOK_CONTAINER
             // 读取全局钩子容器指针（pti + 0x1F8）
-            PVOID pGlobalHookContainer = *(PVOID*)((PUCHAR)pCurrentPti + WIN11_TI_GLOBAL_HOOK_CONTAINER);
+            PVOID pGlobalHookContainer = *(PVOID*)((PUCHAR)pCurrentPti + Offsets.Pti_pDeskInfo);
             if (pGlobalHookContainer)
             {
-#if HOOK_DEBUG_PRINT_MEMORY
-                DbgPrint("\n[调试] pGlobalHookContainer 基地址: 0x%p\n", pGlobalHookContainer);
-                DebugPrintHookMemory(pGlobalHookContainer, 0x100);
-#endif
-
                 EnumerateHooksFromPti(
-                    pGlobalHookContainer,    // 传入容器，函数内部会 +0x28
-                    TRUE,
+                    pCurrentPti,             // 传入 pti
+                    TRUE,                    // IsGlobal = TRUE
                     NULL, NULL,
                     pHookArray,
                     &uFoundHookCount,
-                    uAllocatedCount
+                    uAllocatedCount,
+                    &Offsets                 // 【新增】传入偏移结构体
                 );
             }
         }
@@ -891,16 +1087,21 @@ NTSTATUS EnumerateMsgHook_Win11(
 
                 PVOID pW32Thread = PsGetThreadWin32Thread(pEthread);
                 if (pW32Thread) {
-                    // 【关键修正】从 W32THREAD 头部解引用获取 tagTHREADINFO*
+                    // 【关键修正】W32THREAD 头部解引用获取 tagTHREADINFO*
                     PVOID pTargetPti = *(PVOID*)pW32Thread;
-                    EnumerateHooksFromPti(
-                        pTargetPti,      // 传入 pti，函数内部会 +0x3C0
-                        FALSE,
-                        hPid, hTid,
-                        pHookArray,
-                        &uFoundHookCount,
-                        uAllocatedCount
-                    );
+
+                    // 【新增】校验 pTargetPti 有效性
+                    if (pTargetPti && MmIsAddressValid(pTargetPti)) {
+                        EnumerateHooksFromPti(
+                            pTargetPti,      // 传入 pti
+                            FALSE,           // IsGlobal = FALSE
+                            hPid, hTid,
+                            pHookArray,
+                            &uFoundHookCount,
+                            uAllocatedCount,
+                            &Offsets         // 【新增】传入偏移结构体
+                        );
+                    }
                 }
 
                 ObDereferenceObject(pEthread);
@@ -927,6 +1128,7 @@ NTSTATUS EnumerateMsgHook_Win11(
 
 NTSTATUS
 EnumerateMsgHook_Win10(
+    _In_opt_ PWIN32K_OFFSETS pOffsets,     // 【新增】允许外部传入偏移
     OUT PWIN32K_MSG_HOOK_INFO* ppHookList,
     OUT PULONG                   pulHookCount
 )
@@ -935,12 +1137,41 @@ EnumerateMsgHook_Win10(
     PWIN32K_MSG_HOOK_INFO pHookArray = NULL;
     ULONG uFoundHookCount = 0;
     ULONG uHookCount = 0;
+    WIN32K_OFFSETS localOffsets = { 0 };
 
     // 初始化输出
     *ppHookList = NULL;
     *pulHookCount = 0;
+    
+    // ====================== 获取偏移 ======================
+    if (!pOffsets) {
+        PVOID zzzSetWindowsHookExAddr = NULL;
+        if (KernelQuerySymbolAddress(L"win32kfull.sys", L"zzzSetWindowsHookEx",(PULONG64)&zzzSetWindowsHookExAddr) != STATUS_SUCCESS || !zzzSetWindowsHookExAddr) {
+            DbgPrint("无法获取 zzzSetWindowsHookEx 地址!\n");
+            return STATUS_NOT_FOUND;
+		}
+        PVOID xxxCallHookAddr = NULL;
+        if (KernelQuerySymbolAddress(L"win32kfull.sys", L"xxxCallHook", (PULONG64)&xxxCallHookAddr) != STATUS_SUCCESS || !xxxCallHookAddr) {
+            DbgPrint("无法获取 xxxCallHook 地址!\n");
+            return STATUS_NOT_FOUND;
+        }
+        PVOID zzzUnhookWindowsHookExAddr = NULL;
+        if (KernelQuerySymbolAddress(L"win32kfull.sys", L"zzzUnhookWindowsHookEx", (PULONG64)&zzzUnhookWindowsHookExAddr) != STATUS_SUCCESS || !zzzUnhookWindowsHookExAddr) {
+            DbgPrint("无法获取 zzzUnhookWindowsHookEx 地址!\n");
+            return STATUS_NOT_FOUND;
+        }
+        PVOID HMAllocObjectAddr = KernelGetProcAddress("win32kbase.sys", "HMAllocObject");
 
-    // ====================== 原有逻辑不变 ======================
+        status = Win32kOffsetScanner_Initialize(zzzSetWindowsHookExAddr, zzzUnhookWindowsHookExAddr, xxxCallHookAddr, HMAllocObjectAddr, &localOffsets);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("偏移扫描失败: 0x%08X\n", status);
+            return status;
+        }
+        return STATUS_UNSUCCESSFUL;
+        pOffsets = &localOffsets;
+    }
+
+    // ====================== 原有逻辑（动态化） ======================
     PWIN32K_GSHAREDINFO pSharedInfo =
         (PWIN32K_GSHAREDINFO)KernelGetProcAddress("win32kbase.sys", "gSharedInfo");
     if (!pSharedInfo || !pSharedInfo->pHookArray || !pSharedInfo->pHookMetadata) {
@@ -954,12 +1185,10 @@ EnumerateMsgHook_Win10(
         return STATUS_NOT_FOUND;
     }
 
-    RTL_OSVERSIONINFOW Version = { sizeof(Version) };
-    if (!NT_SUCCESS(RtlGetVersion(&Version))) {
-        DbgPrint("获取系统版本失败!\n");
-        return status;
-    }
-    BOOLEAN bIsOldSystem = (Version.dwMajorVersion < 0xA || Version.dwBuildNumber < WIN10_1703_BUILD_NUMBER);
+    // 使用偏移结构中的元数据条目大小
+    ULONG entrySize = pOffsets->HandleEntrySize;
+    ULONG typeOffset = pOffsets->HandleEntry_HookTypeOffset;
+    ULONG idxOffset = pOffsets->HandleEntry_TableIndexOffset;
 
     typedef PVOID(*PFN_HMValidateHandle)(HANDLE, UCHAR);
     static PFN_HMValidateHandle HMValidateHandle = NULL;
@@ -983,126 +1212,64 @@ EnumerateMsgHook_Win10(
     }
     RtlZeroMemory(pHookArray, sizeof(WIN32K_MSG_HOOK_INFO) * uHookCount);
 
-    DbgPrint("开始遍历数组，钩子数量=%d\n", uHookCount);
+    DbgPrint("开始遍历数组，钩子数量=%d, 元数据条目大小=%d\n", uHookCount, entrySize);
 
-    // ====================== 遍历 + 填充结构体 ======================
+    // ====================== 遍历 + 填充结构体（全部动态化） ======================
     for (ULONG i = 0; i < uHookCount; i++)
     {
-        PUCHAR pMetaEntry = NULL;
-        UCHAR HookType = 0;
-        USHORT TableIndex = 0;
-
-        if (bIsOldSystem) {
-            pMetaEntry = (PUCHAR)pSharedInfo->pHookMetadata + (i * 24);
-            HookType = *(PUCHAR)(pMetaEntry + 16);
-            TableIndex = *(PUSHORT)(pMetaEntry + 18);
-        }
-        else {
-            pMetaEntry = (PUCHAR)pSharedInfo->pHookMetadata + (i * 32);
-            HookType = *(PUCHAR)(pMetaEntry + 24);
-            TableIndex = *(PUSHORT)(pMetaEntry + 26);
-        }
+        PUCHAR pMetaEntry = (PUCHAR)pSharedInfo->pHookMetadata + (i * entrySize);
+        UCHAR HookType = *(PUCHAR)(pMetaEntry + typeOffset);
+        USHORT TableIndex = *(PUSHORT)(pMetaEntry + idxOffset);
 
         if (HookType != TYPE_HOOK) continue;
 
-        // 绑定当前钩子结构体
         PWIN32K_MSG_HOOK_INFO pCurHook = &pHookArray[uFoundHookCount++];
-        pCurHook->HookType = HookType; // 补全字段赋值
+        pCurHook->HookType = HookType;
 
         // 构造句柄
         HANDLE hHookHandle = (HANDLE)(i | ((ULONG)TableIndex << 16));
         pCurHook->HookHandle = hHookHandle;
-
-        //DbgPrint("找到消息钩子，索引=%d，TableIndex=%d\n", i, TableIndex);
 
         PVOID pHookObject = HMValidateHandle(hHookHandle, TYPE_HOOK);
         if (!pHookObject) {
             DbgPrint("HMValidateHandle 验证失败，句柄=0x%p\n", hHookHandle);
             continue;
         }
-        if (!MmIsAddressValid(pHookObject) || !MmIsAddressValid((PUCHAR)pHookObject + 0x80)) {
+        if (!MmIsAddressValid(pHookObject) ||
+            !MmIsAddressValid((PUCHAR)pHookObject + pOffsets->Hook_ObjectSize)) {
             DbgPrint("钩子对象内存无效，地址=0x%p\n", pHookObject);
             continue;
         }
-        // 打印钩子对象内存布局（保留调试用）
-        /*for (int j = 0; j < 128; j += 8) {
-            if (MmIsAddressValid((PUCHAR)pHookObject + j)) {
-                DbgPrint("  offset %02X: %016llX\n", j, *(PULONG64)((PUCHAR)pHookObject + j));
-            }
-        }*/
 
-        // ====================== 偏移读取（原有逻辑） ======================
-        ULONG offsetFlags, offsetType, offsetHookProc;
-        if (bIsOldSystem) {
-            offsetFlags = HOOK_OFFSET_FLAGS_OLD;
-            offsetType = HOOK_OFFSET_TYPE_OLD;
-            offsetHookProc = HOOK_OFFSET_HOOKPROC_OLD;
-        }
-        else {
-            offsetFlags = HOOK_OFFSET_FLAGS_NEW;
-            offsetType = HOOK_OFFSET_TYPE_NEW;
-            offsetHookProc = HOOK_OFFSET_HOOKPROC_NEW;
-        }
+        // ====================== 动态偏移读取 ======================
+        pCurHook->HookType = *(PLONG)((PUCHAR)pHookObject + pOffsets->Hook_nHookType);
+        ULONG64 qwFlags = *(PULONG64)((PUCHAR)pHookObject + pOffsets->Hook_flags);
+        pCurHook->HookFlags = (ULONG)(qwFlags & 0xFFFFFFFF);
+        pCurHook->HookProc = *(PULONG64)((PUCHAR)pHookObject + pOffsets->Hook_offPfn);
 
-        // 读取核心数据 → 存入结构体
-        pCurHook->HookType = *(PLONG)((PUCHAR)pHookObject + offsetType);
-        ULONG64 qwFlags = *(PULONG64)((PUCHAR)pHookObject + offsetFlags);
-        pCurHook->HookFlags = (ULONG)(qwFlags & 0xFFFFFFFF); // ✅ 正确：取低32位
-        pCurHook->HookProc = *(PULONG64)((PUCHAR)pHookObject + offsetHookProc);
-        PVOID hMod = *(PVOID64*)((PUCHAR)pHookObject + offsetHookProc + 0x8);
-
-        // ====================== 补全：全局/低级钩子判断（取消注释） ======================
+        // ====================== 全局/低级钩子判断 ======================
         BOOLEAN IsLowLevel = (TableIndex == 13 || TableIndex == 14);
         pCurHook->IsGlobal = ((pCurHook->HookFlags & HF_GLOBAL) != 0) || IsLowLevel;
 
         // PID/TID
-        PETHREAD* ppThread = *(PETHREAD**)((PUCHAR)pHookObject + 0x10);
-        if (ppThread && *ppThread) {
+        PETHREAD* ppThread = *(PETHREAD**)((PUCHAR)pHookObject + pOffsets->Hook_pti);
+        if (ppThread && MmIsAddressValid((PVOID)ppThread) && *ppThread && MmIsAddressValid(*ppThread)) {
             PETHREAD pThread = *ppThread;
             PKPROCESS pProcess = IoThreadToProcess(pThread);
             pCurHook->ProcessId = (ULONG)(ULONG_PTR)PsGetProcessId(pProcess);
             pCurHook->ThreadId = (ULONG)(ULONG_PTR)PsGetThreadId(pThread);
         }
-
-        // ====================== 🔥 核心修复：x64 正确解析 hMod（适配 0x100000000） ======================
-        //pCurHook->IsResolved = FALSE;
-        RtlZeroMemory(pCurHook->ModulePath, sizeof(pCurHook->ModulePath));
-        ULONG64 hModValue = (ULONG64)hMod;
-
-        // 👇 【唯一正确规则】Win32k x64 真ihmod格式：
-        // 高32位 = 0~32（有效模块索引） + 低32位 = 0
-        ULONG ihmod = (ULONG)((hModValue >> 32) & 0xFFFFFFFF);
-        ULONG low32 = (ULONG)(hModValue & 0xFFFFFFFF);
-
-        // ✅ 严格判断：有效模块索引（仅这里需要查原子表）
-        if (low32 == 0 && ihmod > 0 && ihmod <= 32)
-        {
-            //DbgPrint("  → 真模块索引 ihmod=%lu\n", ihmod);
-            if (NT_SUCCESS(GetModuleNameFromihMod(FALSE, (int)ihmod, pCurHook->ModulePath)))
-            {
-                //DbgPrint("  → 模块名: %ws\n", pCurHook->ModulePath);
-            }
-        }
-        // ❌ 全局/低级钩子（0xFFFFFFFF 或 0xFFFF 开头）→ 不查原子表
-        else if ((hModValue & 0xFFFF00000000) == 0xFFFF00000000)
-        {
-            //DbgPrint("  → 全局钩子，无模块索引\n");
-        }
-        // ❌ 无效值 → 跳过
-        else
-        {
-            //DbgPrint("  → 无效hMod值: %llx\n", hModValue);
+        else {
+			DbgPrint("无法获取钩子对象的线程信息，地址=0x%p\n", ppThread);
         }
 
-        // ====================== 原有打印保留 ======================
-        /*DbgPrint("消息钩子：Type=%s(%d), 标志=%d, 句柄=0x%p, 范围=%s, Proc=0x%llX, PID=%d, TID=%d\n",
-            GetHookTypeName(pCurHook->HookType),
-            pCurHook->HookType,
-            pCurHook->HookFlags,
-            pCurHook->HookHandle,
-            pCurHook->IsGlobal ? "全局钩子" : "线程钩子",
-            pCurHook->HookProc,
-            pCurHook->ProcessId, pCurHook->ThreadId);*/
+        // ====================== ihmod 模块解析 ======================
+        ULONG ihmod = *(PULONG)((PUCHAR)pHookObject + pOffsets->Hook_ihmod);
+
+        if (ihmod != 0xFFFFFFFF && ihmod > 0 && ihmod <= 32)
+        {
+            GetModuleNameFromihMod(FALSE, (int)ihmod, pCurHook->ModulePath);
+        }
     }
 
     // ====================== 返回结果 ======================
@@ -1242,25 +1409,6 @@ NTSTATUS EnumerateEventHook_Win11(
     while (pCurrentHook && MmIsAddressValid(pCurrentHook) && currentIndex < hookCount)
     {
         PWIN32K_EVENT_HOOK_INFO pCurrentInfo = &pHookList[currentIndex];
-
-        //DbgPrint("\n=============================================\n");
-        //DbgPrint("钩子 [%lu] 地址: 0x%p\n", currentIndex, pCurrentHook);
-        //DbgPrint("=============================================\n");
-
-        //// 打印pCurrentHook附近的内存以验证结构体
-        //DbgPrint("\n--- 钩子结构体内存转储 ---\n");
-        //DumpMemoryHex(pCurrentHook, 0x100);
-
-        //// 打印各个字段的原始值
-        //DbgPrint("\n--- 原始字段值解析 ---\n");
-        //DbgPrint("[0x00] hHandle:             0x%p\n", pCurrentHook->HookHandle);
-        //DbgPrint("[0x20] EventMin:            0x%X\n", pCurrentHook->EventMin);
-        //DbgPrint("[0x24] EventMax:            0x%X\n", pCurrentHook->EventMax);
-        //DbgPrint("[0x28] Flags:               0x%X\n", pCurrentHook->Flags);
-        //DbgPrint("[0x30] TargetProcessId:     0x%p (%lu)\n", (PVOID)pCurrentHook->TargetProcessId, (ULONG)pCurrentHook->TargetProcessId);
-        //DbgPrint("[0x38] TargetThreadId:      0x%p (%lu)\n", (PVOID)pCurrentHook->TargetThreadId, (ULONG)pCurrentHook->TargetThreadId);
-        //DbgPrint("[0x40] pfnWinEventProc:     0x%p\n", pCurrentHook->pfnWinEventProc);
-        //DbgPrint("[0x48] hmodWinEventProc:    0x%llx\n", pCurrentHook->Unknown48);
 
         HANDLE hInstallerPid = NULL, hInstallerTid = NULL;
 
@@ -1915,7 +2063,7 @@ NTSTATUS EnumMsgHook(
     DbgPrint("==================== 开始枚举消息钩子 ====================\n");
 
     // 【优先】尝试你原有的Win10枚举逻辑
-    status = EnumerateMsgHook_Win10(ppMsgHookList, pulMsgHookCount);
+    status = EnumerateMsgHook_Win10(NULL, ppMsgHookList, pulMsgHookCount);
     if (NT_SUCCESS(status))
     {
         DbgPrint("==================== Win10枚举成功 ====================\n");

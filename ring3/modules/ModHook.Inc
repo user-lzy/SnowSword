@@ -24,56 +24,15 @@ Type NT_HEADERS_UNION
     nt64 As IMAGE_NT_HEADERS64
 End Type
 
-Type InlineHookInfo
-    hookType As String
-    proxyFunc  As ULongInt
-End Type
-
 Type OBJECT_INFORMATION
     ObjectName As Wstring * 50
     Procedure(7) As PVOID
 End Type
 
-'--消息钩子枚举--
-
-'Const WH_MAX = 16
-
-Type SHAREDINFO
-    psi         As Any Ptr
-    aheList     As Any Ptr
-    HeEntrySize As ULong
-End Type
-
-Type SERVERINFO
-    dwSRVIFlags As ULong
-    cHandleEntries As ULong
-    cbHandleTable As ULong
-    apsi As Any Ptr        ' DESKTOPINFO**
-End Type
-
-Type DESKTOPINFO
-    pvDesktopBase As Any Ptr
-    pvDesktopLimit As Any Ptr
-    aphkStart(WH_MAX - 1) As Any Ptr   ' tagHOOK*
-End Type
-
-Type TAGHOOK
-    pNext   As Any Ptr
-    pPrev   As Any Ptr
-    pti     As Any Ptr
-    iHook   As Long
-    flags   As ULong
-    offPfn  As ULong
-    ihmod   As UShort
-    _pad    As UShort
-End Type
-
-'----
-
 Function ReadMem(ByVal hProc As HANDLE, addr As Any Ptr, buf As Any Ptr, sz As Integer) As Boolean
     Dim bytRead As SIZE_T
     If (ReadProcessMemory(hProc, addr, buf, sz, @bytRead) = 0) OrElse (bytRead < sz) Then
-        Print "[ReadMem]" & "addr:" & WHex(addr) & " read:" & bytRead & "/" & sz & " " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "ReadMem", "ReadProcessMemory", "addr:0x" & WHex(addr) & " read:" & bytRead & "/" & sz
         Return False
     Else
         Return True
@@ -173,16 +132,65 @@ Function RemoteRvaToVa(ByRef img As RemotePeImageEx, rva As DWORD) As Any Ptr
     Return img.baseAddr + rva
 End Function
 
+' 新增：判断 RVA 是否落在代码节
+Function IsRvaInCodeSection(buf As UByte Ptr, rva As DWORD) As Boolean
+    Dim dos As IMAGE_DOS_HEADER Ptr = CPtr(IMAGE_DOS_HEADER Ptr, buf)
+    Dim fh As IMAGE_FILE_HEADER Ptr = CPtr(IMAGE_FILE_HEADER Ptr, buf + dos->e_lfanew + 4)
+
+    Dim ntHeadersSize As Integer
+    If fh->Machine = IMAGE_FILE_MACHINE_AMD64 Then
+        ntHeadersSize = SizeOf(IMAGE_NT_HEADERS64)
+    Else
+        ntHeadersSize = SizeOf(IMAGE_NT_HEADERS32)
+    End If
+
+    Dim sec As IMAGE_SECTION_HEADER Ptr = _
+        Cast(IMAGE_SECTION_HEADER Ptr, buf + dos->e_lfanew + ntHeadersSize)
+
+    For i As Integer = 0 To fh->NumberOfSections - 1
+        With sec[i]
+            If rva >= .VirtualAddress AndAlso rva < .VirtualAddress + .Misc.VirtualSize Then
+                Dim secName As String = *CPtr(ZString Ptr, @.Name(0))
+                ' 只认代码节；数据节中的导出视为 forwarder
+                If Left(secName, 5) = ".text" OrElse Left(secName, 4) = "CODE" Then
+                    Return True
+                Else
+                    Return False
+                End If
+            End If
+        End With
+    Next
+    Return False
+End Function
+
 Function GetDiskExportRVA(diskImg As UByte Ptr, apiName As String) As DWORD
     If diskImg = NULL Then Return 0
     
     Dim dos As IMAGE_DOS_HEADER Ptr = CPtr(IMAGE_DOS_HEADER Ptr, diskImg)
     If dos->e_magic <> IMAGE_DOS_SIGNATURE Then Return 0
     
-    Dim nt As IMAGE_NT_HEADERS Ptr = CPtr(IMAGE_NT_HEADERS Ptr, diskImg + dos->e_lfanew)
-    If nt->Signature <> IMAGE_NT_SIGNATURE Then Return 0
+    ' 先读取NT头签名和Magic，判断PE类型
+    Dim sig As DWORD
+    sig = *CPtr(DWORD Ptr, diskImg + dos->e_lfanew)
+    If sig <> IMAGE_NT_SIGNATURE Then Return 0
     
-    Dim expRVA As DWORD = nt->OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
+    Dim magic As WORD
+    magic = *CPtr(WORD Ptr, diskImg + dos->e_lfanew + 24)
+    
+    Dim expRVA As DWORD = 0
+    
+    If magic = &H10B Then
+        ' PE32 - 使用32位结构
+        Dim nt32 As IMAGE_NT_HEADERS32 Ptr = CPtr(IMAGE_NT_HEADERS32 Ptr, diskImg + dos->e_lfanew)
+        expRVA = nt32->OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
+    ElseIf magic = &H20B Then
+        ' PE64 - 使用64位结构
+        Dim nt64 As IMAGE_NT_HEADERS64 Ptr = CPtr(IMAGE_NT_HEADERS64 Ptr, diskImg + dos->e_lfanew)
+        expRVA = nt64->OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
+    Else
+        Return 0
+    End If
+    
     If expRVA = 0 Then Return 0
     
     ' 将RVA转换为文件偏移
@@ -216,7 +224,12 @@ Function GetDiskExportRVA(diskImg As UByte Ptr, apiName As String) As DWORD
         If *pName = apiName Then
             Dim idx As WORD = ordRva[i]
             If idx < expDir->NumberOfFunctions Then
-                Return funRva[idx]
+                Dim rva As DWORD = funRva[idx]
+                ' 过滤掉 forwarder（数据段导出）
+                If IsRvaInCodeSection(diskImg, rva) = FALSE Then
+                    Return 0
+                End If
+                Return rva
             End If
         End If
     Next
@@ -224,44 +237,29 @@ Function GetDiskExportRVA(diskImg As UByte Ptr, apiName As String) As DWORD
     Return 0
 End Function
 
-/'Function GetDiskExportRVA(diskImg As UByte Ptr, apiName As String) As DWORD
-
-    Dim dos As IMAGE_DOS_HEADER Ptr = CPtr(IMAGE_DOS_HEADER Ptr, diskImg)
-    Dim nt  As IMAGE_NT_HEADERS Ptr = CPtr(IMAGE_NT_HEADERS Ptr, diskImg + dos->e_lfanew)
-
-    Dim expRVA As DWORD = nt->OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
-    If expRVA = 0 Then Return 0
-
-    Dim expDir As IMAGE_EXPORT_DIRECTORY Ptr = CPtr(IMAGE_EXPORT_DIRECTORY Ptr, diskImg + expRVA)
-
-    Dim nameRva As DWORD Ptr = CPtr(DWORD Ptr, diskImg + expDir->AddressOfNames)
-    If nameRva = NULL Then Print "nameRva = NULL":Return 0
-    Dim ordRva As WORD Ptr = CPtr(WORD Ptr, diskImg + expDir->AddressOfNameOrdinals)
-    If ordRva = NULL Then Print "ordRva = NULL":Return 0
-    Dim funRva As DWORD Ptr = CPtr(DWORD Ptr, diskImg + expDir->AddressOfFunctions)
-    If funRva = NULL Then Print "funRva = NULL":Return 0
-
-    For i As Integer = 0 To expDir->NumberOfNames - 1
-        Dim pName As ZString Ptr = CPtr(ZString Ptr, diskImg + nameRva[i])
-        If *pName = apiName Then
-            Return funRva[ ordRva[i] ]
-        End If
-    Next
-
-    Return 0
-End Function'/
-
 Function RvaToRaw(buf As UByte Ptr, rva As DWORD) As UByte Ptr
     Dim dos As IMAGE_DOS_HEADER Ptr = CPtr(IMAGE_DOS_HEADER Ptr, buf)
-    Dim nt As IMAGE_NT_HEADERS Ptr = CPtr(IMAGE_NT_HEADERS Ptr, buf + dos->e_lfanew)
+    If dos->e_magic <> IMAGE_DOS_SIGNATURE Then Return NULL
+
+    Dim ntSig As DWORD Ptr = CPtr(DWORD Ptr, buf + dos->e_lfanew)
+    If *ntSig <> IMAGE_NT_SIGNATURE Then Return NULL
+
+    ' FileHeader 固定位于 Signature 之后 4 字节处，Machine 字段可安全读取
+    Dim fh As IMAGE_FILE_HEADER Ptr = CPtr(IMAGE_FILE_HEADER Ptr, buf + dos->e_lfanew + 4)
+
+    Dim ntHeadersSize As Integer
+    If fh->Machine = IMAGE_FILE_MACHINE_AMD64 Then
+        ntHeadersSize = SizeOf(IMAGE_NT_HEADERS64)
+    Else
+        ntHeadersSize = SizeOf(IMAGE_NT_HEADERS32)
+    End If
 
     Dim sec As IMAGE_SECTION_HEADER Ptr = _
-        Cast(IMAGE_SECTION_HEADER Ptr, buf + dos->e_lfanew + _
-             SizeOf(IMAGE_NT_HEADERS))
+        Cast(IMAGE_SECTION_HEADER Ptr, buf + dos->e_lfanew + ntHeadersSize)
 
-    For i As Integer = 0 To nt->FileHeader.NumberOfSections - 1
+    For i As Integer = 0 To fh->NumberOfSections - 1
         With sec[i]
-            If rva >= .VirtualAddress And rva < .VirtualAddress + .Misc.VirtualSize Then
+            If rva >= .VirtualAddress AndAlso rva < .VirtualAddress + .Misc.VirtualSize Then
                 Return buf + .PointerToRawData + (rva - .VirtualAddress)
             End If
         End With
@@ -270,32 +268,44 @@ Function RvaToRaw(buf As UByte Ptr, rva As DWORD) As UByte Ptr
     Return NULL
 End Function
 
-/'Function RemoteDumpExports(img As RemotePeImageEx, names() As String) As Integer
-
-    Dim dos As IMAGE_DOS_HEADER
-    Dim nt  As IMAGE_NT_HEADERS
-
-    If GetRemoteNT(img, dos, nt) = FALSE Then Return 0
-
-    Dim expRVA As DWORD = nt.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
-    If expRVA = 0 Then Return 0
-
-    Dim expDir As IMAGE_EXPORT_DIRECTORY
-    ReadMem(img, img.baseAddr + expRVA, @expDir, SizeOf(IMAGE_EXPORT_DIRECTORY))
-
-    Dim nameRva(expDir.NumberOfNames - 1) As DWORD
-    ReadMem(img, img.baseAddr + expDir.AddressOfNames, @nameRva(0), expDir.NumberOfNames*4)
-
-    ReDim names(expDir.NumberOfNames-1)
-
-    For i As Integer = 0 To expDir.NumberOfNames-1
-        Dim namePtr As ZString * 256
-        ReadMem(img, img.baseAddr + nameRva(i), @namePtr, 256)
-        names(i) = namePtr
+' 检测指定 RVA 是否为导出转发（Forwarder Export）
+Function IsForwarderExport(diskImg As UByte Ptr, rva As DWORD, imgSize As ULongInt) As Boolean
+    If rva = 0 OrElse rva >= imgSize Then Return False
+    
+    ' 核心修复：原始文件缓冲区必须通过 RvaToRaw 转换
+    ' 内存对齐映像中 RvaToRaw 同样有效（节表仍然保留）
+    Dim pStr As UByte Ptr = RvaToRaw(diskImg, rva)
+    If pStr = NULL Then
+        ' 极少数情况：RVA 落在头部（如 DOS Stub）不在任何节内
+        pStr = diskImg + rva
+    End If
+    
+    ' 读取以 null 结尾的 ASCII 字符串（最长 255 字节）
+    Dim fwdStr As String
+    For i As Integer = 0 To 254
+        Dim c As UByte = pStr[i]
+        If c = 0 Then Exit For
+        fwdStr += Chr(c)
     Next
-
-    Return expDir.NumberOfNames
-End Function'/
+    
+    ' 调试时可临时打开确认
+    Print "[IsForwarderExport] fwdStr:" & fwdStr
+    
+    ' 转发字符串格式: DLLNAME.FunctionName 或 DLLNAME.#Ordinal
+    Dim dotPos As Integer = InStr(fwdStr, ".")
+    If dotPos < 2 OrElse dotPos >= Len(fwdStr) Then Return False
+    
+    ' 验证点号前的 DLL 名是否合法（字母、数字、-、_）
+    For k As Integer = 0 To dotPos - 2
+        Dim c As Integer = Asc(Mid(fwdStr, k + 1, 1))
+        If Not ((c >= 65 And c <= 90) Or (c >= 97 And c <= 122) Or _
+                (c >= 48 And c <= 57) Or c = 45 Or c = 95) Then
+            Return False
+        End If
+    Next
+    
+    Return True
+End Function
 
 Function RemoteDumpExports(img As RemotePeImageEx, names() As String) As Integer
 
@@ -350,60 +360,58 @@ End Function
 
 Function GetModuleByVA32(img As RemotePeImageEx, ByVal addr As ULong, _
                          ByRef modBase As ULong, _
-                         ByRef modSize As ULong, _
-                         ByRef modName As String) As Boolean
+                         ByRef modSize As ULong) As StringW
 
     Dim mbi As MEMORY_BASIC_INFORMATION
-    If VirtualQueryEx(img.hProc, Cast(LPCVOID, Cast(UInteger, addr)), @mbi, SizeOf(mbi)) = 0 Then Return False
+    If VirtualQueryEx(img.hProc, Cast(LPCVOID, Cast(UInteger, addr)), @mbi, SizeOf(mbi)) = 0 Then Return ""
+    modBase = Cast(ULong, Cast(ULONG_PTR, mbi.AllocationBase))
 
-    Dim path As ZString * MAX_PATH
-    If GetModuleFileNameExA(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
-        modName = ""
-    Else
-        modName = path
+    Dim path As WString * MAX_PATH
+    If GetModuleFileNameExW(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
+        MyLog.PrintWin32Error "GetModuleByVA32", "GetModuleFileNameExW", "mbi.AllocationBase=" & mbi.AllocationBase
+        Return ""
     End If
 
     ' 读取 32 位 PE
     Dim dos As IMAGE_DOS_HEADER
     Dim nt32 As IMAGE_NT_HEADERS32
 
-    If ReadMem(img.hProc, mbi.AllocationBase, @dos, SizeOf(dos)) = False Then Return False
-    If ReadMem(img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt32, SizeOf(nt32)) = False Then Return False
+    If ReadMem(img.hProc, mbi.AllocationBase, @dos, SizeOf(dos)) = False Then MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", "1,addr=0x" & WHex(mbi.AllocationBase) : Return ""
+    If ReadMem(img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt32, SizeOf(nt32)) = False Then MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", "2, addr=0x" & WHex(mbi.AllocationBase + dos.e_lfanew) : Return ""
 
     modSize = nt32.OptionalHeader.SizeOfImage
-    Return TRUE
+    Return path
 End Function
 
 Function GetModuleByVA64(img As RemotePeImageEx, ByVal addr As ULongInt, _
                        ByRef modBase As ULongInt, _
-                       ByRef modSize As ULongInt, _
-                       ByRef modName As String) As Boolean
-
+                       ByRef modSize As ULongInt) As StringW
+                       
     Dim mbi As MEMORY_BASIC_INFORMATION
-    If VirtualQueryEx(img.hProc , Cast(LPCVOID, addr), @mbi, SizeOf(MEMORY_BASIC_INFORMATION)) = 0 Then Return False
+    If VirtualQueryEx(img.hProc, Cast(LPCVOID, addr), @mbi, SizeOf(MEMORY_BASIC_INFORMATION)) = 0 Then
+        MyLog.PrintWin32Error "GetModuleByVA64", "VirtualQueryEx", "addr=" & addr
+        Return ""
+    End If
 
     modBase = Cast(ULongInt, mbi.AllocationBase)
-
+    
     ' 获取模块名
-    Dim path As ZString * MAX_PATH
-    Print img.hProc
-    If GetModuleFileNameExA(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
-    'If GetMappedFileNameA(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
-        modName = ""
-        Print "[GetMappedFileNameA]" & WinErrorMsg(GetLastError) & GetLastError
-    Else
-        modName = path
+    Dim path As WString * MAX_PATH
+    'Print img.hProc
+    If GetModuleFileNameExW(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
+        MyLog.PrintWin32Error "GetModuleByVA64", "GetModuleFileNameExA", "mbi.AllocationBase=" & mbi.AllocationBase
+        Return ""
     End If
 
     ' PE 大小
     Dim dos As IMAGE_DOS_HEADER
     Dim nt  As IMAGE_NT_HEADERS
 
-    ReadMem img.hProc, mbi.AllocationBase, @dos, SizeOf(IMAGE_DOS_HEADER)
-    ReadMem img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt, SizeOf(IMAGE_NT_HEADERS)
+    If Not ReadMem(img.hProc, mbi.AllocationBase, @dos, SizeOf(IMAGE_DOS_HEADER)) Then MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", "1,addr=0x" & WHex(mbi.AllocationBase) : Return ""
+    If Not ReadMem(img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt, SizeOf(IMAGE_NT_HEADERS)) Then MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", "2,addr=0x" & WHex(mbi.AllocationBase + dos.e_lfanew) : Return ""
 
     modSize = nt.OptionalHeader.SizeOfImage
-    Return TRUE
+    Return path
 End Function
 
 Function ResolveFuncName(ByRef img As RemotePeImageEx, ByVal modBase As ULongInt, _
@@ -415,21 +423,21 @@ Function ResolveFuncName(ByRef img As RemotePeImageEx, ByVal modBase As ULongInt
     bestOffset = rva  ' 默认偏移
 
     Dim dos As IMAGE_DOS_HEADER
-    ReadMem img.hProc, Cast(Any Ptr, modBase), @dos, SizeOf(dos)
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase), @dos, SizeOf(dos)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "1,addr=0x" & WHex(modBase) : Return False
 
     Dim magic As WORD
-    ReadMem img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew + 24), @magic, 2 ' 可以用OffSetOf代替吗
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew + 24), @magic, 2) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "2,addr=0x" & WHex(modBase + dos.e_lfanew + 24) : Return False
 
     Dim expRVA As DWORD, dataDir As IMAGE_DATA_DIRECTORY
 
     If magic = &H10B Then
         Dim nt32 As IMAGE_NT_HEADERS32
-        ReadMem img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt32, SizeOf(nt32)
+        If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt32, SizeOf(nt32)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "3,addr=0x" & WHex(modBase + dos.e_lfanew) : Return False
         expRVA = nt32.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
         dataDir = nt32.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT)
     Else
         Dim nt64 As IMAGE_NT_HEADERS64
-        ReadMem img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt64, SizeOf(nt64)
+        If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt64, SizeOf(nt64)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "4,addr=0x" & WHex(modBase + dos.e_lfanew) : Return False
         expRVA = nt64.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
         dataDir = nt64.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT)
     End If
@@ -437,10 +445,10 @@ Function ResolveFuncName(ByRef img As RemotePeImageEx, ByVal modBase As ULongInt
     If dataDir.VirtualAddress = 0 Then Return False
 
     Dim expDir As IMAGE_EXPORT_DIRECTORY
-    ReadMem img.hProc, Cast(Any Ptr, modBase + dataDir.VirtualAddress), @expDir, SizeOf(IMAGE_EXPORT_DIRECTORY)
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dataDir.VirtualAddress), @expDir, SizeOf(IMAGE_EXPORT_DIRECTORY)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "5,addr=0x" & WHex(modBase + dataDir.VirtualAddress) : Return False
 
     Dim funcRVAs(expDir.NumberOfFunctions-1) As DWORD
-    ReadMem img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfFunctions), @funcRVAs(0), expDir.NumberOfFunctions*4
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfFunctions), @funcRVAs(0), expDir.NumberOfFunctions * 4) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "6,addr=0x" & WHex(modBase + expDir.AddressOfFunctions) : Return False
 
     ' 遍历所有函数，找 offset<=rva 中最大的
     Dim bestIndex As Integer = -1
@@ -457,18 +465,18 @@ Function ResolveFuncName(ByRef img As RemotePeImageEx, ByVal modBase As ULongInt
     Dim nameRVA As DWORD Ptr
     Dim ordRVA  As WORD Ptr
 
-    nameRVA = Allocate(expDir.NumberOfNames*4)
-    ordRVA  = Allocate(expDir.NumberOfNames*2)
+    nameRVA = Allocate(expDir.NumberOfNames * 4)
+    ordRVA  = Allocate(expDir.NumberOfNames * 2)
 
-    ReadMem img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNames), nameRVA, expDir.NumberOfNames*4
-    ReadMem img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNameOrdinals), ordRVA, expDir.NumberOfNames*2
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNames), nameRVA, expDir.NumberOfNames * 4) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "7,addr=0x" & WHex(modBase + expDir.AddressOfNames) : Return False
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNameOrdinals), ordRVA, expDir.NumberOfNames * 2) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "8,addr=0x" & WHex(modBase + expDir.AddressOfNameOrdinals) : Return False
 
     ' 找到 bestIndex 对应的名称
     For i As Integer = 0 To expDir.NumberOfNames-1
         If ordRVA[i] = bestIndex Then
             Dim namePtr As ULongInt = modBase + nameRVA[i]
             Dim buf As ZString * 256
-            ReadMem img.hProc, Cast(Any Ptr, namePtr), @buf, 256
+            If Not ReadMem(img.hProc, Cast(Any Ptr, namePtr), @buf, 256) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "9,addr=0x" & WHex(namePtr) : Return False
             bestName = buf
             Exit For
         End If
@@ -487,8 +495,10 @@ Function GetProxyDescription32(img As RemotePeImageEx, ByVal proxyVA As ULong) A
     Dim modBase As ULong
     Dim modSize As ULong
     Dim modPath As String
-
-    If GetModuleByVA32(img, proxyVA, modBase, modSize, modPath) = FALSE OrElse modPath = "" Then
+    
+    modPath = GetModuleByVA32(img, proxyVA, modBase, modSize)
+    If modPath = "" Then
+        MyLog.PrintLog LOG_WARN, "GetProxyDescription32", "GetModuleByVA32", "失败"
         Return "0x" & Hex(proxyVA)
     End If
 
@@ -509,8 +519,9 @@ Function GetProxyDescription64(img As RemotePeImageEx, ByVal proxyVA As ULongInt
     Dim modSize As ULongInt
     Dim modPath As String
 
-    If GetModuleByVA64(img, proxyVA, modBase, modSize, modPath) = False OrElse modPath = "" Then Return "0x" & Hex(proxyVA)
-    'Print modPath
+    'If GetModuleByVA64(img, proxyVA, modBase, modSize, modPath) = False OrElse modPath = "" Then MyLog.PrintLog LOG_WARN, "GetProxyDescription64", "GetModuleByVA64", "失败" : Return "0x" & Hex(proxyVA)
+    modPath = GetModuleByVA64(img, proxyVA, modBase, modSize)
+    If modPath = "" Then MyLog.PrintLog LOG_WARN, "GetProxyDescription64", "GetModuleByVA64", "失败" : Return "0x" & Hex(proxyVA)
     Dim rva As ULongInt = proxyVA - modBase
 
     Dim strName As String
@@ -564,202 +575,6 @@ Sub GetTextSectionRange(ByRef img As RemotePeImageEx, _
     Next
 End Sub
 
-Function AnalyzeInlineHook(img As RemotePeImageEx, funcVA As Any Ptr,ByRef info As InlineHookInfo) As Boolean
-    info.hookType = ""
-    info.proxyFunc = 0
-
-    Dim buf(31) As UByte         ' 反汇编最多 32 字节
-    Dim curInstrVA As ULongInt   ' 指令真实地址（用于 RIP）
-    Dim nextVA As ULongInt       ' 跳转后地址
-
-    curInstrVA = Cast(ULongInt, funcVA) ' 初始化为原 API 入口
-    Print "curInstrVA:0x" & Hex(curInstrVA)
-
-    Dim hopCount As Integer = 0
-    Const MAX_HOPS = 8
-
-    Do
-        hopCount += 1
-        If hopCount > MAX_HOPS Then
-            info.hookType = "LoopJump"
-            info.proxyFunc = curInstrVA
-            Return True
-        End If
-
-        ' 读取当前指令
-        If ReadMem(img.hProc, Cast(Any Ptr, curInstrVA), @buf(0), 32) = False Then Return False
-
-        '============================================================
-        ' JMP rel32  : E9 xx xx xx xx
-        '============================================================
-        If buf(0) = &HE9 Then
-            ' disp32 必须读取为 Long（有符号）
-            Dim disp As Long = *Cast(Long Ptr, @buf(1))
-            Print "disp32:" & disp & " " & WHex(disp)
-            Dim disp64 As LongInt = disp
-            Print "disp64:" & disp64 & " " & WHex(disp64)
-            Dim nextVA1 As LongInt = CLngInt(curInstrVA) + 5 + disp64
-            Print "nextVA1:" & WHex(nextVA1)
-            Print "nextVA2:" & WHex(CLngInt(curInstrVA) + 5 + disp)
-            Print "nextVA3:" & WHex(curInstrVA + 5 + disp64)
-            Print "nextVA4:" & WHex(curInstrVA + 5 + disp)
-            nextVA = CULngInt(nextVA1)
-            For i As Integer = 0 To 15
-                Print Hex(buf(i), 2) & " ";
-            Next
-            Print ""
-            info.hookType = "jmp rel32"
-            info.proxyFunc = nextVA
-            Print "[jmp rel32] → " & GetProxyDescription(img, nextVA)
-
-            curInstrVA = nextVA
-            Continue Do
-        End If
-
-        '============================================================
-        ' CALL rel32 : E8 xx xx xx xx
-        '============================================================
-        If buf(0) = &HE8 Then
-            Dim disp As Long = *Cast(Long Ptr, @buf(1))
-            nextVA = curInstrVA + 5 + CLngInt(disp)
-
-            info.hookType = "call rel32"
-            info.proxyFunc = nextVA
-
-            curInstrVA = nextVA
-            Continue Do
-        End If
-
-        '============================================================
-        ' JMP [RIP+imm32] : FF 25 xx xx xx xx
-        '============================================================
-        If buf(0) = &HFF AndAlso buf(1) = &H25 Then
-            Dim disp As Long = *Cast(Long Ptr, @buf(2))
-            Dim ptrVA As ULongInt = curInstrVA + 6 + CLngInt(disp)
-
-            If ReadMem(img.hProc, Cast(Any Ptr, ptrVA), @nextVA, 8) = False Then Return False
-
-            info.hookType = "jmp [rip]"
-            info.proxyFunc = nextVA
-
-            curInstrVA = nextVA
-            Continue Do
-        End If
-
-        '============================================================
-        ' CALL [RIP+imm32] : FF 15 xx xx xx xx
-        '============================================================
-        If buf(0) = &HFF AndAlso buf(1) = &H15 Then
-            Dim disp As Long = *Cast(Long Ptr, @buf(2))
-            Dim ptrVA As ULongInt = curInstrVA + 6 + CLngInt(disp)
-
-            If ReadMem(img.hProc, Cast(Any Ptr, ptrVA), @nextVA, 8) = False Then Return False
-
-            info.hookType = "call [rip]"
-            info.proxyFunc = nextVA
-
-            curInstrVA = nextVA
-            Continue Do
-        End If
-
-        '============================================================
-        ' MOV RAX, imm64 ; JMP RAX  
-        ' 48 B8 xx..xx FF E0
-        '============================================================
-        If buf(0) = &H48 AndAlso buf(1) = &HB8 Then
-            Dim imm64 As ULongInt = *Cast(ULongInt Ptr, @buf(2))
-
-            If buf(10)=&HFF AndAlso buf(11)=&HE0 Then
-                info.hookType = "mov rax+jmp rax"
-                info.proxyFunc = imm64
-
-                curInstrVA = imm64
-                Continue Do
-            End If
-        End If
-
-        '============================================================
-        ' FF E0 : jmp rax
-        '============================================================
-        If buf(0)=&HFF AndAlso buf(1)=&HE0 Then
-            info.hookType = "jmp rax"
-            info.proxyFunc = 0   ' 无法判断 RAX
-            Return True
-        End If
-
-        '============================================================
-        ' 无更多跳转 → 跳转链终止
-        '============================================================
-        If info.hookType <> "" Then
-            info.proxyFunc = curInstrVA
-            Return True
-        End If
-
-        info.hookType = "unknown"
-        Return False
-
-    Loop
-
-    Return False
-End Function
-
-Function GetInlineHookList(ByRef img As RemotePeImageEx, funcVA As Any Ptr, diskEntry As UByte Ptr, ByVal FuncPath As StringW, lvwHook As Class_ListView) As ULong
-    Dim textStart As ULongInt, textEnd As ULongInt
-    GetTextSectionRange img, textStart, textEnd
-    If funcVA < textStart Or funcVA >= textEnd Then
-        ' 不是可执行代码，不能是 inline hook
-        'Print "代码不属于.text段!"
-        Return 0
-    End If
-
-    Dim cur(15) As UByte
-    If ReadMem(img.hProc, funcVA, @cur(0), 16) = 0 Then Return 0
-
-    Dim diff As Boolean = False
-    For i As Integer = 0 To 15
-        If cur(i) <> diskEntry[i] Then
-            diff = True
-            Exit For
-        End If
-    Next
-
-    If diff Then
-        Dim curCode As StringW, oldCode As StringW
-        /'Print "[Inline Hook]"
-        Print "当前字节:";'/
-        For i As Integer = 0 To 31
-            curCode &= WHex(cur(i), 2) & " "
-            'Print WHex(cur(i), 2) & " ";
-        Next
-        /'Print ""
-        Print "原始字节:";'/
-        For i As Integer = 0 To 31
-            oldCode &= WHex(diskEntry[i], 2) & " "
-            'Print WHex(diskEntry[i], 2) & " ";
-        Next
-        'Print ""
-        Dim info As InlineHookInfo
-        AnalyzeInlineHook img, funcVA, info
-        'Print "inlinehook类型:" & info.hookType
-        Dim ProxyDescription As StringW
-        If info.proxyFunc <> NULL Then
-            'Dim ModulePath As StringW = GetModuleOfAddress(img.hProc, Cast(Any Ptr, info.proxyFunc))
-            'Dim ModuleName As StringW = RightW(ModulePath, LenW(ModulePath) - InStrRevW(ModulePath, "\"))
-            'Dim FuncPos As String = GetFuncNameFromVA
-            'Print "代理函数:" & GetProxyDescription(img, info.proxyFunc)
-            ProxyDescription = GetProxyDescription(img, info.proxyFunc)
-        Else
-            'Print "代理函数:unknown"
-            ProxyDescription = "unknown"
-        End If
-        AddItemColListEx lvwHook, 7,,, WStr("InlineHook(" & info.hookType & ")"), "0x" & WHex(funcVA), WStr(FuncPath), "0x" & WHex(info.proxyFunc), WStr(ProxyDescription), WStr(curCode), WStr(oldCode)
-        /'Dim old As DWORD
-        VirtualProtectEx(img.hProc, funcVA, 16, PAGE_EXECUTE_READWRITE, @old)
-        WriteMem(img, funcVA, diskEntry, 16)
-        VirtualProtectEx(img.hProc, funcVA, 16, old, @old)'/
-    End If
-End Function
-
 Function GetRemoteModuleBitness(ByRef img As RemotePeImageEx) As Integer
     Dim dos As IMAGE_DOS_HEADER
     If Not ReadMem(img.hProc, img.baseAddr, @dos, SizeOf(dos)) Then Return 0
@@ -772,9 +587,32 @@ Function GetRemoteModuleBitness(ByRef img As RemotePeImageEx) As Integer
     Return 0
 End Function
 
+Function IsExecutableImageAddr(hProc As HANDLE, addr As ULongInt, _
+                               ByRef allocBase As ULongInt) As Boolean
+    Dim mbi As MEMORY_BASIC_INFORMATION
+    If VirtualQueryEx(hProc, Cast(LPCVOID, addr), @mbi, SizeOf(mbi)) = 0 Then
+        Return FALSE
+    End If
+
+    allocBase = Cast(ULongInt, mbi.AllocationBase)
+
+    If mbi.State <> MEM_COMMIT Then Return FALSE
+    If mbi.Type  <> MEM_IMAGE  Then Return FALSE
+
+    Dim p As DWORD = mbi.Protect And &HFF
+    If p <> PAGE_EXECUTE AndAlso _
+       p <> PAGE_EXECUTE_READ AndAlso _
+       p <> PAGE_EXECUTE_READWRITE AndAlso _
+       p <> PAGE_EXECUTE_WRITECOPY Then
+        Return FALSE
+    End If
+
+    Return TRUE
+End Function
+
 Function ScanIAT64(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook As Class_ListView) As ULong
     Dim dos As IMAGE_DOS_HEADER
-    Dim nt  As NT_HEADERS_UNION' IMAGE_NT_HEADERS
+    Dim nt  As NT_HEADERS_UNION
 
     If GetRemoteNTEx(img, dos, nt) = False Then Return 0
 
@@ -804,59 +642,82 @@ Function ScanIAT64(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook A
             If origThunk.u1.AddressOfData = 0 Then Exit Do
 
             If (origThunk.u1.Ordinal And &H80000000) = 0 Then
-                Dim ibn As IMAGE_IMPORT_BY_NAME
-                ReadMem(img.hProc, img.baseAddr + origThunk.u1.AddressOfData, @ibn, SizeOf(IMAGE_IMPORT_BY_NAME))
-
                 Dim apiName As ZString * 256
                 ReadMem(img.hProc, img.baseAddr + origThunk.u1.AddressOfData + 2, @apiName, 256)
 
                 Dim rva As DWORD = GetDiskExportRVA(diskImg, apiName)
-                If rva <> 0 Then
-                    Dim realVA As ULongInt = Cast(ULongInt, img.baseAddr + rva)
+                If rva = 0 Then Goto ContinueDo  ' 磁盘镜像中无此导出，跳过
 
-                    If curThunk.u1.Function <> realVA Then
-                        'Print "[IAT Hook]" & dllName & "!" & apiName
-                        'Dim ModulePath As StringW = GetModuleOfAddress(img.hProc, Cast(Any Ptr, curThunk.u1.Function))
-                        'Dim ModuleName As StringW = RightW(ModulePath, LenW(ModulePath) - InStrRevW(ModulePath, "\"))
-                        'Print "代理函数:" & ModuleName & "!0x" & Hex(curThunk.u1.Function)
-                        Dim ProxyDescription As StringW = GetProxyDescription(img, curThunk.u1.Function)
-                        'Print "代理函数:" & GetProxyDescription(img, curThunk.u1.Function)
-                        AddItemColListEx lvwHook, 7,,, WStr("IAT Hook"), "0x" & WHex(@curThunk.u1.Function), WStr(dllName & "!" & apiName), "0x" & WHex(curThunk.u1.Function), _
-                        WStr(ProxyDescription), "0x" & WHex(curThunk.u1.Function), "0x" & WHex(realVA)
-                        'WriteMem(img, tC, @realVA, 8)
+                Dim realVA As ULongInt = Cast(ULongInt, img.baseAddr + rva)
+                Dim allocBase As ULongInt
+
+                ' === 基础过滤 ===
+                If curThunk.u1.Function = realVA Then Goto ContinueDo
+                If Not IsExecutableImageAddr(img.hProc, curThunk.u1.Function, allocBase) Then Goto ContinueDo
+
+                Dim proxyFunc As ULongInt = curThunk.u1.Function
+                Dim ProxyDescription As StringW = GetProxyDescription(img, proxyFunc)
+
+                ' === API Set 过滤 ===
+                If (InStr(dllName, "api-ms") > 0) AndAlso (InStr(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+                ' === 同模块转发过滤（核心修复）===
+                Dim importBaseName As StringW = dllName
+                Dim pos1 As Integer = InStrRevW(importBaseName, "\")
+                If pos1 > 0 Then importBaseName = MidW(importBaseName, pos1 + 1)
+                
+                Dim proxyBaseName As StringW = ProxyDescription
+                pos1 = InStrW(proxyBaseName, "!")
+                If pos1 > 0 Then proxyBaseName = LeftW(proxyBaseName, pos1 - 1)
+                
+                ' 不区分大小写比较模块名
+                If LCaseW(importBaseName) = LCaseW(proxyBaseName) Then
+                    Goto ContinueDo
+                End If
+
+                ' === 系统 DLL 间导出验证 ===
+                ' 如果代理模块能解析出同名导出函数，且地址匹配，则是正常转发
+                Dim proxyModulePath As StringW = GetModuleOfAddress(img.hProc, Cast(Any Ptr, proxyFunc))
+                If proxyModulePath <> "" Then
+                    Dim DiskSize As UInteger = 0
+                    Dim proxyDiskImg As UByte Ptr = LoadDiskImage(proxyModulePath, DiskSize)
+                    If proxyDiskImg <> NULL Then
+                        Dim proxyExportRVA As DWORD = GetDiskExportRVA(proxyDiskImg, apiName)
+                        If proxyExportRVA <> 0 Then
+                            Dim proxyBase As ULongInt = Cast(ULongInt, GetModuleBaseByPath(img.hProc, proxyModulePath))
+                            If proxyBase <> 0 Then
+                                Dim expectedProxyVA As ULongInt = proxyBase + proxyExportRVA
+                                If proxyFunc = expectedProxyVA Then
+                                    'FreeDiskImage(proxyDiskImg)
+                                    Goto ContinueDo
+                                End If
+                            End If
+                        End If
+                        'FreeDiskImage(proxyDiskImg)
                     End If
                 End If
-            End If
 
+                ' === 延迟加载/Wow64 API 转发过滤 ===
+                If (InStr(ProxyDescription, apiName) <> 0) AndAlso (InStr(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+                ' 通过所有过滤，确认为 Hook
+                AddItemColListEx lvwHook, 7,,, WStr("IAT Hook"), _
+                    "0x" & WHex(@curThunk.u1.Function), _
+                    WStr(dllName & "!" & apiName), _
+                    "0x" & WHex(curThunk.u1.Function), _
+                    WStr(ProxyDescription), _
+                    "0x" & WHex(curThunk.u1.Function), _
+                    "0x" & WHex(realVA)
+            End If
+ContinueDo:
             pOrigThunk += SizeOf(IMAGE_THUNK_DATA)
             pCurThunk += SizeOf(IMAGE_THUNK_DATA)
         Loop
         impPtr += SizeOf(IMAGE_IMPORT_DESCRIPTOR)
         FF_DoEvents
     Loop
-End Function
 
-Function IsExecutableImageAddr(hProc As HANDLE, addr As ULongInt, _
-                               ByRef allocBase As ULongInt) As Boolean
-    Dim mbi As MEMORY_BASIC_INFORMATION
-    If VirtualQueryEx(hProc, Cast(LPCVOID, addr), @mbi, SizeOf(mbi)) = 0 Then
-        Return FALSE
-    End If
-
-    allocBase = Cast(ULongInt, mbi.AllocationBase)
-
-    If mbi.State <> MEM_COMMIT Then Return FALSE
-    If mbi.Type  <> MEM_IMAGE  Then Return FALSE
-
-    Dim p As DWORD = mbi.Protect And &HFF
-    If p <> PAGE_EXECUTE AndAlso _
-       p <> PAGE_EXECUTE_READ AndAlso _
-       p <> PAGE_EXECUTE_READWRITE AndAlso _
-       p <> PAGE_EXECUTE_WRITECOPY Then
-        Return FALSE
-    End If
-
-    Return TRUE
+    Return 0
 End Function
 
 Function ScanIAT32(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook As Class_ListView) As ULong
@@ -896,25 +757,76 @@ Function ScanIAT32(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, lvwHook A
                 ReadMem img.hProc, img.baseAddr + ot.u1.AddressOfData + 2, @apiName, 256
 
                 Dim rva As DWORD = GetDiskExportRVA(diskImg, apiName)
-                If rva <> 0 Then
-                    Dim realVA As ULongInt = Cast(ULongInt, img.baseAddr) + rva
-                    Dim allocBase As ULongInt
-                    If ct.u1.Function = realVA Then Goto ContinueDo
-                    If Not IsExecutableImageAddr(img.hProc, ct.u1.Function, allocBase) Then Goto ContinueDo
-                    
-                    Dim proxyFunc As ULongInt = ct.u1.Function
-                    Dim ProxyDescription As StringW = GetProxyDescription(img, proxyFunc)
-                    If (InStrW(apiName, "api-ms") > 0) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo ' 属于Windows API Sets机制,无需关心
-                    If (InStrW(ProxyDescription, apiName) <> 0) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo ' 可能属于模块内部依赖/延迟加载/Wow64 API转发
-                    
-                    AddItemColListEx lvwHook, 7,,, WStr("IAT Hook"), _
-                        "0x" & WHex(@ct.u1.Function), _
-                        WStr(dllName & "!" & apiName), _
-                        "0x" & WHex(ct.u1.Function), _
-                        WStr(ProxyDescription), _
-                        "0x" & WHex(ct.u1.Function), _
-                        "0x" & WHex(realVA) 
+                If rva = 0 Then Goto ContinueDo  ' 磁盘镜像中无此导出，跳过
+
+                Dim realVA As ULongInt = Cast(ULongInt, img.baseAddr) + rva
+                Dim allocBase As ULongInt
+
+                ' === 基础过滤（与 64 位一致）===
+                If ct.u1.Function = realVA Then Goto ContinueDo
+                If Not IsExecutableImageAddr(img.hProc, ct.u1.Function, allocBase) Then Goto ContinueDo
+
+                Dim proxyFunc As ULongInt = ct.u1.Function
+                Dim ProxyDescription As StringW = GetProxyDescription(img, proxyFunc)
+
+                ' === API Set 过滤 ===
+                If (InStr(dllName, "api-ms") > 0) AndAlso (InStr(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+                ' === 同模块转发过滤（核心）===
+                Dim importBaseName As StringW = dllName
+                Dim pos1 As Integer = InStrRevW(importBaseName, "\")
+                If pos1 > 0 Then importBaseName = MidW(importBaseName, pos1 + 1)
+
+                Dim proxyBaseName As StringW = ProxyDescription
+                pos1 = InStrW(proxyBaseName, "!")
+                If pos1 > 0 Then proxyBaseName = LeftW(proxyBaseName, pos1 - 1)
+
+                ' 不区分大小写比较模块名
+                If LCaseW(importBaseName) = LCaseW(proxyBaseName) Then
+                    Goto ContinueDo
                 End If
+
+                ' === Wow64 特殊过滤：32位 ntdll → 64位 ntdll 转发 ===
+                ' 32位进程中，ntdll 的某些导出指向高地址（Wow64 转换层）
+                If LCase(importBaseName) = "ntdll.dll" AndAlso proxyFunc > &H7FFFFFFF Then
+                    ' 检查是否是已知的 Wow64 系统调用入口
+                    'If IsWow64SystemServiceStub(img.hProc, proxyFunc) Then
+                        Goto ContinueDo
+                    'End If
+                End If
+
+                ' === 系统 DLL 间导出验证（与 64 位一致）===
+                Dim proxyModulePath As StringW = GetModuleOfAddress(img.hProc, Cast(Any Ptr, proxyFunc))
+                If proxyModulePath <> "" Then
+                    Dim DiskSize As UInteger = 0
+                    Dim proxyDiskImg As UByte Ptr = LoadDiskImage(proxyModulePath, DiskSize)
+                    If proxyDiskImg <> NULL Then
+                        Dim proxyExportRVA As DWORD = GetDiskExportRVA(proxyDiskImg, apiName)
+                        If proxyExportRVA <> 0 Then
+                            Dim proxyBase As ULongInt = Cast(ULongInt, GetModuleBaseByPath(img.hProc, proxyModulePath))
+                            If proxyBase <> 0 Then
+                                Dim expectedProxyVA As ULongInt = proxyBase + proxyExportRVA
+                                If proxyFunc = expectedProxyVA Then
+                                    'FreeDiskImage(proxyDiskImg)
+                                    Goto ContinueDo
+                                End If
+                            End If
+                        End If
+                        'FreeDiskImage(proxyDiskImg)
+                    End If
+                End If
+
+                ' === 延迟加载/Wow64 API 转发过滤 ===
+                If (InStr(ProxyDescription, apiName) <> 0) AndAlso (InStr(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+                ' 通过所有过滤，确认为 Hook
+                AddItemColListEx lvwHook, 7,,, WStr("IAT Hook"), _
+                    "0x" & WHex(@ct.u1.Function), _
+                    WStr(dllName & "!" & apiName), _
+                    "0x" & WHex(ct.u1.Function), _
+                    WStr(ProxyDescription), _
+                    "0x" & WHex(ct.u1.Function), _
+                    "0x" & WHex(realVA)
             End If
 ContinueDo:
             pOrg += 4 : pCur += 4
@@ -961,8 +873,7 @@ Function GetEATHookList(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, Modu
 
     Dim expDir As IMAGE_EXPORT_DIRECTORY
     If Not ReadMem(img.hProc, img.baseAddr + expRVA, @expDir, SizeOf(IMAGE_EXPORT_DIRECTORY)) Then Return 0
-    'Print "expDir.NumberOfFunctions:" & expDir.NumberOfFunctions
-    
+
     Dim funRva(expDir.NumberOfFunctions - 1) As DWORD
     If Not ReadMem(img.hProc, img.baseAddr + expDir.AddressOfFunctions, @funRva(0), expDir.NumberOfFunctions*4) Then Return 0
 
@@ -972,35 +883,99 @@ Function GetEATHookList(ByRef img As RemotePeImageEx, diskImg As UByte Ptr, Modu
     ReadMem(img.hProc, img.baseAddr + expDir.AddressOfNames, @nameRva(0), expDir.NumberOfNames * 4)
     ReadMem(img.hProc, img.baseAddr + expDir.AddressOfNameOrdinals, @ordRva(0),  expDir.NumberOfNames * 2)
 
+    ' 获取当前模块的基址和大小，用于范围检查
+    Dim modBase As ULongInt = Cast(ULongInt, img.baseAddr)
+    Dim modSize As ULongInt = 0
+    ' 从 PE 头获取镜像大小
+    If magic = &H10B Then
+        Dim nt32 As IMAGE_NT_HEADERS32
+        ReadMem img.hProc, img.baseAddr + dos.e_lfanew, @nt32, SizeOf(nt32)
+        modSize = nt32.OptionalHeader.SizeOfImage
+    Else
+        Dim nt64 As IMAGE_NT_HEADERS64
+        ReadMem img.hProc, img.baseAddr + dos.e_lfanew, @nt64, SizeOf(nt64)
+        modSize = nt64.OptionalHeader.SizeOfImage
+    End If
+
     For i As Integer = 0 To expDir.NumberOfNames - 1
 
         Dim apiName As ZString * 256
+        Dim idx As WORD, memRva As DWORD, rawRva As DWORD
+        Dim proxyFunc As ULongInt = 0
+        Dim ProxyDescription As StringW = ""
+        Dim proxyModulePath As StringW = ""
+        Dim proxyBaseName As StringW = ""
+        Dim pos1 As Integer = 0
+        Dim sysDlls(0 To 9) As String = { _
+            "ntdll.dll", "kernel32.dll", "kernelbase.dll", _
+            "user32.dll", "gdi32.dll", "advapi32.dll", _
+            "combase.dll", "rpcrt4.dll", "ole32.dll", "oleaut32.dll"}
+        Dim isSysDll As Boolean = False
+        
         ReadMem(img.hProc, img.baseAddr + nameRva(i), @apiName, 256)
 
-        Dim idx As WORD = ordRva(i)
-        Dim memRva As DWORD = funRva(idx)
+        idx = ordRva(i)
+        memRva = funRva(idx)
 
-        Dim rawRva As DWORD = GetDiskExportRVA(diskImg, apiName)
-        If rawRva <> 0 And rawRva <> memRva Then
-            'Print "[EAT Hook]" & apiName
-            Dim proxyRVA As DWORD = memRva ' funRva(i)
-            Dim proxyFunc As ULongInt = Cast(ULongInt, img.BaseAddr) + proxyRVA
-            /'Dim ModulePath As StringW = GetModuleOfAddress(img.hProc, Cast(Any Ptr, proxyFunc))
-            Dim ModuleName As StringW = RightW(ModulePath, LenW(ModulePath) - InStrRevW(ModulePath, "\"))
-            Print "代理函数:" & ModuleName & "!0x" & Hex(proxyFunc) '/
-            Dim ProxyDescription As StringW = GetProxyDescription(img, proxyFunc)
-            'Print "代理函数:" & ProxyDescription
-            If (InStrW(ModuleName, "api-ms") > 0) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo ' 属于Windows API Sets机制,无需关心
-            'If (InStrW(ProxyDescription, ModuleName & "!" & LeftW(apiName, LenW(apiName) - 1)) > 0) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo ' 可能属于模块内部依赖/延迟加载
-            If (InStrW(ProxyDescription, ModuleName & "!") = 1) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo ' 可能属于模块内部依赖/延迟加载/Wow64 API转发
-            
-            AddItemColListEx lvwHook, 7,,, WStr("EAT Hook"), "0x" & WHex(@funRva(idx)), WStr(ModuleName & "!" & apiName), "0x" & WHex(proxyFunc), _
-            WStr(ProxyDescription), "0x" & WHex(proxyFunc), "0x" & WHex(rawRva)
-            'WriteMem(img, img.baseAddr + expDir.AddressOfFunctions + idx*4, @rawRva, 4) ' 修复EAT Hook
-ContinueDo:
+        rawRva = GetDiskExportRVA(diskImg, apiName)
+        If rawRva = 0 Then Goto ContinueDo  ' 磁盘镜像中无此导出，跳过
+        If rawRva = memRva Then Goto ContinueDo ' 完全一致，不是 Hook
+        
+        ' === 核心修复：过滤合法的导出转发（Forwarder Export）===
+        If IsForwarderExport(diskImg, rawRva, modSize) Then Goto ContinueDo
+
+        proxyFunc = modBase + memRva
+
+        ' === 获取代理函数所在模块 ===
+        ProxyDescription = GetProxyDescription(img, proxyFunc)
+        proxyModulePath = GetModuleOfAddress(img.hProc, Cast(Any Ptr, proxyFunc))
+        proxyBaseName = proxyModulePath
+        pos1 = InStrRevW(proxyBaseName, "\")
+        If pos1 > 0 Then proxyBaseName = MidW(proxyBaseName, pos1 + 1)
+
+        ' === 过滤 1: API Set ===
+        If (InStrW(ModuleName, "api-ms") > 0) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+        ' === 过滤 2: 同模块内部重定向（核心修复）===
+        /'If LCaseW(proxyBaseName) = LCaseW(ModuleName) Then
+            ' 代理函数仍在当前模块内，是正常导出转发/Wow64转换
+            Goto ContinueDo
+        End If'/
+
+        ' === 过滤 3: 代理地址在当前模块合法范围内 ===
+        If proxyFunc >= modBase AndAlso proxyFunc < modBase + modSize Then
+            ' 地址落在当前模块内，但不是 GetModuleOfAddress 识别的模块名
+            ' 可能是模块内部的子区域（如 .text 中的不同段）
+            Goto ContinueDo
         End If
+
+        ' === 过滤 4: 延迟加载/Wow64 API 转发 ===
+        'If (InStrW(ProxyDescription, ModuleName & "!") = 1) AndAlso (InStrW(ProxyDescription, "0x0") > 0) Then Goto ContinueDo
+
+        ' === 过滤 5: 系统 DLL 的 Wow64 存根 ===
+        /'For j As Integer = 0 To 9
+            If LCase(ModuleName) = sysDlls(j) Then isSysDll = True : Exit For
+        Next
+
+        If isSysDll AndAlso proxyFunc < modBase + modSize Then
+            ' 系统 DLL 的导出指向自身内部，正常
+            Goto ContinueDo
+        End If'/
+
+        ' 通过所有过滤，确认为 Hook
+        AddItemColListEx lvwHook, 7,,, WStr("EAT Hook"), _
+            "0x" & WHex(@funRva(idx)), _
+            WStr(ModuleName & "!" & apiName), _
+            "0x" & WHex(proxyFunc), _
+            WStr(ProxyDescription), _
+            "0x" & WHex(proxyFunc), _
+            "0x" & WHex(rawRva)
+
+ContinueDo:
         FF_DoEvents
     Next
+
+    Return 0
 End Function
 
 Function GetModuleHookList(ByVal ProcessId As DWORD, ModuleName As StringW, ByVal ModuleHandle As Any Ptr, lvwHook As Class_ListView) As ULong
@@ -1014,18 +989,19 @@ Function GetModuleHookList(ByVal ProcessId As DWORD, ModuleName As StringW, ByVa
         Print "OpenProcess " & ProcessId & " Failed!"
         Return 0
     End If
-    
+
     Dim img As RemotePeImageEx
     img.hProc = hProc
-    img.BaseAddr  = ModuleHandle
+    img.BaseAddr = ModuleHandle
+    
+    img.arch = DetectRemoteModuleArch(img.hProc, img.baseAddr)
 
     ' 加载磁盘 DLL
-    Dim fullPath As ZString * MAX_PATH
-    GetModuleFileNameExA(hProc, ModuleHandle, @fullPath, MAX_PATH)
+    Dim fullPath As ZString * MAX_PATH = GetModuleOfAddress(hProc, ModuleHandle)
 
     Dim sz As UInteger
     Dim diskImg As UByte Ptr = LoadDiskImage(fullPath, sz)
-    If diskImg = NULL Then Return 0
+    If diskImg = NULL Then CloseHandle hProc : Return 0
 
     ' 导出表
     Dim names() As String
@@ -1033,7 +1009,6 @@ Function GetModuleHookList(ByVal ProcessId As DWORD, ModuleName As StringW, ByVa
 
     ' EAT
     GetEATHookList img, diskImg, ModuleName, lvwHook
-
     ' Inline
     For i As Integer = 0 To UBound(names)
         Dim rva As DWORD = GetDiskExportRVA(diskImg, names(i))
@@ -1050,7 +1025,7 @@ Function GetModuleHookList(ByVal ProcessId As DWORD, ModuleName As StringW, ByVa
     ' IAT
     GetIATHookList img, diskImg, lvwHook
 
-    Print "修复完成: " & ModuleName
+    'Print "修复完成: " & ModuleName
 
     Deallocate diskImg
     CloseHandle hProc
@@ -1073,17 +1048,18 @@ Sub GetProcessHookList(ByVal ProcessId As DWORD, lvwHook As Class_ListView)
     ' 获取远程模块基址
     Dim me32 As MODULEENTRY32
     me32.dwSize = SizeOf(MODULEENTRY32)
-    Print "1"
     Dim hSnap As HANDLE = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE Or TH32CS_SNAPMODULE32, ProcessId)
 
     If Module32First(hSnap, @me32) <> 0 Then
         Do
+            'Print me32.szModule & " 0x" & WHex(me32.modBaseAddr)
             If me32.modBaseAddr = NULL Then Continue Do
             GetModuleHookList ProcessId, me32.szModule, me32.modBaseAddr, lvwHook
             FF_DoEvents
         Loop While Module32Next(hSnap, @me32)
     End If
     CloseHandle hSnap
+    CloseHandle hProc
     CommitListViewView lvwHook
 End Sub
 

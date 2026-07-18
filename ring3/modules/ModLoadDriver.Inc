@@ -245,12 +245,17 @@ Public Function UnloadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Bo
 End Function
 
 Function InitDriver() As Boolean
+    If Not IsSupportOS Then
+        AfxMsg "很抱歉,该功能暂仅支持Win10 2004 (19041)~Win11 24H2!", "提示"
+        Return False
+    End If 
     If Not LoadDriver(App.Path & "SnowSword.sys", False) Then Return False
     hDrv = OpenDrv("\\.\\SnowSword", True)
     If (hDrv = INVALID_HANDLE_VALUE) Then Return False
     If (Not OpenSymbolDevice) OrElse (hSymbolDrv = INVALID_HANDLE_VALUE) Then Return False
     SymbolService_StartWorkers
     IsDriverLoaded = True
+    FrmMain.Check6.Value = 1
     Return True
 End Function
 

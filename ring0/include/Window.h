@@ -102,10 +102,10 @@ typedef struct _tagHOOK* PTAG_HOOK;
 
 // tagTHREADINFO 偏移
 #define WIN11_TI_GLOBAL_HOOK_CONTAINER  0x1F8   // 你的 Dump 验证了这个是对的
-#define WIN11_TI_THREAD_HOOK_ARRAY      0x3C8   // xxxCallHook 验证了这个是对的
+#define WIN11_TI_THREAD_HOOK_ARRAY      0x3C0   // xxxCallHook 验证了这个是对的
 
 // 全局钩子容器内数组基址
-#define GLOBAL_HOOK_ARRAY_BASE          0x30
+#define GLOBAL_HOOK_ARRAY_BASE          0x28
 
 // 【重新校准】tagHOOK 偏移 (极简版，先保证能跑通)
 // 注意：这里的偏移需要你根据实际 WinDbg 结果微调，
@@ -131,8 +131,6 @@ typedef struct _tagHOOK* PTAG_HOOK;
 #define EVENTHOOK_OFFSET_TARGET_TID    0x34  // DWORD  idThread
 #define EVENTHOOK_OFFSET_PFN           0x40  // HMODULE hmodWinEventProc
 #define EVENTHOOK_OFFSET_HMOD          0x48  // PVOID   pfnWinEventProc
-
-#define WIN10_1703_BUILD_NUMBER 0x3AD7
 
 typedef enum _HANDLE_TYPE {
     TYPE_FREE = 0,

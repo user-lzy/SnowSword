@@ -423,6 +423,123 @@ Function EnumModuleListEx(ByVal hProcess As HANDLE, ModuleList() As MODULE_INFOR
     End If
 End Function
 
+Type MODULE_NAME_CACHE
+    HMODULE As HMODULE
+    szPath As Wstring * MAX_PATH
+    szName As WString * 256
+    BaseAddr As ULONG64
+    dwSize As ULONG64
+End Type
+
+' 缓存结构，避免重复枚举
+Type MODULE_CACHE
+    hProcess As HANDLE
+    dwPid As DWORD
+    bValid As Boolean
+    Modules(Any) As MODULE_NAME_CACHE
+    nCount As Long
+    dwTickCount As DWORD  ' 缓存时间戳
+End Type
+
+' 带缓存的模块名查询（适合高频调用场景）
+Function GetModuleFileNameEx2Cached( _
+    ByVal hProcess As HANDLE, _
+    ByVal hModule As HMODULE, _
+    ByVal lpFilename As LPWSTR, _
+    ByVal nSize As DWORD, _
+    ByVal bUseCache As Boolean = True _
+) As DWORD
+
+    Static g_ModuleCache As MODULE_CACHE
+
+    Dim i As Long
+    Dim hModuleAddr As ULONG64 = Cast(ULONG64, hModule)
+    Dim dwPid As DWORD
+    Dim bNeedRefresh As Boolean = TRUE
+    
+    ' 参数校验
+    If hProcess = NULL OrElse lpFilename = NULL OrElse nSize = 0 Then
+        Return 0
+    End If
+    
+    *lpFilename = 0
+    
+    ' 获取目标进程 PID
+    dwPid = GetProcessId(hProcess)  ' 或你使用的等效函数
+    
+    ' 检查缓存有效性
+    If bUseCache AndAlso g_ModuleCache.bValid Then
+        If g_ModuleCache.hProcess = hProcess AndAlso _
+           g_ModuleCache.dwPid = dwPid AndAlso _
+           (GetTickCount() - g_ModuleCache.dwTickCount) < 500 Then  ' 500ms 缓存有效期
+            
+            bNeedRefresh = FALSE
+            
+            ' 在缓存中查找
+            For i = 0 To g_ModuleCache.nCount - 1
+                If g_ModuleCache.Modules(i).BaseAddr = hModuleAddr Then
+                    Dim pathLen As Long = Len(g_ModuleCache.Modules(i).szPath)
+                    If pathLen >= nSize Then pathLen = nSize - 1
+                    memcpy(lpFilename, @g_ModuleCache.Modules(i).szPath, pathLen * SizeOf(WString))
+                    lpFilename[pathLen] = 0
+                    Return pathLen
+                End If
+            Next i
+            
+            ' 缓存中未找到，需要刷新
+            bNeedRefresh = TRUE
+        End If
+    End If
+    
+    ' 刷新缓存或直接查询
+    If bNeedRefresh Then
+        Dim ModuleList() As MODULE_INFORMATION
+        Dim nCount As Long = EnumModuleListEx(hProcess, ModuleList())
+        
+        If nCount <= 0 Then
+            Return GetModuleFileNameExW(hProcess, hModule, lpFilename, nSize)
+        End If
+        
+        ' 更新缓存
+        If bUseCache Then
+            g_ModuleCache.hProcess = hProcess
+            g_ModuleCache.dwPid = dwPid
+            ReDim g_ModuleCache.Modules(nCount - 1)
+            g_ModuleCache.nCount = nCount
+            g_ModuleCache.dwTickCount = GetTickCount()
+        End If
+        
+        ' 查找并填充缓存
+        For i = 0 To nCount - 1
+            If bUseCache Then
+                g_ModuleCache.Modules(i).hModule = Cast(HMODULE, ModuleList(i).BaseAddr)
+                g_ModuleCache.Modules(i).BaseAddr = ModuleList(i).BaseAddr
+                g_ModuleCache.Modules(i).dwSize = ModuleList(i).dwSize
+                g_ModuleCache.Modules(i).szPath = *Cast(WString Ptr, @ModuleList(i).szPath)
+                g_ModuleCache.Modules(i).szName = *Cast(WString Ptr, @ModuleList(i).szName)
+            End If
+            
+            If ModuleList(i).BaseAddr = hModuleAddr Then
+                Dim pathLen As Long = Len(*Cast(WString Ptr, @ModuleList(i).szPath))
+                If pathLen >= nSize Then pathLen = nSize - 1
+                memcpy(lpFilename, @ModuleList(i).szPath, pathLen * SizeOf(WString))
+                lpFilename[pathLen] = 0
+                
+                If bUseCache Then g_ModuleCache.bValid = TRUE
+                Erase ModuleList
+                Return pathLen
+            End If
+        Next i
+        
+        Erase ModuleList
+        If bUseCache Then g_ModuleCache.bValid = TRUE
+    End If
+    
+    ' 后备方案
+    Return GetModuleFileNameExW(hProcess, hModule, lpFilename, nSize)
+    
+End Function
+
 Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListView) As Integer
     Dim i As Long, hProcess As HANDLE, ModuleCount As Long, ItemIndex As Long
     Dim ModuleInformation1() As MODULE_INFORMATION
@@ -510,10 +627,10 @@ End Function
 Function GetModuleOfAddress(hProc As HANDLE, addr As Any Ptr) As StringW
     Dim sz As ZString * MAX_PATH, wsz As WString * MAX_PATH, result As WString * MAX_PATH
     GetMappedFileNameA(hProc, addr, @sz, MAX_PATH)
-    Print sz
+    'Print sz
     wsz = sz
     NtPathToDosPathW @wsz, @result
-    Print result
+    'Print result
     Return result
 End Function
 

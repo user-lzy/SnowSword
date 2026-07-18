@@ -46,9 +46,6 @@
     <ClInclude Include="include\global.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\HookSysenter.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="include\IDT.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -85,9 +82,6 @@
     <ClInclude Include="include\EnumCallbacks.h">
       <Filter>Header Files\EnumCallbacks</Filter>
     </ClInclude>
-    <ClInclude Include="include\Hook.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="include\Window.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -95,6 +89,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="include\Symbol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Zydis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Test.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\OffsetScanner.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -117,7 +120,7 @@
     <ClCompile Include="sources\global.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="sources\HookSysenter.c">
+    <ClCompile Include="sources\Test.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sources\IDT.c">
@@ -156,12 +159,6 @@
     <ClCompile Include="sources\EnumCallbacks.c">
       <Filter>Source Files\EnumCallbacks</Filter>
     </ClCompile>
-    <ClCompile Include="sources\GUI.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="sources\Hook.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="sources\Window.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -169,6 +166,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sources\Symbol.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Zydis.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\OffsetScanner.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

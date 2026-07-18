@@ -119,9 +119,9 @@ IrpCreateFile(
 	UNREFERENCED_PARAMETER(AllocationSize);
     NTSTATUS ntStatus;
     HANDLE hFile;
-    PFILE_OBJECT pFile;//, _FileObject;
+    PFILE_OBJECT pFile = NULL;//, _FileObject;
     //UNICODE_STRING UniDeviceNameString;
-    OBJECT_ATTRIBUTES ObjectAttributes;
+    OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
     PDEVICE_OBJECT DeviceObject, RealDevice;
     PIRP Irp;
     PKEVENT pkEvent = NULL;
@@ -359,7 +359,7 @@ NTSTATUS IrpCreateFile_New(
     KeInitializeEvent(&pFile->Lock, SynchronizationEvent, FALSE);
 
     // ✅ 自动处理路径前缀：去掉 "\??\C:"，只留下相对卷的路径
-    UNICODE_STRING relativePath;
+    UNICODE_STRING relativePath = { 0 };
     if (FilePath->Length >= 6 * sizeof(WCHAR) &&
         FilePath->Buffer[0] == L'\\' && FilePath->Buffer[1] == L'?' &&
         FilePath->Buffer[2] == L'?' && FilePath->Buffer[3] == L'\\' &&
@@ -437,7 +437,7 @@ IrpCloseFile(
     IN PFILE_OBJECT  FileObject)
 {
     NTSTATUS ntStatus;
-    IO_STATUS_BLOCK  IoStatusBlock;
+    IO_STATUS_BLOCK IoStatusBlock = { 0 };
     PIRP Irp;
     PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
@@ -510,7 +510,7 @@ IrpCloseFile_New(
     IN PFILE_OBJECT  FileObject)
 {
     NTSTATUS ntStatus;
-    IO_STATUS_BLOCK  IoStatusBlock;
+    IO_STATUS_BLOCK IoStatusBlock = { 0 };
     PIRP Irp;
     PKEVENT pkEvent = NULL;
     PIO_STACK_LOCATION IrpSp;
@@ -771,8 +771,8 @@ MySetInformationFile(
     NTSTATUS ntStatus;
     PIRP Irp;
     PKEVENT pkEvent = NULL;
-    PFILE_OBJECT  pFileObject;
-    IO_STATUS_BLOCK  IoStatusBlock;
+    PFILE_OBJECT pFileObject = NULL;
+    IO_STATUS_BLOCK IoStatusBlock = { 0 };
     PIO_STACK_LOCATION IrpSp;
     PDEVICE_OBJECT pDeviceObject;
 
@@ -996,7 +996,7 @@ NTSTATUS GetVolumeDiskExtentsInfo(
     ULONG initialCount = 16;
     ULONG bufferSize = FIELD_OFFSET(VOLUME_DISK_EXTENTS, Extents) + initialCount * sizeof(DISK_EXTENT);
 
-    OBJECT_ATTRIBUTES objAttr;
+    OBJECT_ATTRIBUTES objAttr = { 0 };
     InitializeObjectAttributes(&objAttr, VolumePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
 
     // 打开卷设备
@@ -1035,7 +1035,7 @@ NTSTATUS GetVolumeDiskExtentsInfo(
     deviceObject = IoGetRelatedDeviceObject(fileObject);
 
     // 分配缓冲区（非分页池）
-    buffer = ExAllocatePoolWithTag(NonPagedPoolNx, bufferSize, SECTORIO_TAG);
+    buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
     if (!buffer) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         goto cleanup;
@@ -1075,7 +1075,7 @@ retry_ioctl:
             ExFreePoolWithTag(buffer, SECTORIO_TAG);
             initialCount = neededCount;
             bufferSize = FIELD_OFFSET(VOLUME_DISK_EXTENTS, Extents) + neededCount * sizeof(DISK_EXTENT);
-            buffer = ExAllocatePoolWithTag(NonPagedPoolNx, bufferSize, SECTORIO_TAG);
+            buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
             if (!buffer) {
                 status = STATUS_INSUFFICIENT_RESOURCES;
                 goto cleanup;
@@ -1170,10 +1170,10 @@ NTSTATUS ReadWritePhysicalDiskSectors(
     KEVENT event;
     PIRP irp = NULL;
     PMDL mdl = NULL;
-    LARGE_INTEGER offset;
+    LARGE_INTEGER offset = { 0 };
     WCHAR diskPath[64];
     UNICODE_STRING diskPathUni;
-    OBJECT_ATTRIBUTES objAttr;
+    OBJECT_ATTRIBUTES objAttr = { 0 };
     PIO_STACK_LOCATION irpSp;
 
     status = RtlStringCchPrintfW(diskPath, RTL_NUMBER_OF(diskPath),
@@ -1454,7 +1454,7 @@ EndRequest:
 
 UNICODE_STRING RtlGetUnicodeString(LPWSTR wStr)
 {
-    UNICODE_STRING uStr;
+    UNICODE_STRING uStr = { 0 };
     //计算字符串的长度（不包括结尾的 NULL）
     uStr.Length = (USHORT)(wcslen(wStr) * sizeof(WCHAR));
     //计算字符串的最大长度（包括结尾的 NULL）
@@ -1466,7 +1466,7 @@ UNICODE_STRING RtlGetUnicodeString(LPWSTR wStr)
 NTSTATUS MyCreateFile(PUNICODE_STRING ustrFileName, PHANDLE pFileHandle)
 {
     NTSTATUS            ntStatus;
-    OBJECT_ATTRIBUTES   objectAttributes;
+    OBJECT_ATTRIBUTES   objectAttributes = { 0 };
     IO_STATUS_BLOCK     ioStatus;
 
     // 确保IRQL在PASSIVE_LEVEL上   
@@ -1489,12 +1489,12 @@ NTSTATUS MyCreateFile(PUNICODE_STRING ustrFileName, PHANDLE pFileHandle)
 NTSTATUS MyDeleteFile(HANDLE FileHandle)
 {
     NTSTATUS          ntStatus = STATUS_SUCCESS;
-    PFILE_OBJECT      fileObject;
+    PFILE_OBJECT      fileObject = NULL;
     PDEVICE_OBJECT    DeviceObject;
     PIRP              Irp;
     KEVENT            SycEvent;
-    FILE_DISPOSITION_INFORMATION    FileInformation;
-    IO_STATUS_BLOCK                 ioStatus;
+    FILE_DISPOSITION_INFORMATION    FileInformation = { 0 };
+    IO_STATUS_BLOCK                 ioStatus = { 0 };
     PIO_STACK_LOCATION              irpSp;
     PSECTION_OBJECT_POINTERS        pSectionObjectPointer;
 
@@ -1712,7 +1712,7 @@ NTSTATUS DeleteFileByXCBFunction(PUNICODE_STRING ustrFileName)
         0);
     if (NT_SUCCESS(ntStatus))
     {
-        PFILE_OBJECT FileObject;
+        PFILE_OBJECT FileObject = NULL;
 
         ntStatus = ObReferenceObjectByHandle(handle,
             DELETE,
@@ -1760,7 +1760,7 @@ BOOLEAN IsFileReallyDeleted(PUNICODE_STRING FileName) {
     HANDLE hFile;
     IO_STATUS_BLOCK iosb;
     FILE_STANDARD_INFORMATION fsInfo = { 0 };
-    OBJECT_ATTRIBUTES oa;
+    OBJECT_ATTRIBUTES oa = { 0 };
 
     // 初始化对象属性（以查询为目的打开文件）
     InitializeObjectAttributes(&oa, FileName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);

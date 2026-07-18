@@ -191,6 +191,16 @@ Private Function ProcessValueData(dataType As DWORD, dataBuffer() As Byte, dataS
             If Len(result) > 0 Then result = Left(result, Len(result) - 2)
             Return result
             
+        Case REG_NONE
+
+            Dim s As String
+
+            For i As Integer = 0 To dataSize-1
+                s &= Hex(dataBuffer(i),2) & " "
+            Next
+
+            Return RTrim(s)
+            
         Case Else
             Return "(未知类型: " & Str(dataType) & ")"
     End Select
@@ -679,6 +689,12 @@ End Function
 
 ' 新增：对比API与Hive结果，检测隐藏项
 Private Sub DetectHiddenItems(apiKey As REG_KEY_ITEM, hiveKey As REG_KEY_ITEM, hiddenSubKeys() As String, hiddenValues() As REG_VALUE_ITEM)
+For i As Integer = 0 To Ubound(hiveKey.Values)
+    Print "Hive Value = [" & hiveKey.Values(i).ValueName & "] Len=" & Len(hiveKey.Values(i).ValueName)
+Next
+For j As Integer = 0 To UBound(apiKey.Values)
+    Print "API  Value = [" & apiKey.Values(j).ValueName & "] Len=" & Len(apiKey.Values(j).ValueName)
+Next
     Dim hiddenSubKeyCount As Integer = 0
     Dim hiddenValueCount As Integer = 0
     
@@ -729,6 +745,7 @@ End Sub
 
 ' ===================== 新增：仅本函数使用的辅助函数（合并Hive数据） =====================
 Private Sub MergeHiveItems(ByRef target As REG_KEY_ITEM, ByRef source As REG_KEY_ITEM)
+    ' 需要去重
     ' 合并子键
     If UBound(source.SubKeys) >= LBound(source.SubKeys) Then
         Dim i As Integer
@@ -747,6 +764,51 @@ Private Sub MergeHiveItems(ByRef target As REG_KEY_ITEM, ByRef source As REG_KEY
     End If
 End Sub
 
+Private Function ResolveRelativePath( _
+    currentPath As String, _
+    hiveInfo As ROOT_HIVE_INFO _
+) As String
+
+
+    Dim cur As String = PathToUpper(currentPath)
+
+    Dim root As String = _
+        PathToUpper(hiveInfo.LogicalRoot)
+
+
+    If root="" Then
+        root=hiveInfo.RootName
+    End If
+
+
+    If cur=root Then
+
+        Return hiveInfo.HiveSubPath
+
+    End If
+
+
+    If Left(cur,Len(root)+1)=root & "\" Then
+
+        Dim subPath As String
+
+        subPath=Mid(cur,Len(root)+2)
+
+
+        If hiveInfo.HiveSubPath<>"" Then
+            Return hiveInfo.HiveSubPath _
+                 & "\" & subPath
+        Else
+            Return subPath
+        End If
+
+    End If
+
+
+    Return ""
+
+End Function
+
 Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_ListView, UseHive As Boolean)
     ' ===== Step1: 通用初始化 - 获取当前节点API枚举结果 =====
     Dim apiKeyItem As REG_KEY_ITEM
@@ -762,6 +824,7 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     Dim hiddenSubKeys() As String
     Dim hiddenValues() As REG_VALUE_ITEM
     Dim currentPathNorm As String
+    Dim logicalRoot As String
     
     ' 新增：根键批量处理变量
     Dim rootHives() As String
@@ -868,30 +931,32 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
         
         ' 3. HKEY_USERS → 遍历所有用户子配置Hive
         Case "HKEY_USERS"
-            Print "DEBUG: 检测到根键 HKU，加载所有用户Hive..."
+
             ReDim hiveKeyItem.SubKeys(-1)
             ReDim hiveKeyItem.Values(-1)
-            hiveKeyItem.KeyPath = currentFullPath
-            hiveKeyItem.KeyPathUpper = currentPathUpper
-            
-            If apiGetSuccess And UBound(apiKeyItem.SubKeys) >= LBound(apiKeyItem.SubKeys) Then
-                For iRoot = LBound(apiKeyItem.SubKeys) To UBound(apiKeyItem.SubKeys)
-                    hivePath = currentFullPath & "\" & apiKeyItem.SubKeys(iRoot)
-                    Print "DEBUG: 加载HKU用户Hive: " & hivePath
-                    If GetHiveInfoFromPath(hivePath, hiveInfo) Then
-                        If LoadHive(hiveInfo, hiveCacheItem) Then
-                            Dim tempNK As ULong
-                            tempNK = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, "")
-                            If tempNK <> 0 Then
-                                Dim tempItem As REG_KEY_ITEM
-                                tempItem = GetKeyItemFromNK(hiveCacheItem.HiveData(), tempNK, hivePath)
-                                MergeHiveItems(hiveKeyItem, tempItem)
-                            End If
-                        End If
-                    End If
+
+
+            hiveKeyItem.KeyPath=currentFullPath
+
+
+            If apiGetSuccess Then
+
+                For iRoot=LBound(apiKeyItem.SubKeys) _
+                    To UBound(apiKeyItem.SubKeys)
+
+                    ReDim Preserve hiveKeyItem.SubKeys( _
+                        UBound(hiveKeyItem.SubKeys)+1)
+
+                    hiveKeyItem.SubKeys( _
+                        UBound(hiveKeyItem.SubKeys)) = _
+                        apiKeyItem.SubKeys(iRoot)
+
                 Next
+
             End If
-            GoTo DetectRootHiddenItems
+
+
+        Goto DetectRootHiddenItems
     End Select
     ' ==================================================================
     
@@ -923,14 +988,39 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     End Select
 
     ' 🔍 精准计算当前节点在对应Hive中的相对路径（核心！修复层级错乱）
-    If currentPathNorm = hiveRootUpper Then
-        relativePath = "" ' 根节点，无相对路径
-    ElseIf Left(currentPathNorm, Len(hiveRootUpper) + 1) = hiveRootUpper & "\" Then
-        relativePath = Mid(currentPathNorm, Len(hiveRootUpper) + 2) ' 子节点，取相对路径
-    Else
-        Print "DEBUG: 路径与Hive不匹配，强制清空路径（隔离跨Hive数据）"
+    Select Case True
+
+    Case Left(currentPathNorm,4)="HKLM"
+        logicalRoot = PathToUpper(hiveInfo.RootName)
+
+    Case Left(currentPathNorm,4)="HKCU"
+        logicalRoot = "HKCU"
+
+    Case Left(currentPathNorm,3)="HKU"
+        logicalRoot = PathToUpper(hiveInfo.RootName)
+
+    Case Left(currentPathNorm,4)="HKCC"
+        logicalRoot = "HKCC"
+
+    End Select
+
+    If currentPathNorm = logicalRoot Then
+
         relativePath = ""
+
+    ElseIf Left(currentPathNorm, Len(logicalRoot)+1) = logicalRoot & "\" Then
+
+        relativePath = Mid(currentPathNorm, Len(logicalRoot)+2)
+
+    Else
+
+        Print "Path mismatch"
+        Exit Sub
+
     End If
+
+
+    Print "DEBUG RelativePath:" & relativePath
 
     ' 仅读取当前Hive、当前路径的数据（绝对不读取其他Hive/父级数据）
     targetNKOffset = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, relativePath)
@@ -1082,7 +1172,7 @@ RenderFinalUI:
     End If
     If UBound(hiddenValues) >= LBound(hiddenValues) Then
         For j As Integer = LBound(hiddenValues) To UBound(hiddenValues)
-            AddItemColListEx lvwValue, 3,,, WStr(hiddenValues(j).ValueName & " [隐藏]"), WStr(GetRegTypeName(hiddenValues(j).ValueType)), "[隐藏数据]"
+            AddItemColListEx lvwValue, 3,,, WStr(hiddenValues(j).ValueName & " [隐藏]"), WStr(GetRegTypeName(hiddenValues(j).ValueType)), WStr("[隐藏数据]")
         Next
     End If
     

@@ -438,7 +438,7 @@ NTSTATUS ControlCallback(PVOID pCallbackFunc, PUCHAR OldCode, BOOLEAN Status)
 	// 初始化并获取自旋锁
 	KSPIN_LOCK mySpinLock;
 	KeInitializeSpinLock(&mySpinLock);
-	KIRQL oldIrql;
+	KIRQL oldIrql = 0;
 	KeAcquireSpinLock(&mySpinLock, &oldIrql);
 
 	// 检查 MDL 大小是否足够
@@ -568,7 +568,7 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount)
 	static ULONG gCacheCount = 0;
 	static BOOLEAN gValid = FALSE;
 
-	ULONG maxNum = 64;
+	//ULONG maxNum = 64;
 	ULONG ulFilterListSize = 0;
 	PFLT_FILTER* ppFilterList = NULL;
 	ULONG i = 0;
@@ -944,8 +944,8 @@ EnumerateMiniFilterInstances(
 	}
 
 	// 分配自定义结构体数组
-	instanceArray = (PINSTANCE_DETAIL_INFO)ExAllocatePoolWithTag(
-		PagedPool,
+	instanceArray = (PINSTANCE_DETAIL_INFO)ExAllocatePool2(
+		POOL_FLAG_PAGED,
 		count * sizeof(INSTANCE_DETAIL_INFO),
 		'tIsF'
 	);
@@ -1045,7 +1045,7 @@ EnumerateMiniFilterInstances(
 
 		if (status == STATUS_BUFFER_TOO_SMALL && aggBytesNeeded > 0)
 		{
-			aggBuffer = ExAllocatePoolWithTag(PagedPool, aggBytesNeeded, 'tIsF');
+			aggBuffer = ExAllocatePool2(POOL_FLAG_PAGED, aggBytesNeeded, 'tIsF');
 			if (aggBuffer != NULL)
 			{
 				status = FltEnumerateInstanceInformationByFilter(
@@ -1895,7 +1895,7 @@ VOID GenerateAnonymousCallbackName(
 NTSTATUS InitializeCallbackTable() {
 	NTSTATUS status;
 	HANDLE hCallbackDir = NULL;
-	OBJECT_ATTRIBUTES oa;
+	OBJECT_ATTRIBUTES oa = { 0 };
 	UNICODE_STRING callbackDirPath = RTL_CONSTANT_STRING(L"\\Callback");
 
 	// CRITICAL: IRQL检查
@@ -1954,7 +1954,7 @@ NTSTATUS InitializeCallbackTable() {
 				RtlAppendUnicodeToString(&objectPath, L"\\Callback\\");
 				RtlAppendUnicodeStringToString(&objectPath, &pCurrent->ObjectName);
 
-				PCALLBACK_OBJECT callbackObj;
+				PCALLBACK_OBJECT callbackObj = NULL;
 				status = ObReferenceObjectByName(&objectPath, OBJ_CASE_INSENSITIVE, NULL, 0,
 					*ExCallbackObjectType, KernelMode, NULL, (PVOID*)&callbackObj);
 
@@ -1978,7 +1978,7 @@ NTSTATUS InitializeCallbackTable() {
 
 					// 添加条目（在自旋锁保护下）
 					if (g_CallbackTable.Count < g_CallbackTable.Capacity) {
-						KIRQL oldIrql;
+						KIRQL oldIrql = 0;
 						KeAcquireSpinLock(&g_CallbackTable.Lock, &oldIrql);
 
 						PCALLBACK_ENTRY entry = &g_CallbackTable.Entries[g_CallbackTable.Count++];
@@ -2098,7 +2098,7 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 	ULONG64 CallbackListOffset = 0;
 
 	// 判断操作系统版本
-	if (GetNtStructOffset(L"_OBJECT_TYPE", L"CallbackList", &CallbackListOffset) == STATUS_SUCCESS) {
+	if (GetNtStructOffset(L"_OBJECT_TYPE", L"CallbackList", (PLONG)&CallbackListOffset) == STATUS_SUCCESS) {
 		DbgPrint("Found CallbackList offset from PDB: 0x%llx\n", CallbackListOffset);
 	}
 	else {
@@ -2742,7 +2742,7 @@ exit11:
 	else {
 		DbgPrint("[-] Failed to find DeviceClass notify info\n");
 	}
-exit115:
+//exit115:
 	// 2. 枚举硬件配置文件通知（安全版，无锁异常）
 	HWPROFILE_NOTIFY_INFO hwInfo = { 0 };
 	if (NT_SUCCESS(FindHwProfileNotifyInfo(&hwInfo))) {
@@ -3791,7 +3791,7 @@ NTSTATUS DeleteCallback(PCallbackInfo pCallbackInfo)
 	{
 		if (pCallbackInfo->Others[0] != 0)
 		{
-			LARGE_INTEGER cookie;
+			LARGE_INTEGER cookie = { 0 };
 			cookie.QuadPart = (LONGLONG)pCallbackInfo->Others[0];
 			status = CmUnRegisterCallback(cookie);
 		}

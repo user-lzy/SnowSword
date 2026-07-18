@@ -259,7 +259,22 @@ Type MEMORY_CHANGE
     OldProtect As DWORD
 End Type
 
-'Dim MemoryInfo As MEMORY_CHANGE
+Dim Shared FrmMemoryChange_nWidth As Long, FrmMemoryChange_nHeight As Long
+
+Function FrmMemoryChange_SubclassProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM, ByVal uIdSubclass As UINT_PTR, ByVal dwRefData As DWORD_PTR) As LRESULT
+    Select Case uMsg
+        Case WM_SIZING
+            Dim pRect As RECT Ptr = Cast(RECT Ptr, lParam)
+            pRect->Right = pRect->Left + FrmMemoryChange_nWidth
+            pRect->bottom = pRect->top + FrmMemoryChange_nHeight
+            Return 1
+
+        Case WM_NCDESTROY
+            RemoveWindowSubclass hWnd, @FrmMemoryChange_SubclassProc, uIdSubclass
+    End Select
+
+    Return DefSubclassProc(hWnd, uMsg, wParam, lParam)
+End Function
 
 '[FrmMemoryChange]事件 : 窗口完全显示后。
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
@@ -270,6 +285,9 @@ Sub FrmMemoryChange_Shown(hWndForm As hWnd, UserData As Integer)
     'Print "Addr:0x" & WHex(mc->Addr) & " dwSize:0x" & WHex(mc->dwSize) & " OldProtect:0x" & mc->OldProtect
     txtOld.Text = "0x" & mc->OldProtect
     Me.UserData(0) = Cast(Integer, mc)
+    FrmMemoryChange_nWidth = Me.Width
+    FrmMemoryChange_nHeight = Me.Height
+    SetWindowSubclass Me.hWnd, @FrmMemoryChange_SubclassProc, 1, 0
     'Deallocate mc
 End Sub
 

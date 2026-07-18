@@ -179,6 +179,12 @@ Function GetSystemVersion() As String
     End If
 End Function
 
+Function IsSupportOS() As Boolean
+    Dim osvi As RTL_OSVERSIONINFOEXW
+    osvi.dwOSVersionInfoSize = SizeOf(OSVERSIONINFOW)
+    Return NT_SUCCESS(RtlGetVersion(@osvi)) AndAlso (osvi.dwMajorVersion >= 10) AndAlso (osvi.dwBuildNumber >= 19041)
+End Function
+
 Sub CopyDataToClipboard(ByVal strData As String)
     Dim hMemory As HGLOBAL
     Dim pMemory As LPVOID

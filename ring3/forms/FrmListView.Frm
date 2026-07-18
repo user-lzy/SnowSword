@@ -17,7 +17,7 @@ Repeat=True
 Left=0
 Top=0
 Width=775
-Height=538
+Height=544
 TopMost=False
 Child=False
 MdiChild=False
@@ -253,6 +253,15 @@ Left=610
 Top=160
 Tag=
 
+[PopupMenu]
+Name=mnuHook
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuHook_mnuRefresh0-10移除HookFrmListView_mnuHook_mnuRemoveHook0-10-FrmListView_mnuHook_mnuStep10-10查看/编辑内存FrmListView_mnuHook_mnuEditMemory0-10
+Left=650
+Top=160
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -332,124 +341,39 @@ Dim Shared LastClickedSubItem As Long = -1 ' 最后点击的列
 
 Dim Shared BusyDelete As Long = 0
 
-Const MIN_WIDTH = 350
-Const MIN_HEIGHT = 500
-'Const MAX_WIDTH = 350
-'Const MAX_HEIGHT = 500
+Sub FrmListView_UpdateLayout()
+    Dim rc As RECT
+    GetClientRect Me.hWnd, @rc
 
-' 窗口过程：处理消息
-Function FrmListView_WndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
-    Select Case uMsg
-        Case WM_SIZING
-            ' lParam是RECT结构体指针（拟调整的窗口矩形）
-            Dim As RECT Ptr pRect = Cast(RECT Ptr, lParam)
-            Dim newWidth As Integer = pRect->right - pRect->left ' 计算拟调整的宽度
-            Dim newHeight As Integer = pRect->bottom - pRect->top  ' 计算拟调整的高度
-            'Print "WM_SIZE"
-            ' 根据拉伸方向（wParam）调整宽度
-            Select Case wParam
-                ' 1. 仅调整左边界（影响宽度）
-                Case WMSZ_LEFT
-                    ' 限制宽度在[MIN_WIDTH, MAX_WIDTH]
-                    If newWidth < MIN_WIDTH Then
-                        pRect->left = pRect->right - MIN_WIDTH  ' 强制左边界右移，保证最小宽度
-                    'ElseIf newWidth > MAX_WIDTH Then
-                    '    pRect->left = pRect->right - MAX_WIDTH  ' 强制左边界左移，保证最大宽度
-                    End If
-                
-                ' 2. 仅调整右边界（影响宽度）
-                Case WMSZ_RIGHT
-                    If newWidth < MIN_WIDTH Then
-                        pRect->right = pRect->left + MIN_WIDTH  ' 强制右边界左移，保证最小宽度
-                    'ElseIf newWidth > MAX_WIDTH Then
-                    '    pRect->right = pRect->left + MAX_WIDTH  ' 强制右边界右移，保证最大宽度
-                    End If
-                
-                ' 3. 仅调整上边界（影响高度）
-                Case WMSZ_TOP
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->top = pRect->bottom - MIN_HEIGHT  ' 强制上边界上移，保证最小高度
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->top = pRect->bottom - MAX_HEIGHT  ' 强制上边界下移，保证最大高度
-                    End If
-                
-                ' 4. 仅调整下边界（影响高度）
-                Case WMSZ_BOTTOM
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->bottom = pRect->top + MIN_HEIGHT  ' 强制下边界下移，保证最小高度
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->bottom = pRect->top + MAX_HEIGHT  ' 强制下边界上移，保证最大高度
-                    End If
-                
-                ' 5. 调整左上角（同时影响宽度和高度）
-                Case WMSZ_TOPLEFT
-                    ' 先限制宽度
-                    If newWidth < MIN_WIDTH Then
-                        pRect->left = pRect->right - MIN_WIDTH
-                    'ElseIf newWidth > MAX_WIDTH Then
-                    '    pRect->left = pRect->right - MAX_WIDTH
-                    End If
-                    ' 再限制高度（需重新计算宽高，因为left可能已修改）
-                    newHeight = pRect->bottom - pRect->top  ' 重新计算高度
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->top = pRect->bottom - MIN_HEIGHT
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->top = pRect->bottom - MAX_HEIGHT
-                    End If
-                
-                ' 6. 调整右上角（同时影响宽度和高度）
-                Case WMSZ_TOPRIGHT
-                    ' 先限制宽度
-                    If newWidth < MIN_WIDTH Then
-                        pRect->right = pRect->left + MIN_WIDTH
-                    ElseIf newWidth > MAX_WIDTH Then
-                        pRect->right = pRect->left + MAX_WIDTH
-                    End If
-                    ' 再限制高度
-                    newHeight = pRect->bottom - pRect->top
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->top = pRect->bottom - MIN_HEIGHT
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->top = pRect->bottom - MAX_HEIGHT
-                    End If
-                
-                ' 7. 调整左下角（同时影响宽度和高度）
-                Case WMSZ_BOTTOMLEFT
-                    ' 先限制宽度
-                    If newWidth < MIN_WIDTH Then
-                        pRect->left = pRect->right - MIN_WIDTH
-                    'ElseIf newWidth > MAX_WIDTH Then
-                    '    pRect->left = pRect->right - MAX_WIDTH
-                    End If
-                    ' 再限制高度
-                    newHeight = pRect->bottom - pRect->top
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->bottom = pRect->top + MIN_HEIGHT
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->bottom = pRect->top + MAX_HEIGHT
-                    End If
-                
-                ' 8. 调整右下角（同时影响宽度和高度）
-                Case WMSZ_BOTTOMRIGHT
-                    ' 先限制宽度
-                    If newWidth < MIN_WIDTH Then
-                        pRect->right = pRect->left + MIN_WIDTH
-                    'ElseIf newWidth > MAX_WIDTH Then
-                    '    pRect->right = pRect->left + MAX_WIDTH
-                    End If
-                    ' 再限制高度
-                    newHeight = pRect->bottom - pRect->top
-                    If newHeight < MIN_HEIGHT Then
-                        pRect->bottom = pRect->top + MIN_HEIGHT
-                    'ElseIf newHeight > MAX_HEIGHT Then
-                    '    pRect->bottom = pRect->top + MAX_HEIGHT
-                    End If
-            End Select
-            
-            Return 1  ' 通知系统使用修改后的矩形
-    End Select
-    Return CallWindowProc(Cast(WndProc, prevFrmListViewProc), hWnd, uMsg, wParam, lParam)
-End Function
+    Dim cw As Long = rc.right
+    Dim ch As Long = rc.bottom
+
+    BeginControlUpdate
+
+    ' 底部栏高度
+    Const BOTTOM_BAR_HEIGHT As Long = 35
+    Const FILTER_WIDTH As Long = 200
+
+    ' ListView 占满上部空间
+    ListView.Left = 0
+    ListView.Top = 0
+    ListView.Width = cw
+    ListView.Height = ch - BOTTOM_BAR_HEIGHT
+
+    ' 底部筛选框
+    TxtFilter1.Left = 0
+    TxtFilter1.Top = ch - BOTTOM_BAR_HEIGHT
+    TxtFilter1.Width = cw - FILTER_WIDTH
+    TxtFilter1.Height = BOTTOM_BAR_HEIGHT
+
+    ' 底部状态栏
+    lblNum.Left = cw - FILTER_WIDTH
+    lblNum.Top = ch - BOTTOM_BAR_HEIGHT
+    lblNum.Width = FILTER_WIDTH
+    lblNum.Height = BOTTOM_BAR_HEIGHT
+
+    EndControlUpdate
+End Sub
 
 '[FrmListView]事件 : 活动状态（被激活或失去焦点）
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
@@ -623,23 +547,24 @@ Function FrmListView_Custom(hWndForm As hWnd, wMsg As UInteger, wParam As wParam
     Return False
 End Function
 
+Sub FrmListView_Attach(ByVal hWndForm As HWND)
+    Me.hWndForm = hWndForm
+
+    ListView.hWndForm = hWndForm
+    lblNum.hWndForm = hWndForm
+    TxtFilter1.hWndForm = hWndForm
+End Sub
+
 '[FrmListView]事件 : 窗口已经改变了大小
 'hWndForm  当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'fwSizeType = SIZE_MAXHIDE     SIZE_MAXIMIZED   SIZE_MAXSHOW    SIZE_MINIMIZED    SIZE_RESTORED  
 ''            其他窗口最大化   窗口已最大化     其他窗口恢复    窗口已最小化      窗口已调整大小
 'nWidth nHeight  是客户区大小，不是全部窗口大小。
 Sub FrmListView_WM_Size(hWndForm As hWnd, fwSizeType As Long, nWidth As Long, nHeight As Long)
+    FrmListView_Attach hWndForm
     Static Inited As Boolean
     If fwSizeType = SIZE_RESTORED And Inited Then
-        ' 调整X轴方向
-        ListView.Width = nWidth
-        TxtFilter1.Width = nWidth - lblNum.Width
-        lblNum.Left = TxtFilter1.Width
-        
-        ' 调整Y轴方向
-        ListView.Height = nHeight - ListView.Top - TxtFilter1.Height
-        TxtFilter1.Top = nHeight - TxtFilter1.Height
-        lblNum.Top = TxtFilter1.Top
+        FrmListView_UpdateLayout
     End If
     Inited = True
 End Sub
@@ -820,8 +745,8 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetMsgHookList False, CurrentPID, ListView
-            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
+            
+            If Not GetMsgHookList(False, CurrentPID, ListView) Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
         Case EventHook
             If Not IsDriverLoaded Then 
@@ -831,8 +756,8 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetEventHookList False, CurrentPID, ListView
-            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
+            
+            If Not GetEventHookList(False, CurrentPID, ListView) Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 事件钩子列表"
         Case Hotkey
             If Not IsDriverLoaded Then 
@@ -842,8 +767,8 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
                     Return
                 End If
             End If
-            GetHotkeyList False, CurrentPID, ListView
-            If ListView.ItemCount = 0 Then AfxMsg "枚举失败,可以尝试重新枚举"
+            
+            If Not GetHotkeyList(False, CurrentPID, ListView) Then AfxMsg "枚举失败,可以尝试重新枚举"
             Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 热键列表"
         Case UnlockTheFile
             If Not IsDriverLoaded Then 
@@ -913,6 +838,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case Handles
             mnuHandle.hWndForm = hWndForm
             PopupMenu hWndForm, mnuHandle.HMENU
+        Case Hook
+            mnuHook.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuHook.HMENU
         Case ProcessTimer
             mnuProcessTimer.hWndForm = hWndForm
             PopupMenu hWndForm, mnuProcessTimer.HMENU
@@ -1027,13 +955,13 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
             Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->ProcessId = CurrentPID
-            CurrentInfo_New->ThreadId = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
+            CurrentInfo_New->ThreadId = ValUInt(ListView.GetItemText(ListView.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadCallStack
             FrmListView.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuThread_mnuViewAllInfo ' 查看详细信息
             Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->ProcessId = CurrentPID
-            CurrentInfo_New->ThreadId = ValInt(ListView.GetItemText(ListView.SelectedItem, 0))
+            CurrentInfo_New->ThreadId = ValUInt(ListView.GetItemText(ListView.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadAllInfo
             FrmOtherInfo.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuThread_mnuEditMemory ' 查看/编辑内存
@@ -1911,6 +1839,28 @@ Sub FrmListView_mnuKernelThread_WM_Command(hWndForm As hWnd,wID As ULong)
    End Select
 End Sub
 
+'[FrmListView.mnuHook]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuHook_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentPID As DWORD = CurrentInfo->ProcessId
+   Select Case wID
+        Case FrmListView_mnuHook_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetKernelThreadList ListView
+            lblNum.Caption = "数量:" & ListView.ItemCount
+        Case FrmListView_mnuHook_mnuRemoveHook ' 移除Hook
 
-
-
+        Case FrmListView_mnuHook_mnuEditMemory ' 查看/编辑内存
+            If LastClickedSubItem <> 1 AndAlso LastClickedSubItem <> 3 Then Exit Sub
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
+   End Select
+End Sub

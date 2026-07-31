@@ -146,32 +146,85 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
+    
+    ' =====================================================================
+    ' 确保 Actor 已启动
+    ' =====================================================================
+    If g_hSymbolThread = 0 Then
+        If SymbolActor_Init() = False Then
+            MyLog.PrintLog LOG_WARN, "GetMsgHookList", "SymbolActor_Init", "失败"
+            'Return False
+        End If
+    End If
+
+    ' =====================================================================
+    ' 安全预热：通过 Actor 线程同步加载，UI 线程等待并显示进度
+    ' =====================================================================
+    Dim pReq As SYMBOL_REQUEST Ptr = SymbolActor_SubmitRequest(REQ_PRELOAD_WIN32KFULL)
+    If pReq = 0 Then Return False
+    
+    Dim lastPercent As Integer = -1
+    Dim lastTick As DWORD = 0
+    
+    FrmListView.hWndForm = lvwMsgHook.hWndForm
+    FrmListView.lblNum.hWndForm = lvwMsgHook.hWndForm
+
+    FrmListView.lblNum.Caption = "[预热] 开始加载 win32kfull.sys 符号..."
+    Do
+        Dim dwWait As DWORD = WaitForSingleObject(pReq->hComplete,50)
+        If dwWait = WAIT_OBJECT_0 Then
+            Exit Do
+        End If
+
+        Dim nowTime As DWORD = GetTickCount()
+
+        ' 200ms刷新一次
+        If nowTime - lastTick >= 200 Then
+
+            Dim percent As Integer
+            percent = g_SymbolPercent
+            If percent >= 0 AndAlso percent <> lastPercent Then
+                FrmListView.lblNum.Caption = _
+                    "[预热进度] " & Str(percent) & "%"
+                FrmListView.lblNum.Refresh
+                lastPercent = percent
+            End If
+            lastTick = nowTime
+        End If
+        FF_DoEvents
+    Loop
+
+    If pReq->ResultStatus = STATUS_SUCCESS Then
+        FrmListView.lblNum.Caption = _
+            "[预热] win32kfull.sys 符号加载成功 (100%)"
+        FrmListView.lblNum.Refresh
+    Else
+        FrmListView.lblNum.Caption = _
+            "[预热] 加载失败，将在首次查询时自动重试"
+        FrmListView.lblNum.Refresh
+    End If
+    Deallocate(pReq)
 
     ' 第一次IOCTL：获取缓冲区大小
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumMsgHook, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetMsgHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumMsgHook, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetMsgHookList", "IOCTL_EnumMsgHook", "第一次失败"
         Return False
     End If
 
     dataSize = lpRet
-    If dataSize = 0 Then
-        Print "未发现任何消息钩子"
-        Return False
-    End If
+    If dataSize = 0 Then Return False
 
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
-        Print "内存分配失败"
+        MyLog.PrintLog LOG_FATAL, "GetMsgHookList", "Allocate", "失败,dataSize=" & dataSize
         Return False
     End If
 
     ' 第二次IOCTL：获取钩子数据
-    IoControl hDrv, IOCTL_EnumMsgHook, NULL, 0, pData, dataSize, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetMsgHookList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumMsgHook, NULL, 0, pData, dataSize, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetMsgHookList", "IOCTL_EnumMsgHook", "第二次失败"
         Deallocate pData
         Return False
     End If
@@ -210,14 +263,15 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
         End If
         ' ====================== 核心：地址解析逻辑 ======================
         If LenW(info.ModulePath) = 0 Then
+            'Print "LenW(info.ModulePath) = 0," & "realVA=0x" & WHex(realVA)
             realVA = info.pfn
             finalModulePath = GetModuleOfAddress(hProcess, Cast(PVOID, realVA)) 
         ElseIf LenW(info.ModulePath) > 0 Then
             Dim baseAddr As ULONG64 = Cast(ULONG64, GetModuleBaseByPath(hProcess, info.ModulePath))
-            If baseAddr = NULL Then Print info.ModulePath & "解析失败"
             realVA = baseAddr + info.pfn
             finalModulePath = info.ModulePath
         Else
+            'Print "LenW(info.ModulePath) ? 0," & "realVA=0x" & WHex(realVA)
             realVA = info.pfn
             finalModulePath = info.ModulePath
         End If
@@ -252,9 +306,8 @@ Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, l
 
     ' 第一次IOCTL：获取缓冲区大小
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumEventHook, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetEventHookList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumEventHook, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetEventHookList", "IOCTL_EnumEventHook", "第一次失败"
         Return False
     End If
     
@@ -275,7 +328,6 @@ Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, l
     
     dataSize = lpRet
     If dataSize = 0 Then
-        Print "未发现任何事件钩子"
         CommitListViewView lvwEventHook
         Return False
     End If
@@ -283,14 +335,13 @@ Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, l
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
-        Print "内存分配失败"
+        MyLog.PrintLog LOG_FATAL, "GetEventHookList", "Allocate", "失败,dataSize=" & dataSize
         Return False
     End If
 
     ' 第二次IOCTL：获取数据
-    IoControl hDrv, IOCTL_EnumEventHook, NULL, 0, pData, dataSize, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetEventHookList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumEventHook, NULL, 0, pData, dataSize, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetEventHookList", "IOCTL_EnumEventHook", "第二次失败"
         Deallocate pData
         Return False
     End If
@@ -367,9 +418,8 @@ Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwH
 
     ' 第一次IOCTL：获取缓冲区大小
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumHotkey, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetHotkeyList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumHotkey, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetHotkeyList", "IOCTL_EnumHotkey", "第一次失败"
         'Print "lpRet:" & lpRet
         Return False
     End If
@@ -377,11 +427,13 @@ Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwH
     InitListViewData lvwHotkey
     ' ====================== 热键 PID列处理 ======================
     Const HOTKEY_PID_COL_INDEX = 4
-    If PID <> Cast(DWORD, -1) Then
+    If Not bGlobal Then
+        ' 非全局：删除 PID 列
         If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) = "PID" Then
             lvwHotkey.DeleteColumn(HOTKEY_PID_COL_INDEX)
         End If
     Else
+        ' 全局：插入 PID 列
         If lvwHotkey.ColumnText(HOTKEY_PID_COL_INDEX) <> "PID" Then
             lvwHotkey.InsertColumn(HOTKEY_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
         End If
@@ -390,7 +442,6 @@ Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwH
 
     dataSize = lpRet
     If dataSize = 0 Then
-        Print "未发现任何系统热键"
         CommitListViewView lvwHotkey
         Return False
     End If
@@ -398,14 +449,13 @@ Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwH
     ' 分配内存
     pData = Allocate(dataSize)
     If pData = NULL Then
-        Print "内存分配失败"
+        MyLog.PrintLog LOG_FATAL, "GetHotkeyList", "Allocate", "失败,dataSize=" & dataSize
         Return False
     End If
 
     ' 第二次IOCTL：获取热键数据
-    IoControl hDrv, IOCTL_EnumHotkey, NULL, 0, pData, dataSize, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetHotkeyList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumHotkey, NULL, 0, pData, dataSize, @lpRet) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetHotkeyList", "IOCTL_EnumHotkey", "第二次失败"
         Deallocate pData
         Return False
     End If

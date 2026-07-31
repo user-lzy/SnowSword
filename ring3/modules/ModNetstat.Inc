@@ -343,14 +343,14 @@ Private Sub EnumProtocolSPI(lvwSPI As Class_ListView, ByRef spiType As WString, 
     ' bufSize 会被设置为所需大小，即使返回 SOCKET_ERROR
     If bufSize = 0 Then
         ' 可能是32位系统上没有64位提供者，或确实没有协议
-        Print spiType; ": 无数据或不可用 (错误:"; Hex(dwErr); ")"
+        MyLog.PrintLog LOG_ERROR, "EnumProtocolSPI", IIf(is64, "WSCEnumProtocols", "WSCEnumProtocols32"), "第一次调用,dwErr=" & dwErr & ",spiType=" & spiType
         Exit Sub
     End If
     
     ' 分配内存
     pBuffer = Allocate(bufSize)
     If pBuffer = NULL Then
-        Print spiType; ": 内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "EnumProtocolSPI", "Allocate", "bufSize=" & bufSize
         Exit Sub
     End If
     
@@ -364,7 +364,7 @@ Private Sub EnumProtocolSPI(lvwSPI As Class_ListView, ByRef spiType As WString, 
     End If
     
     If lProtocolsCount = SOCKET_ERROR Then
-        Print spiType; ": 枚举失败，错误码："; Hex(dwErr)
+        MyLog.PrintLog LOG_ERROR, "EnumProtocolSPI", IIf(is64, "WSCEnumProtocols", "WSCEnumProtocols32"), "第二次调用,dwErr=" & dwErr & ",spiType=" & spiType
         Deallocate(pBuffer)
         Exit Sub
     End If
@@ -432,7 +432,7 @@ Function GetNameSpaceProviderInfoByIndex(index As Integer, is64 As Boolean, strI
     ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE, StrPtrW(szRegPath), 0, KEY_QUERY_VALUE, @hKey)
     
     If ret <> ERROR_SUCCESS Then
-        Print "regPath:" & "HKEY_LOCAL_MACHINE\" & szRegPath
+        'Print "regPath:" & "HKEY_LOCAL_MACHINE\" & szRegPath
         Return "注册表打开失败(" & WHex(ret) & ")"
     End If
     
@@ -442,7 +442,7 @@ Function GetNameSpaceProviderInfoByIndex(index As Integer, is64 As Boolean, strI
     RegCloseKey(hKey)
     
     If ret = ERROR_SUCCESS AndAlso dwPathLen > 2 Then
-        Print "szPath:" & szPath & " dwPathLen:" & dwPathLen
+        'Print "szPath:" & szPath & " dwPathLen:" & dwPathLen
         szPath = FF_Replace(szPath, "%SystemRoot%", Environ("SystemRoot"))
         Return szPath
     Else
@@ -463,8 +463,6 @@ Private Sub EnumNameSpaceSPI(lvwSPI As Class_ListView, ByRef spiType As WString,
     ' ======================
     ' 第一次调用：获取缓冲区大小
     ' ======================
-    ' 你的声明只有2个参数：bufSize指针 + buffer指针
-    ' 传入 NULL buffer，让函数返回需要的缓冲区大小到 bufSize
     If is64 Then
         lCount = WSCEnumNameSpaceProviders32(@bufSize, NULL)
     Else
@@ -474,7 +472,7 @@ Private Sub EnumNameSpaceSPI(lvwSPI As Class_ListView, ByRef spiType As WString,
     ' 检查返回值：第一次调用通常返回 SOCKET_ERROR，但 bufSize 会被设置
     ' 如果 bufSize 仍为0，说明确实没有数据
     If bufSize = 0 Then
-        Print spiType; ": 无数据或不可用"
+        MyLog.PrintWin32Error "EnumProtocolSPI", IIf(is64, "WSCEnumNameSpaceProviders", "WSCEnumNameSpaceProviders32"), "第一次调用,spiType=" & spiType
         Exit Sub
     End If
     
@@ -483,7 +481,7 @@ Private Sub EnumNameSpaceSPI(lvwSPI As Class_ListView, ByRef spiType As WString,
     ' ======================
     pBuffer = Allocate(bufSize)
     If pBuffer = NULL Then
-        Print spiType; ": 内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "EnumProtocolSPI", "Allocate", "bufSize=" & bufSize
         Exit Sub
     End If
     
@@ -501,7 +499,7 @@ Private Sub EnumNameSpaceSPI(lvwSPI As Class_ListView, ByRef spiType As WString,
     ' 检查返回值
     If lCount = SOCKET_ERROR Then
         ' 没有 lpErrno 参数，直接用 GetLastError 或 WSAGetLastError
-        Print spiType; ": 枚举失败，错误码："; Hex(GetLastError())
+        MyLog.PrintWin32Error "EnumProtocolSPI", IIf(is64, "WSCEnumNameSpaceProviders", "WSCEnumNameSpaceProviders32"), "第二次调用,spiType=" & spiType
         Deallocate(pBuffer)
         Exit Sub
     End If
@@ -560,7 +558,7 @@ Sub GetWinsockSPIList(lvwSPI As Class_ListView)
     ' 2. 初始化Winsock
     ' ======================
     If WSAStartup(MAKEWORD(2, 2), @wsaData) <> 0 Then
-        Print "Winsock初始化失败"
+        MyLog.PrintWin32Error "GetWinsockSPIList", "WSAStartup"
         Exit Sub
     End If
     
@@ -598,7 +596,7 @@ Function RemoveWinsockSPI(ByRef wszProviderId As WString, ByRef spiType As WStri
     
     ' GUID 字符串转结构体
     If CLSIDFromString(wszProviderId, @ProviderId) <> S_OK Then
-        Print "无效的GUID: " & wszProviderId
+        MyLog.PrintLog LOG_ERROR, "RemoveWinsockSPI", "CLSIDFromString", "无效的GUID: " & wszProviderId
         Return False
     End If
     
@@ -617,16 +615,15 @@ Function RemoveWinsockSPI(ByRef wszProviderId As WString, ByRef spiType As WStri
             lResult = WSCUnInstallNameSpace(@ProviderId)
             
         Case Else
-            Print "未知的SPI类型: " & spiType
+            MyLog.PrintLog LOG_ERROR, "RemoveWinsockSPI",, "未知的SPI类型: " & spiType
             Return False
     End Select
     
     ' 错误处理
     If lResult = SOCKET_ERROR Then
-        Print "移除 " & spiType & " [" & wszProviderId & "] 失败，错误码："; Hex(nErrno)
+        MyLog.PrintWin32Error "RemoveWinsockSPI", "", "nErrno=" & nErrno & ",wszProviderId=" & wszProviderId
         Return False
     Else
-        Print "移除 " & spiType & " [" & wszProviderId & "] 成功！"
         Return True
     End If
 End Function

@@ -144,7 +144,7 @@ NTSTATUS GetVolumeDeviceObjectByPath(
 
     // 2. 查询符号链接目标，得到卷设备路径
     target.MaximumLength = 128 * sizeof(WCHAR);
-    target.Buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, target.MaximumLength, 'tvol');
+    target.Buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, target.MaximumLength, 'tvol');
     if (!target.Buffer) {
         ZwClose(hLink);
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -227,7 +227,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
 
     // ✅ 关键：将传入的常量字符串拷贝到我们自己的可写非分页内存
     USHORT pathLength = (USHORT)(wcslen(filePathWchar) * sizeof(WCHAR));
-    PWCHAR pathBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, pathLength + sizeof(WCHAR), 'Path');
+    PWCHAR pathBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pathLength + sizeof(WCHAR), 'Path');
     if (!pathBuffer) return STATUS_INSUFFICIENT_RESOURCES;
     RtlCopyMemory(pathBuffer, filePathWchar, pathLength);
     pathBuffer[pathLength / sizeof(WCHAR)] = L'\0';  // 可选的 NULL 终止
@@ -255,7 +255,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
     }
 
     // 3. 分配读缓冲区
-    buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bytesToRead, 'pdAr');
+    buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bytesToRead, 'pdAr');
     if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
 
     // 4. 读取文件开头 512 字节
@@ -273,7 +273,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
 
     // 5. 打印为 ASCII 可视字符串
     {
-        PCHAR asciiStr = ExAllocatePool2(POOL_FLAG_NON_PAGED, bytesRead + 1, 'sApm');
+        PCHAR asciiStr = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bytesRead + 1, 'sApm');
         if (!asciiStr) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
 
         PUCHAR src = (PUCHAR)buffer;
@@ -505,7 +505,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             LPWSTR pProcessPath;
             UNICODE_STRING usImage;
 
-            pProcessPath = ExAllocatePool2(
+            pProcessPath = KernelAlloc_NonPagedPoolNx(
                 POOL_FLAG_NON_PAGED,
                 260 * sizeof(WCHAR),
                 'cbin');
@@ -617,7 +617,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         break;
         
     case IOCTL_DeleteFileByXCB:
-		ustrFileName = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
+		ustrFileName = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
 		if (ustrFileName == NULL) {
 			DbgPrint("Failed to allocate memory for ustrFileName\n");
 			status = STATUS_INSUFFICIENT_RESOURCES;
@@ -635,7 +635,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     case IOCTL_DeleteFileByIRP:
-        ustrFileName = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
+        ustrFileName = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
         if (ustrFileName == NULL) {
             DbgPrint("Failed to allocate memory for ustrFileName\n");
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -658,8 +658,8 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength >= sizeof(COPY_PATH)) {
             _try{
                 COPY_PATH stCopyPath = *(PCOPY_PATH)pInputData;
-                PWCHAR sourcePath = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'scph');
-                PWCHAR destPath = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'dcph');
+                PWCHAR sourcePath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'scph');
+                PWCHAR destPath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'dcph');
                 if (sourcePath == NULL || destPath == NULL) {
                     DbgPrint("Failed to allocate memory for sourcePath or destPath\n");
                     status = STATUS_INSUFFICIENT_RESOURCES;
@@ -773,7 +773,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pCallbacks = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * 512, 'cbin');
+            pCallbacks = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * 512, 'cbin');
             if (pCallbacks == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -803,7 +803,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     case IOCTL_EnumDpcTimers:
-		PSYSTEM_TIMER pDpcTimers = ExAllocatePool2(POOL_FLAG_NON_PAGED, 512 * sizeof(SYSTEM_TIMER), 'syst');
+		PSYSTEM_TIMER pDpcTimers = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, 512 * sizeof(SYSTEM_TIMER), 'syst');
         if (pDpcTimers) {
             EnumDpcTimers(pDpcTimers);
             if (pOutputData != NULL && OutputDataLength >= 512 * sizeof(SYSTEM_TIMER))
@@ -836,7 +836,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0)
         {
             PDRIVER_OBJECT DriverBase = *(PDRIVER_OBJECT*)pInputData;
-            PDRIVER_INFO pDriverInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
+            PDRIVER_INFO pDriverInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
             if (pDriverInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -969,7 +969,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             ulTimerCount = 0;
 
             // 分配缓存
-            pTimerArray = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WINDOW_TIMER) * 512, 'meT');
+            pTimerArray = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WINDOW_TIMER) * 512, 'meT');
             if (!pTimerArray)
             {
                 DbgPrint("[IOCTL_TIMER] 内存分配失败\n");
@@ -1145,7 +1145,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pGdtInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(GDT_INFO) * 512, 'gdti');
+            pGdtInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(GDT_INFO) * 512, 'gdti');
             if (pGdtInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1171,7 +1171,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pIdtInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(IDT_INFO) * 512, 'idti');
+            pIdtInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(IDT_INFO) * 512, 'idti');
             if (pIdtInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1333,7 +1333,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
 
             // 分配内核缓冲区
-            PVOID pKernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            PVOID pKernelBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
                 stMemory.Size,
                 'pmdK');
             if (!pKernelBuffer) {

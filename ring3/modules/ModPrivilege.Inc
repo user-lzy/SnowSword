@@ -18,7 +18,7 @@ Type PRIVILEGE_INFO
 End Type
 
 Function IsAdmin() As Boolean
-/'    Dim hToken As HANDLE, tp As TOKEN_PRIVILEGES, dwRetLen As DWORD
+    /'Dim hToken As HANDLE, tp As TOKEN_PRIVILEGES, dwRetLen As DWORD
 
     If OpenProcessToken(GetCurrentProcess, TOKEN_QUERY, @hToken) Then
         If GetTokenInformation(hToken, TokenStatistics, @tp, SizeOf(TOKEN_PRIVILEGES), @dwRetLen) Then IsAdmin = tp.PrivilegeCount
@@ -67,7 +67,7 @@ Sub RestartasAdmin(ByVal IsLoadDriver As Boolean = False)
         ' 关闭当前进程
         TerminateProcess GetCurrentProcess, 0
     Else
-        Print "ShellExecuteEx失败:" & GetLastError
+        MyLog.PrintWin32Error "RestartasAdmin", "ShellExecuteEx"
     End If
 End Sub
 
@@ -118,14 +118,14 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
     
     ' 打开进程令牌
     If OpenProcessToken(hProcess, TOKEN_QUERY, @hToken) = 0 Then
-        Print "OpenProcessToken" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetProcessPrivileges", "OpenProcessToken", "hProcess=0x" & WHex(hProcess)
         Exit Sub
     End If
     
     ' 获取所需缓冲区大小
     GetTokenInformation(hToken, TokenPrivileges, NULL, 0, @bufferSize)
     If bufferSize = 0 Then
-        Print "GetTokenInformation1" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetProcessPrivileges", "GetTokenInformation", "第一次调用"
         CloseHandle(hToken)
         Exit Sub
     End If
@@ -135,20 +135,13 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
     
     ' 获取特权信息
     If GetTokenInformation(hToken, TokenPrivileges, @infoBuffer(0), bufferSize, @bufferSize) = 0 Then
-        Print "GetTokenInformation2" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetProcessPrivileges", "GetTokenInformation", "第二次调用"
         CloseHandle(hToken)
         Exit Sub
     End If
-    
-    Print "bufferSize=" & bufferSize
 
     Dim pToken As TOKEN_PRIVILEGES Ptr
     pToken = Cast(TOKEN_PRIVILEGES Ptr,@infoBuffer(0))
-
-    Print "PrivilegeCount=" & pToken->PrivilegeCount
-
-    Print "TP Size=" & SizeOf(TOKEN_PRIVILEGES)
-    Print "LUID_ATTR Size=" & SizeOf(LUID_AND_ATTRIBUTES)
     
     ' 复制数据到结构体
     memcpy @tpTokens, @infoBuffer(0), SizeOf(TOKEN_PRIVILEGES) - (ANYSIZE_ARRAY * SizeOf(LUID_AND_ATTRIBUTES))
@@ -187,7 +180,7 @@ Sub GetProcessPrivileges(ByVal hProcess As HANDLE, ByRef langID As DWORD = 0, Pr
             Else
                 privInfo.sStatus = "Disabled"
             End If
-            'Print privInfo.sDisplay
+            
             ' 添加到数组
             ReDim Preserve PrivilegeInfo(count) As PRIVILEGE_INFO
             PrivilegeInfo(count) = privInfo
@@ -211,20 +204,24 @@ Sub GetProcessPrivilegeList(ByVal ProcessId As DWORD, lvwPrivilege As Class_List
     Dim hProcess As HANDLE = NULL
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(ProcessId)
+        If (hProcess <= 0) Then
+            MyLog.PrintWin32Error "GetProcessPrivilegeList", "SnowSword_OpenProcess", "ProcessId=" & ProcessId
+            Return
+        End If
     Else
-        hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, ProcessId)
-    End If
-    If (hProcess <= 0) Then
-        Print "OpenProcess " & ProcessId & " Failed!"
-        Exit Sub
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, ProcessId)
+        If (hProcess <= 0) Then
+            MyLog.PrintWin32Error "GetProcessPrivilegeList", "OpenProcess", "ProcessId=" & ProcessId
+            Return
+        End If
     End If
     
     ' 获取当前进程特权
     GetProcessPrivileges hProcess, langID, privileges()
     
     If UBound(privileges, 0) = 0 Then
-        Print "无法获取进程特权信息"
-        Exit Sub
+        MyLog.PrintLog LOG_ERROR, "GetProcessPrivilegeList", "GetProcessPrivileges", "无法获取进程特权信息"
+        Return
     End If
     
     For i = 0 To UBound(privileges)

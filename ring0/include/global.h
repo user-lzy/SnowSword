@@ -14,6 +14,9 @@ typedef unsigned long DWORD;
 typedef void VOID;
 #endif
 
+#define KernelAlloc_NonPagedPoolNx(Type, Count, Tag) \
+    ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(Type) * (Count), (Tag))
+
 // 声明自定义结构体
 struct AdvancedOptions {
 	BOOLEAN DenyCreateProcess;
@@ -161,8 +164,8 @@ VOID MyExEnumHandleTable(
 
 // 内核版 GetProcAddress
 PVOID KernelGetProcAddress(
-    _In_ PCHAR ModuleName,
-    _In_ PCHAR FunctionName
+    _In_ PCSTR ModuleName,
+    _In_ PCSTR FunctionName
 );
 
 // 内核全局变量：已加载模块列表头

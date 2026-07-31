@@ -237,7 +237,7 @@ Private Function Get32BitFuncAddress(ByVal hProcess As HANDLE, ByVal moduleBase 
     Dim namesAddr As ULONG_PTR = moduleBase + exportDir.AddressOfNames
     Dim ordinalsAddr As ULONG_PTR = moduleBase + exportDir.AddressOfNameOrdinals
     Dim functionsAddr As ULONG_PTR = moduleBase + exportDir.AddressOfFunctions
-    Print exportDir.NumberOfNames
+   ' Print exportDir.NumberOfNames
     For i As DWORD = 0 To exportDir.NumberOfNames - 1
         ' 读取函数名RVA
         Dim nameRVA As DWORD
@@ -581,7 +581,7 @@ Function ThreadStateToString(ByVal dwThreadId As DWORD, ByVal ThreadState As Lon
     Dim suspendCount As ULONG = 0
     Dim threadHandle As HANDLE = NULL
     Dim st As NTSTATUS
-    Print dwThreadId & " " & ThreadState & " " & WaitReason
+    'Print dwThreadId & " " & ThreadState & " " & WaitReason
     ' 第一步：转换基础状态
     Select Case ThreadState
         Case StateInitialized: stateStr = "Initialized"

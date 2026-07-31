@@ -274,7 +274,7 @@ Sub FrmCreateProcess_cmdOK_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         strProgram = LeftW(strCommandLine, pos1 - 1)      ' "notepad"
         strParameters = RightW(strCommandLine, LenW(strCommandLine) - pos1)  ' "F:\1.txt"
     End If
-    'Print strProgram & " " & strParameters
+    
     If Check2.Value Then
         If CreateSYSTEMPriviegeProcess(NULL, IIf(strCommandLine <> "", StrPtrW(strCommandLine), NULL)) Then
             AfxMsg "创建成功!"

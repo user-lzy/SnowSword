@@ -264,13 +264,13 @@ Function StorageDevice.WriteSector(sector As ULongInt, buffer As UByte Ptr) As I
     If Not This.IsOpen() Or buffer = NULL Then Return -1
     
     If sector >= 16 Then
-        Print "错误: Windows防护阻止写入扇区" & sector & " (允许0-15)"
+        MyLog.PrintLog LOG_ERROR, "StorageDevice.WriteSector",, "Windows阻止R3写入扇区" & sector & "(允许0-15)"
         Return -2
     End If
     
     ' 检查是否锁定
     If Not This.m_isLocked Then
-        Print "警告: 写入前未锁定设备，可能导致数据损坏"
+        MyLog.PrintLog LOG_WARN, "StorageDevice.WriteSector",, "写入前未锁定设备,可能导致数据损坏"
     End If
     
     Select Case This.m_type
@@ -337,7 +337,7 @@ Sub StorageDevice.QueryInfo()
     Select Case This.m_type
     Case HD_ATA: This.ATA_Identify()
     Case HD_SCSI, HD_NVME: This.SCSI_Inquiry()
-    Case Else: Print "不支持的设备类型"
+    Case Else: MyLog.PrintLog LOG_ERROR, "StorageDevice.QueryInfo",, "不支持的设备类型"
     End Select
 End Sub
 
@@ -503,7 +503,7 @@ Sub StorageDevice.ATA_Identify()
             model(i + 1) = dataBuffer[54 + i]
         Next
         model(40) = 0
-        Print "型号: " & *CPtr(ZString Ptr, @model(0))
+        MyLog.PrintInfo "StorageDevice.ATA_Identify",, "型号: " & *CPtr(ZString Ptr, @model(0))
     End If
     
     Deallocate(memBlock)
@@ -564,7 +564,7 @@ Function StorageDevice.SCSI_Read(sector As ULongInt, buffer As UByte Ptr) As Int
                       @bytesReturned, NULL) Then
         Return 512
     Else
-        Print "[SCSI_Read]DeviceIoControl:" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "StorageDevice.SCSI_Read", "IOCTL_SCSI_PASS_THROUGH_DIRECT", "sector=" & sector
         Return -1
     End If
 End Function
@@ -619,15 +619,15 @@ Sub StorageDevice.SCSI_Inquiry()
     If DeviceIoControl(This.m_handle, IOCTL_SCSI_PASS_THROUGH_DIRECT, _
                       @sptd, SizeOf(sptd), @sptd, SizeOf(sptd), _
                       @bytesReturned, NULL) Then
-        Print "设备类型: " & buffer(0)
-        Print "厂商: " & *CPtr(ZString Ptr, @buffer(8))
-        Print "产品: " & *CPtr(ZString Ptr, @buffer(16))
+        MyLog.PrintInfo "StorageDevice.SCSI_Inquiry",, "设备类型: " & buffer(0)
+        MyLog.PrintInfo "StorageDevice.SCSI_Inquiry",, "厂商: " & *CPtr(ZString Ptr, @buffer(8))
+        MyLog.PrintInfo "StorageDevice.SCSI_Inquiry",, "产品: " & *CPtr(ZString Ptr, @buffer(16))
     End If
 End Sub
 
 ' SCSI S.M.A.R.T. (简化版)
 Function StorageDevice.SCSI_Smart() As Integer
-    ' SCSI没有统一的SMART，这里发送LOG SENSE
+    ' SCSI没有统一的SMART,这里发送LOG SENSE
     Dim sptd As SCSI_PASS_THROUGH_DIRECT
     Clear(@sptd, 0, SizeOf(SCSI_PASS_THROUGH_DIRECT))
     
@@ -753,9 +753,6 @@ Function StorageDevice.NVMEWrite(sector As ULongInt, buffer As Any Ptr) As Long
     Deallocate(packet)
     If ok Then Return sectorSize Else Return -1
 End Function
-' =============================================================
-' 静态方法实现
-' =============================================================
 
 ' 静态检测方法
 Function StorageDevice.DetectType(drivePath As String) As Integer
@@ -784,7 +781,7 @@ Function StorageDevice.DetectType(drivePath As String) As Integer
         CloseHandle(hDevice)
         Return HD_ATA
     Else
-        Print "[DetectDriveType]DeviceIoControl ATA(" & drivePath & ")" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "StorageDevice.DetectType", "IOCTL_ATA_PASS_THROUGH", "drivePath=" & drivePath
     End If
     
     ' 尝试SCSI命令
@@ -803,7 +800,7 @@ Function StorageDevice.DetectType(drivePath As String) As Integer
         CloseHandle(hDevice)
         Return HD_SCSI
     Else
-        Print "[DetectDriveType]DeviceIoControl SCSI(" & drivePath & ")" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "StorageDevice.DetectType", "IOCTL_SCSI_PASS_THROUGH_DIRECT", "drivePath=" & drivePath
     End If
     
     ' NVMe 判断
@@ -826,108 +823,108 @@ End Function
 ' =============================================================
 ' 主程序演示
 ' =============================================================
-Sub TestPassThrough()
-    Print "存储设备Passthrough类库测试"
-    Print "============================"
-    
-    ' 创建设备对象
-    Dim devPath As String = "\\.\PhysicalDrive0"
-    Dim dev As StorageDevice = StorageDevice(devPath)
-    
-    Print "设备路径: " & devPath
-    
-    ' 打开设备
-    If Not dev.Open Then
-        Print "错误: 无法打开设备"
-        Print "可能原因: 1) 设备不存在 2) 被其他程序占用"
-        Exit Sub
-    End If
-    
-    ' 显示设备信息
-    Print !"\n=== 设备信息 ==="
-    Print "设备类型: " & dev.GetTypeName()
-    Print "扇区大小: " & dev.GetSectorSize() & " 字节"
-    
-    ' 查询详细信息
-    dev.QueryInfo
-    
-    ' 读取测试
-    Print !"\n=== 读取测试 ==="
-    Dim buffer(511) As UByte
-    Dim bytesRead As Integer = dev.ReadSector(0, @buffer(0))
-    
-    If bytesRead > 0 Then
-        Print "MBR读取成功！"
-        Print "签名: " & Hex(buffer(510), 2) & Hex(buffer(511), 2)
-        
-        ' 显示分区表
-        Print !"\n分区表信息:"
-        For i As Integer = 0 To 3
-            Dim offset As Integer = 446 + i * 16
-            Dim partType As Byte = buffer(offset + 4)
-            If partType <> 0 Then
-                Print "  分区" & i + 1 & ": 类型=" & Hex(partType, 2)
-            End If
-        Next
-    Else
-        Print "读取失败，bytesRead=" & bytesRead & "错误码: " & GetLastError
-    End If
-    
-    ' S.M.A.R.T.查询
-    Print !"\n=== S.M.A.R.T.状态 ==="
-    If dev.QuerySMART Then
-        Print "设备支持S.M.A.R.T.健康监测"
-    Else
-        Print "无法获取S.M.A.R.T.信息"
-    End If
-    
-    ' 写入测试：仅测试前16扇区（存在PartMgr防护）
-    Print !"\n=== 写入测试（仅前16扇区）==="
-    Print "警告: 直接写入磁盘扇区具有风险！"
-    Print "Windows限制: RING3只能写入前16扇区(0-15)"
-    Print "目标扇区: 15 (相对安全的保留扇区)"
-    
-    Dim confirm As String
-    Input "输入 'YES' 确认写入测试: ", confirm
-    
-    If confirm = "YES" Then
-        ' 先锁定设备
-        If Not dev.Lock Then
-            Print "错误: 无法锁定设备，可能被其他程序占用"
-        Else
-            Print "设备已锁定，正在写入..."
-            
-            ' 修改数据（仅修改前8字节）
-            For i As Integer = 0 To 7
-                buffer(i) = &H42  ' 写入测试标记 'B'
-            Next
-            
-            ' 写入到扇区1（MBR备份位置，相对安全）
-            Dim bytesWritten As Integer = dev.WriteSector(1, @buffer(0))
-            
-            If bytesWritten > 0 Then
-                Print "写入成功！写入 " & bytesWritten & " 字节到扇区1"
-                
-                ' 验证写入
-                Dim verifyBuffer(511) As UByte
-                dev.ReadSector(1, @verifyBuffer(0))
-                
-                If verifyBuffer(0) = &H42 Then
-                    Print "数据验证通过！"
-                Else
-                    Print "警告: 数据验证失败"
-                End If
-            Else
-                Print "写入失败，错误码: " & GetLastError
-            End If
-            
-            ' 解锁
-            dev.Unlock
-            Print "设备已解锁"
-        End If
-    Else
-        Print "已取消写入测试"
-    End If
-    
-    Print !"\n测试完成，按任意键退出..."
-End Sub
+'Sub TestPassThrough()
+'    Print "存储设备Passthrough类库测试"
+'    Print "============================"
+'    
+'    ' 创建设备对象
+'    Dim devPath As String = "\\.\PhysicalDrive0"
+'    Dim dev As StorageDevice = StorageDevice(devPath)
+'    
+'    Print "设备路径: " & devPath
+'    
+'    ' 打开设备
+'    If Not dev.Open Then
+'        Print "错误: 无法打开设备"
+'        Print "可能原因: 1) 设备不存在 2) 被其他程序占用"
+'        Exit Sub
+'    End If
+'    
+'    ' 显示设备信息
+'    Print !"\n=== 设备信息 ==="
+'    Print "设备类型: " & dev.GetTypeName()
+'    Print "扇区大小: " & dev.GetSectorSize() & " 字节"
+'    
+'    ' 查询详细信息
+'    dev.QueryInfo
+'    
+'    ' 读取测试
+'    Print !"\n=== 读取测试 ==="
+'    Dim buffer(511) As UByte
+'    Dim bytesRead As Integer = dev.ReadSector(0, @buffer(0))
+'    
+'    If bytesRead > 0 Then
+'        Print "MBR读取成功！"
+'        Print "签名: " & Hex(buffer(510), 2) & Hex(buffer(511), 2)
+'        
+'        ' 显示分区表
+'        Print !"\n分区表信息:"
+'        For i As Integer = 0 To 3
+'            Dim offset As Integer = 446 + i * 16
+'            Dim partType As Byte = buffer(offset + 4)
+'            If partType <> 0 Then
+'                Print "  分区" & i + 1 & ": 类型=" & Hex(partType, 2)
+'            End If
+'        Next
+'    Else
+'        Print "读取失败,bytesRead=" & bytesRead & "错误码: " & GetLastError
+'    End If
+'    
+'    ' S.M.A.R.T.查询
+'    Print !"\n=== S.M.A.R.T.状态 ==="
+'    If dev.QuerySMART Then
+'        Print "设备支持S.M.A.R.T.健康监测"
+'    Else
+'        Print "无法获取S.M.A.R.T.信息"
+'    End If
+'    
+'    ' 写入测试：仅测试前16扇区（存在PartMgr防护）
+'    Print !"\n=== 写入测试（仅前16扇区）==="
+'    Print "警告: 直接写入磁盘扇区具有风险！"
+'    Print "Windows限制: RING3只能写入前16扇区(0-15)"
+'    Print "目标扇区: 15 (相对安全的保留扇区)"
+'    
+'    Dim confirm As String
+'    Input "输入 'YES' 确认写入测试: ", confirm
+'    
+'    If confirm = "YES" Then
+'        ' 先锁定设备
+'        If Not dev.Lock Then
+'            Print "错误: 无法锁定设备,可能被其他程序占用"
+'        Else
+'            Print "设备已锁定,正在写入..."
+'            
+'            ' 修改数据（仅修改前8字节）
+'            For i As Integer = 0 To 7
+'                buffer(i) = &H42  ' 写入测试标记 'B'
+'            Next
+'            
+'            ' 写入到扇区1（MBR备份位置,相对安全）
+'            Dim bytesWritten As Integer = dev.WriteSector(1, @buffer(0))
+'            
+'            If bytesWritten > 0 Then
+'                Print "写入成功！写入 " & bytesWritten & " 字节到扇区1"
+'                
+'                ' 验证写入
+'                Dim verifyBuffer(511) As UByte
+'                dev.ReadSector(1, @verifyBuffer(0))
+'                
+'                If verifyBuffer(0) = &H42 Then
+'                    Print "数据验证通过！"
+'                Else
+'                    Print "警告: 数据验证失败"
+'                End If
+'            Else
+'                Print "写入失败,错误码: " & GetLastError
+'            End If
+'            
+'            ' 解锁
+'            dev.Unlock
+'            Print "设备已解锁"
+'        End If
+'    Else
+'        Print "已取消写入测试"
+'    End If
+'    
+'    Print !"\n测试完成,按任意键退出..."
+'End Sub

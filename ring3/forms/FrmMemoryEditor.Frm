@@ -1323,7 +1323,8 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         SetLastError 0
         
         If IoControl(hDrv, IOCTL_ReadProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
-            Print "[驱动读取]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+            MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "IOCTL_ReadProcessMemory", _
+            "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
             AfxMsg "驱动读取内存失败！"
         Else
             UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, readAddr
@@ -1336,7 +1337,8 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     Dim hProcess As HANDLE = OpenProcess(PROCESS_VM_READ, FALSE, Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId)))
     If hProcess = INVALID_HANDLE_VALUE Then
-        Print "[API读取]OpenProcess失败：" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "OpenProcess", _
+        "dwProcessId=" & MemoryInfo->dwProcessId 
     Else
         Dim bytesRead As SIZE_T = 0
         ' 调用系统原生ReadProcessMemory
@@ -1346,7 +1348,9 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             CloseHandle(hProcess)
             Exit Sub
         Else
-            Print "[API读取]ReadProcessMemory失败：" & bytesRead & "/" & dwSize & " " & WinErrorMsg(GetLastError)
+            MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "IOCTL_ReadProcessMemory", _
+            "dwProcessId=" & MemoryInfo->dwProcessId  & ",Addr=0x" & WHex(readAddr) & ",dwSize=" & dwSize & _
+            ",Read(" & bytesRead & "/" & dwSize & ")"
         End If
         CloseHandle(hProcess)
     End If
@@ -1362,18 +1366,10 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' 驱动加载 + 驱动读取（原有逻辑）
     ' ==============================================
     If Not IsDriverLoaded Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
+        If Not InitDriver Then
             AfxMsg "驱动加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If hDrv = INVALID_HANDLE_VALUE Then
-            AfxMsg "驱动打开失败!"
-            Exit Sub
-        End If
-        AfxMsg "驱动加载成功!"
-        FrmMain.Check6.Value = True
-        IsDriverLoaded = True
     End If
     
     ' 驱动读取执行
@@ -1385,7 +1381,8 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     SetLastError 0
     
     If IoControl(hDrv, IOCTL_ReadProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
-        Print "[驱动读取]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "IOCTL_ReadProcessMemory", _
+        "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
         AfxMsg "驱动读取内存失败！"
     Else
         UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, readAddr
@@ -1425,10 +1422,11 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         SetLastError 0
         
         If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
-            Print "[驱动写入]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+            MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "IOCTL_WriteProcessMemory", _
+            "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
             AfxMsg "驱动写入内存失败！"
         Else
-            AfxMsg "内存写入成功！"
+            AfxMsg "驱动内存写入成功！"
             ' 写入成功后刷新显示，同步ASCII与反汇编
             UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
         End If
@@ -1440,7 +1438,8 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     Dim hProcess As HANDLE = OpenProcess(PROCESS_VM_WRITE Or PROCESS_VM_OPERATION, FALSE, Cast(DWORD, Cast(ULONG_PTR, MemoryInfo->dwProcessId)))
     If hProcess = INVALID_HANDLE_VALUE Then
-        Print "[API写入]OpenProcess失败：" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "OpenProcess", _
+        "dwProcessId=" & MemoryInfo->dwProcessId
     Else
         Dim bytesWritten As SIZE_T = 0
         If WriteProcessMemory(hProcess, Cast(LPVOID, writeAddr), @bytData(0), dwSize, @bytesWritten) And bytesWritten = dwSize Then
@@ -1450,7 +1449,9 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             CloseHandle(hProcess)
             Exit Sub
         Else
-            Print "[API写入]WriteProcessMemory失败：" & WinErrorMsg(GetLastError)
+            MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "WriteProcessMemory", _
+            "dwProcessId=" & MemoryInfo->dwProcessId & ",Addr=0x" & WHex(writeAddr) & ",dwSize=" & dwSize & _
+            ",Write(" & bytesWritten & "/" & dwSize & ")"
         End If
         CloseHandle(hProcess)
     End If
@@ -1466,18 +1467,10 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' 驱动加载 + 驱动写入
     ' ==============================================
     If Not IsDriverLoaded Then
-        If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
+        If Not InitDriver Then
             AfxMsg "驱动加载失败!"
             Exit Sub
         End If
-        hDrv = OpenDrv("\\.\\SnowSword", True)
-        If hDrv = INVALID_HANDLE_VALUE Then
-            AfxMsg "驱动打开失败!"
-            Exit Sub
-        End If
-        AfxMsg "驱动加载成功!"
-        FrmMain.Check6.Value = True
-        IsDriverLoaded = True
     End If
     
     ' 驱动写入执行
@@ -1489,10 +1482,11 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     SetLastError 0
     
     If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
-        Print "[驱动写入]IoControl失败：" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "IOCTL_WriteProcessMemory", _
+        "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
         AfxMsg "驱动写入内存失败！"
     Else
-        AfxMsg "内存写入成功！"
+        AfxMsg "驱动内存写入成功！"
         ' 同步更新显示
         UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
     End If

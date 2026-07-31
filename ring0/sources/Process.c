@@ -27,7 +27,7 @@ VOID ResumeProcess(HANDLE PID)
 // 添加进程到保护列表
 NTSTATUS AddProcessToProtectedList(HANDLE ProcessId) {
     PPROTECTED_PROCESS newEntry;
-    newEntry = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROTECTED_PROCESS), 'cppP');
+    newEntry = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PROTECTED_PROCESS), 'cppP');
     if (!newEntry) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -131,7 +131,7 @@ BOOLEAN IsProcessAlive(HANDLE ProcessId) {
 //        }
 //
 //        // 分配缓冲区
-//        pNameInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, returnLength, 'Path');
+//        pNameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, returnLength, 'Path');
 //        if (!pNameInfo) {
 //            status = STATUS_INSUFFICIENT_RESOURCES;
 //            DbgPrint("Memory allocation failed\n");
@@ -145,7 +145,7 @@ BOOLEAN IsProcessAlive(HANDLE ProcessId) {
 //            __leave;
 //        }
 //        // 分配输出缓冲区
-//        *FilePath = ExAllocatePool2(POOL_FLAG_NON_PAGED, pNameInfo->Name.Length + sizeof(WCHAR), 'Path');
+//        *FilePath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pNameInfo->Name.Length + sizeof(WCHAR), 'Path');
 //        if (!*FilePath)
 //        {
 //            status = STATUS_INSUFFICIENT_RESOURCES;
@@ -353,7 +353,7 @@ VOID MemKillProcessThread(PVOID Context)
     }
 
     // 2. 分配APC状态结构
-    apcState = (PKAPC_STATE)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KAPC_STATE), 'KPME');
+    apcState = (PKAPC_STATE)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KAPC_STATE), 'KPME');
     if (!apcState) {
         DbgPrint("[MemKill] 内存分配失败\n");
         ObDereferenceObject(proc);
@@ -615,7 +615,7 @@ NTSTATUS GetProcessImageName(
     //
     // 临时缓冲区
     //
-    Buffer = ExAllocatePool2(
+    Buffer = KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_PAGED,
         ReturnLength,
         'ImgP');

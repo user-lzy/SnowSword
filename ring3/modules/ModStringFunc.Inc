@@ -324,7 +324,7 @@ Operator SafeStringW_NTS.Cast() ByRef As Wstring
     If m_pData <> NULL Then
         Return *CPtr(Wstring Ptr, m_pData) ' 返回指针而非解引用
     Else
-        Print "[SafeStringW_NTS.Cast]m_pData = NULL"
+        MyLog.PrintInfo "SafeStringW_NTS.Cast",, "m_pData = NULL"
         Return emptyWStr
     End If
 End Operator

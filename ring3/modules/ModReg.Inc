@@ -375,7 +375,7 @@ Public Sub GetRegList_CLI(ByVal fullPath As StringW)
     Case "HKEY_CURRENT_CONFIG", "HKCC"
         hKeyRoot = HKEY_CURRENT_CONFIG
     Case Else
-        Print "[GetRegList_CLI]Unknown root key: " & rootName
+        'Print "[GetRegList_CLI]Unknown root key: " & rootName
         Dim emptyRows() As CuiFlatRow
         CuiPrintFlatData("REGISTRY", emptyRows(), colNames(), 3)
         Exit Sub
@@ -689,12 +689,6 @@ End Function
 
 ' 新增：对比API与Hive结果，检测隐藏项
 Private Sub DetectHiddenItems(apiKey As REG_KEY_ITEM, hiveKey As REG_KEY_ITEM, hiddenSubKeys() As String, hiddenValues() As REG_VALUE_ITEM)
-For i As Integer = 0 To Ubound(hiveKey.Values)
-    Print "Hive Value = [" & hiveKey.Values(i).ValueName & "] Len=" & Len(hiveKey.Values(i).ValueName)
-Next
-For j As Integer = 0 To UBound(apiKey.Values)
-    Print "API  Value = [" & apiKey.Values(j).ValueName & "] Len=" & Len(apiKey.Values(j).ValueName)
-Next
     Dim hiddenSubKeyCount As Integer = 0
     Dim hiddenValueCount As Integer = 0
     
@@ -715,7 +709,7 @@ Next
                 hiddenSubKeyCount += 1
                 ReDim Preserve hiddenSubKeys(0 To hiddenSubKeyCount - 1)
                 hiddenSubKeys(hiddenSubKeyCount - 1) = hiveKey.SubKeys(i)
-                Print "[HIDDEN SUBKEY] " & hiveKey.KeyPath & "\" & hiveKey.SubKeys(i)
+                MyLog.PrintInfo "DetectHiddenItems",, "[HIDDEN SUBKEY] " & hiveKey.KeyPath & "\" & hiveKey.SubKeys(i)
             End If
         Next
     End If
@@ -737,7 +731,7 @@ Next
                 hiddenValueCount += 1
                 ReDim Preserve hiddenValues(0 To hiddenValueCount - 1)
                 hiddenValues(hiddenValueCount - 1) = hiveKey.Values(i)
-                Print "[HIDDEN VALUE] " & hiveKey.KeyPath & "\" & hiveKey.Values(i).ValueName
+                MyLog.PrintInfo "DetectHiddenItems",, "[HIDDEN VALUE] " & hiveKey.KeyPath & "\" & hiveKey.Values(i).ValueName
             End If
         Next
     End If
@@ -872,23 +866,23 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     ' ==================================================
     ' ===== Step3: UseHive=True 核心修复 - 根键Hive批量检测 =====
     ' ==================================================
-    Print "=== DEBUG: UseHive=True - 隐藏项检测模式 ==="
+    MyLog.PrintInfo "GetRegList",, "===UseHive=True - 隐藏项检测模式 ==="
     
     ' 基础校验
     If Node = NULL Or Not apiGetSuccess Then
-        Print "DEBUG: 无法获取当前节点API信息，退出检测"
+        MyLog.PrintInfo "GetRegList",, "无法获取当前节点API信息，退出检测"
         Goto RenderFinalUI
     End If
     
     currentFullPath = apiKeyItem.KeyPath
     currentPathUpper = apiKeyItem.KeyPathUpper
-    Print "DEBUG: 当前检测路径: " & currentFullPath
+    MyLog.PrintInfo "GetRegList",, "当前检测路径: " & currentFullPath
 
     ' ===================== 核心修复：根键多Hive检测 =====================
     Select Case UCase(currentFullPath)
         ' 1. HKEY_LOCAL_MACHINE → 对应5个核心Hive
         Case "HKEY_LOCAL_MACHINE"
-            Print "DEBUG: 检测到虚拟根键 HKLM，物理Hive真实枚举一级子键..."
+            MyLog.PrintInfo "GetRegList",, "检测到虚拟根键 HKLM，物理Hive真实枚举一级子键..."
             ReDim hiveKeyItem.SubKeys(-1)
             ReDim hiveKeyItem.Values(-1)
             hiveKeyItem.KeyPath = currentFullPath
@@ -912,12 +906,12 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
             ReDim Preserve hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys) + 1)
             hiveKeyItem.SubKeys(UBound(hiveKeyItem.SubKeys)) = "HARDWARE"
 
-            Print "DEBUG: HKLM 物理Hive枚举完成，一级子键数量：" & (UBound(hiveKeyItem.SubKeys) + 1)
+            MyLog.PrintInfo "GetRegList",, "HKLM 物理Hive枚举完成,一级子键数量：" & (UBound(hiveKeyItem.SubKeys) + 1)
             Goto DetectRootHiddenItems
         
         ' 2. HKEY_CURRENT_USER → 对应用户配置Hive
         Case "HKEY_CURRENT_USER"
-            Print "DEBUG: 检测到根键 HKCU，加载用户Hive..."
+            MyLog.PrintInfo "GetRegList",, "检测到根键 HKCU，加载用户Hive..."
             hivePath = currentFullPath
             If GetHiveInfoFromPath(hivePath, hiveInfo) Then
                 If LoadHive(hiveInfo, hiveCacheItem) Then
@@ -931,30 +925,21 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
         
         ' 3. HKEY_USERS → 遍历所有用户子配置Hive
         Case "HKEY_USERS"
-
             ReDim hiveKeyItem.SubKeys(-1)
             ReDim hiveKeyItem.Values(-1)
 
-
             hiveKeyItem.KeyPath=currentFullPath
 
-
             If apiGetSuccess Then
-
                 For iRoot=LBound(apiKeyItem.SubKeys) _
                     To UBound(apiKeyItem.SubKeys)
-
                     ReDim Preserve hiveKeyItem.SubKeys( _
                         UBound(hiveKeyItem.SubKeys)+1)
-
                     hiveKeyItem.SubKeys( _
                         UBound(hiveKeyItem.SubKeys)) = _
                         apiKeyItem.SubKeys(iRoot)
-
                 Next
-
             End If
-
 
         Goto DetectRootHiddenItems
     End Select
@@ -963,14 +948,14 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     ' ==================================================
     ' ===== 普通节点（非根键）：严格Hive隔离，修复层级错乱 =====
     ' ==================================================
-    Print "DEBUG: 普通节点，加载对应独立Hive: " & currentFullPath
+    MyLog.PrintInfo "GetRegList",, "普通节点，加载对应独立Hive: " & currentFullPath
     If Not GetHiveInfoFromPath(currentFullPath, hiveInfo) Then
-        Print "DEBUG: 不支持的路径，无对应hive文件"
+        MyLog.PrintInfo "GetRegList",, "不支持的路径，无对应hive文件"
         GoTo RenderFinalUI
     End If
 
     If Not LoadHive(hiveInfo, hiveCacheItem) Then
-        Print "DEBUG: hive加载失败，请检查管理员权限"
+        MyLog.PrintInfo "GetRegList",, "hive加载失败，请检查管理员权限"
         GoTo RenderFinalUI
     End If
 
@@ -989,43 +974,31 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
 
     ' 🔍 精准计算当前节点在对应Hive中的相对路径（核心！修复层级错乱）
     Select Case True
-
     Case Left(currentPathNorm,4)="HKLM"
         logicalRoot = PathToUpper(hiveInfo.RootName)
-
     Case Left(currentPathNorm,4)="HKCU"
         logicalRoot = "HKCU"
-
     Case Left(currentPathNorm,3)="HKU"
         logicalRoot = PathToUpper(hiveInfo.RootName)
-
     Case Left(currentPathNorm,4)="HKCC"
         logicalRoot = "HKCC"
-
     End Select
 
     If currentPathNorm = logicalRoot Then
-
         relativePath = ""
-
     ElseIf Left(currentPathNorm, Len(logicalRoot)+1) = logicalRoot & "\" Then
-
         relativePath = Mid(currentPathNorm, Len(logicalRoot)+2)
-
     Else
-
-        Print "Path mismatch"
+        MyLog.PrintInfo "GetRegList",, "Path mismatch"
         Exit Sub
-
     End If
 
-
-    Print "DEBUG RelativePath:" & relativePath
+    MyLog.PrintInfo "GetRegList",, "RelativePath:" & relativePath
 
     ' 仅读取当前Hive、当前路径的数据（绝对不读取其他Hive/父级数据）
     targetNKOffset = FindNKByPath(hiveCacheItem.HiveData(), hiveCacheItem.RootNKFileOffset, relativePath)
     If targetNKOffset = 0 Then
-        Print "DEBUG: 在当前Hive中找不到目标节点"
+        MyLog.PrintInfo "GetRegList",, "在当前Hive中找不到目标节点"
         GoTo RenderFinalUI
     End If
 
@@ -1034,8 +1007,8 @@ Sub GetRegList(Node As HTREEITEM, treKey As Class_TreeView, lvwValue As Class_Li
     
 DetectRootHiddenItems:
     ' ===== 统一执行隐藏项检测（根键+普通节点通用） =====
-    Print "DEBUG: 最终Hive子键数量: " & (UBound(hiveKeyItem.SubKeys) + 1)
-    Print "DEBUG: 最终Hive值数量: " & (UBound(hiveKeyItem.Values) + 1)
+    MyLog.PrintInfo "GetRegList",, "最终Hive子键数量: " & (UBound(hiveKeyItem.SubKeys) + 1)
+    MyLog.PrintInfo "GetRegList",, "最终Hive值数量: " & (UBound(hiveKeyItem.Values) + 1)
     DetectHiddenItems apiKeyItem, hiveKeyItem, hiddenSubKeys(), hiddenValues()
     
     ' ==================================================
@@ -1159,7 +1132,7 @@ RenderFinalUI:
     End If
     If UBound(hiddenSubKeys) >= LBound(hiddenSubKeys) Then
         For i As Integer = LBound(hiddenSubKeys) To UBound(hiddenSubKeys)
-            Print hiddenSubKeys(i) & " [隐藏]"
+            MyLog.PrintInfo "GetRegList",, hiddenSubKeys(i) & " [隐藏]"
             treKey.AddItem(Node, hiddenSubKeys(i) & " [隐藏]")
         Next
     End If
@@ -1178,7 +1151,7 @@ RenderFinalUI:
     
     'treKey.ReDraw = True
     'treKey.Refresh
-    Print "=== DEBUG: UseHive=True 检测完成 ==="
+    MyLog.PrintInfo "GetRegList",, "=== UseHive=True 检测完成 ==="
     CommitListViewView lvwValue
 End Sub
 
@@ -1195,29 +1168,29 @@ Function AddRButtonMenu() As Boolean
     Function = True
 
     ' 为所有文件类型添加右键菜单
-    result = RegCreateKeyEx(HKEY_CLASSES_ROOT, @szSubKey1, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, @hKey, NULL)
+    result = RegCreateKeyEx(HKEY_CLASSES_ROOT, @szSubKey1, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, @HKEY, NULL)
     ' 创建注册表项（HKEY_CLASSES_ROOT\*\shell\SnowSword\runas）
     result = RegCreateKeyEx(HKEY, StrPtrW("runas"), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, @hKey1, NULL)
     If result = ERROR_SUCCESS Then
         ' 设置菜单显示名称
         RegSetValueExW hKey, NULL, 0, REG_SZ, CPtr(LPBYTE, @menuName), SizeOf(menuName)
         ' 创建command子项，指定程序路径
-        result = RegCreateKeyEx(hKey, StrPtrW("command"), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, @hCmdKey, NULL)
+        result = RegCreateKeyEx(HKEY, StrPtrW("command"), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, @hCmdKey, NULL)
         If result = ERROR_SUCCESS Then
             ' 设置命令，%1表示选中的文件路径
             Dim strCommand As Const WString * MAX_PATH = !"PowerShell -Command \"Start-Process" & !" \'" & App.Path & App.EXEName _
                                                                                                 & !"\' " & "-ArgumentList '-DeleteFile " & !"\"\"%1\"\"" & !"\' -Verb RunAs\""
             RegSetValueExW hCmdKey, NULL, 0, REG_SZ, CPtr(LPBYTE, @strCommand), SizeOf(strCommand)
             
-            Print "右键菜单注册成功！"
+            MyLog.PrintInfo "AddRButtonMenu",, "右键菜单注册成功!"
         Else
-            Print "创建command子项失败，错误代码：" & result
+            MyLog.PrintWin32Error "AddRButtonMenu", "RegCreateKeyEx", "szSubKey=" & szSubKey1 & "\command"
             Function = False
         End If
         
         Function = True
     Else
-        Print "创建注册表项失败，错误代码：" & result
+        MyLog.PrintWin32Error "AddRButtonMenu", "RegCreateKeyEx", "szSubKey=" & szSubKey1
         Function = False
     End If
     RegCloseKey hCmdKey
@@ -1225,20 +1198,20 @@ Function AddRButtonMenu() As Boolean
     RegCloseKey hKey
 End Function
 
-Function DeleteRButtonMenu() As BOOLEAN
+Function DeleteRButtonMenu() As Boolean
     Dim result As Long
 
     ' 删除为所有文件类型添加的右键菜单
     result = RegDeleteTree(HKEY_CLASSES_ROOT, StrPtrW("*\shell\MyProgram"))
 
     If result = ERROR_SUCCESS Then
-        Print "右键菜单已成功移除！"
+        MyLog.PrintInfo "DeleteRButtonMenu", "RegDeleteTree", "右键菜单已成功移除！"
         Return True
     ElseIf result = ERROR_FILE_NOT_FOUND Then
-        Print "未找到已注册的右键菜单"
+        MyLog.PrintInfo "DeleteRButtonMenu", "RegDeleteTree", "未找到已注册的右键菜单"
         Return False
     Else
-        Print "移除右键菜单失败，错误代码：" & result
+        MyLog.PrintWin32Error "DeleteRButtonMenu", "RegDeleteTree"
         Return False
     End If
 End Function

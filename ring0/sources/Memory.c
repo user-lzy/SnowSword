@@ -317,7 +317,7 @@ NTSTATUS ReadProcessMemory(
     }
 
     // 1. 分配内核池内存作为中转，防止跨进程上下文访问导致缺页/蓝屏
-    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
+    kernelBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
     if (!kernelBuffer) {
         DbgPrint("ReadProcessMemory 失败: 分配内核中转缓冲区失败\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -445,7 +445,7 @@ NTSTATUS WriteProcessMemory(
     }
 
     // 1. 分配内核池内存作为中转，防止跨进程上下文访问导致缺页/蓝屏
-    kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
+    kernelBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, SizeOfCopy, 'kRwM');
     if (!kernelBuffer) {
         DbgPrint("ReadProcessMemory 失败: 分配内核中转缓冲区失败\n");
         return STATUS_INSUFFICIENT_RESOURCES;

@@ -313,7 +313,7 @@ Function ReadDirectoryEntries(ctx As FAT32_CONTEXT Ptr, _
             End If
             
             If firstByte = &hE5 Then
-                ' 已删除条目：丢弃之前收集的 LFN（它们属于被删除的文件）
+                ' 已删除条目:丢弃之前收集的 LFN（它们属于被删除的文件）
                 tempLFNCount = 0
                 offset += 32
                 Continue Do
@@ -322,7 +322,7 @@ Function ReadDirectoryEntries(ctx As FAT32_CONTEXT Ptr, _
             Dim attr As UByte = entryPtr[11]
             
             If attr = ATTR_LONG_NAME Then
-                ' 长文件名条目：按顺序收集
+                ' 长文件名条目:按顺序收集
                 If tempLFNCount < 20 Then
                     memcpy(@tempLFN(tempLFNCount), entryPtr, 32)
                     tempLFNCount += 1
@@ -330,7 +330,7 @@ Function ReadDirectoryEntries(ctx As FAT32_CONTEXT Ptr, _
             Else
                 ' 短文件名条目、卷标、空条目等
                 If attr = ATTR_VOLUME_ID Then
-                    ' 卷标：不是文件，丢弃 LFN
+                    ' 卷标:不是文件，丢弃 LFN
                     tempLFNCount = 0
                     offset += 32
                     Continue Do
@@ -385,7 +385,7 @@ Function ReadDirectoryEntries(ctx As FAT32_CONTEXT Ptr, _
 End Function
 
 ' ============================================================================
-' 路径解析：逐级查找目录簇号
+' 路径解析:逐级查找目录簇号
 ' ============================================================================
 Function ResolvePathToCluster(ctx As FAT32_CONTEXT Ptr, path As String) As ULong
     path = Trim(path)
@@ -455,8 +455,6 @@ Sub DirEntryToFileInfo(ctx As FAT32_CONTEXT Ptr, _
     info->bReparsePoint = False
     info->reparseTag = 0
     info->cAlternateFileName = SFN_ToString(@entry->sfn)
-    
-    Print "fileName:" & info->cFileName
 End Sub
 
 ' ============================================================================
@@ -510,37 +508,36 @@ Function OpenFAT32VolumeInternalPhysical(ctx As FAT32_CONTEXT Ptr, _
     ctx->io.hVol = CreateFile(@path, GENERIC_READ Or GENERIC_WRITE, _
                           FILE_SHARE_READ Or FILE_SHARE_WRITE, _
                           NULL, OPEN_EXISTING, 0, NULL)
-    If ctx->io.hVol = INVALID_HANDLE_VALUE Then Return False
+    If ctx->io.hVol = INVALID_HANDLE_VALUE Then
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeInternalPhysical",, "CreateFile 失败, 磁盘索引=" & diskIndex
+        Return False
+    End If
     
     Dim bootBuf(0 To 511) As UByte
     
-    ' ===== 修复：使用 startLBA 计算正确的 Boot Sector 偏移 =====
+    ' ===== 修复:使用 startLBA 计算正确的 Boot Sector 偏移 =====
     Dim partitionBaseOffset As ULongLong = startLBA * CULngInt(bytesPerSec)
-    Print "[OpenFAT32VolumeInternalPhysical] partitionBaseOffset=" & partitionBaseOffset
+    MyLog.PrintLog LOG_INFO, "OpenFAT32VolumeInternalPhysical",, "partitionBaseOffset=" & partitionBaseOffset
     
     If Not DiskIO_Read(@ctx->io, partitionBaseOffset, @bootBuf(0), 512) Then 
-        Print "[OpenFAT32VolumeInternalPhysical] DiskIO_Read failed at offset " & partitionBaseOffset
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeInternalPhysical",, "DiskIO_Read 失败, offset=" & partitionBaseOffset
         Goto Cleanup
     End If
     
     If Not ParseBPB(ctx, @bootBuf(0)) Then 
-        Print "[OpenFAT32VolumeInternalPhysical] ParseBPB failed"
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeInternalPhysical",, "ParseBPB 失败"
         Goto Cleanup
     End If
     
-    ' ===== 修复：调整所有基于扇区的偏移，加上分区起始偏移 =====
-    ' 保存分区起始偏移到上下文中，供后续 ClusterToOffset 使用
-    ' 由于 FAT32_CONTEXT 没有 startLBA 字段，我们需要修改 ClusterToOffset 或在这里调整
-    
-    ' 方案A：直接调整 fatStartOffset 和 dataStartSector 为绝对偏移
+    ' ===== 修复:调整所有基于扇区的偏移，加上分区起始偏移 =====
     ctx->fatStartOffset = ctx->fatStartOffset + partitionBaseOffset
     ctx->dataStartSector = ctx->dataStartSector + startLBA
     
-    Print "[OpenFAT32VolumeInternalPhysical] Adjusted fatStartOffset=" & ctx->fatStartOffset
-    Print "[OpenFAT32VolumeInternalPhysical] Adjusted dataStartSector=" & ctx->dataStartSector
+    MyLog.PrintLog LOG_INFO, "OpenFAT32VolumeInternalPhysical",, "Adjusted fatStartOffset=" & ctx->fatStartOffset
+    MyLog.PrintLog LOG_INFO, "OpenFAT32VolumeInternalPhysical",, "Adjusted dataStartSector=" & ctx->dataStartSector
     
     If Not LoadFATCache(ctx) Then 
-        Print "[OpenFAT32VolumeInternalPhysical] LoadFATCache failed"
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeInternalPhysical",, "LoadFATCache 失败"
         Goto Cleanup
     End If
     
@@ -552,7 +549,7 @@ Cleanup:
     Return False
 End Function
 
-' 对外：物理磁盘 + LBA 打开（返回指针，调用方负责释放）
+' 对外:物理磁盘 + LBA 打开（返回指针，调用方负责释放）
 Function OpenFAT32VolumePhysical(ByVal diskIndex As Integer, _
                                         ByVal startLBA As ULongLong, _
                                         ByVal bytesPerSec As ULong) As FAT32_CONTEXT Ptr
@@ -569,31 +566,19 @@ End Function
 
 ' 盘符自动缓存管理（类似 OpenNTFSVolumeContext）
 Function OpenFAT32VolumeContext(ByVal path As String) As FAT32_CONTEXT Ptr
-    /'Dim idx As Integer = GetDriveIndex(path)
-    If idx < 0 Then Return NULL
-    
-    If Not g_FAT32_Initialized Then
-        memset(@g_FAT32_VolCtx(0), 0, SizeOf(g_FAT32_VolCtx))
-        g_FAT32_Initialized = True
-    End If
-    
-    If g_FAT32_VolCtx(idx) <> NULL Then Return g_FAT32_VolCtx(idx)'/
-    
-    Dim ctx As FAT32_CONTEXT Ptr = Allocate(SizeOf(FAT32_CONTEXT))
-    If ctx = NULL Then Return NULL
-    memset(ctx, 0, SizeOf(FAT32_CONTEXT))
-    
-    'Dim drive As String = Chr(Asc("A") + idx) & ":"
     ' 先转换为物理路径
     Dim physPath As String = ConvertToPhysicalPath(path)
     If physPath = "" Then
-        Print "[OpenNTFSVolumeContext] 无法将路径转换为物理路径: " & path
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeContext", "ConvertToPhysicalPath", "无法将路径转换为物理路径: " & path
         Return NULL
     End If
     
     ' 解析物理路径
     Dim parsed As PARSED_PATH_INFO
-    If Not ParsePath(physPath, parsed) Then Return NULL
+    If Not ParsePath(physPath, parsed) Then
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeContext", "ParsePath", "解析物理路径失败: " & physPath
+        Return NULL
+    End If
     
     ' 查分区信息获取 startLBA 和 bytesPerSector
     Dim startLBA As ULongLong = 0
@@ -625,15 +610,15 @@ Function OpenFAT32VolumeContext(ByVal path As String) As FAT32_CONTEXT Ptr
     End If
     
     If startLBA = 0 Then
-        Print "[OpenNTFSVolumeContext] 未找到分区信息: " & physPath
+        MyLog.PrintLog LOG_ERROR, "OpenFAT32VolumeContext",, "未找到分区信息: " & physPath
         Return NULL
     End If
     
     ' 统一走物理磁盘打开
-    Return OpenFAT32VolumePhysical(parsed.diskIndex, startLBA, bytesPerSec)
+    Dim result As FAT32_CONTEXT Ptr = OpenFAT32VolumePhysical(parsed.diskIndex, startLBA, bytesPerSec)
+    If result = NULL Then Return NULL
     
-    'g_FAT32_VolCtx(idx) = ctx
-    'Return ctx
+    Return result
 End Function
 
 Sub CloseFAT32VolumeContext(ctx As FAT32_CONTEXT Ptr)
@@ -642,16 +627,8 @@ Sub CloseFAT32VolumeContext(ctx As FAT32_CONTEXT Ptr)
     Deallocate(ctx)
 End Sub
 
-/'Sub CleanupAllFAT32Volumes()
-    For i As Integer = 0 To 25
-        If g_FAT32_VolCtx(i) <> NULL Then
-            CloseFAT32VolumeContext(Chr(Asc("A") + i) & ":")
-        End If
-    Next
-End Sub'/
-
 ' ============================================================================
-' 核心目录枚举（内部实现，路径格式与 NTFS 一致：X:\dir\subdir）
+' 核心目录枚举（内部实现，路径格式与 NTFS 一致:X:\dir\subdir）
 ' ============================================================================
 Function FAT32_GetDirList_Internal(ctx As FAT32_CONTEXT Ptr, _
                                            lpDirPath As String, _
@@ -660,7 +637,7 @@ Function FAT32_GetDirList_Internal(ctx As FAT32_CONTEXT Ptr, _
     vbSplit lpDirPath, "\", parts()
     
     If ctx = NULL Then Return -1
-    Print "[FAT32_GetDirList_Internal]lpDirPath:" & lpDirPath
+    
     Dim currentCluster As ULong = ctx->rootCluster
     
     ' 逐级路径解析（跳过盘符 parts(0)）
@@ -719,7 +696,7 @@ Function FAT32_GetDirList_Internal(ctx As FAT32_CONTEXT Ptr, _
 End Function
 
 ' ============================================================================
-' 辅助：写目录条目（处理驱动模式扇区对齐限制）
+' 辅助:写目录条目（处理驱动模式扇区对齐限制）
 ' ============================================================================
 Function WriteDirEntryAt(ctx As FAT32_CONTEXT Ptr, _
                          dirCluster As ULong, _
@@ -739,7 +716,7 @@ Function WriteDirEntryAt(ctx As FAT32_CONTEXT Ptr, _
         Return result
     End If
     
-    ' 非对齐：读-改-写整个扇区
+    ' 非对齐:读-改-写整个扇区
     Dim sectorOffset As ULongLong = (dirOffset \ sectorSize) * sectorSize
     Dim withinSector As ULong = CULng(dirOffset - sectorOffset)
     Dim sectorBuf As UByte Ptr = Allocate(sectorSize)
@@ -754,7 +731,7 @@ Function WriteDirEntryAt(ctx As FAT32_CONTEXT Ptr, _
     
     Dim result As Boolean = DiskIO_Write(@ctx->io, sectorOffset, sectorBuf, sectorSize)
     
-    ' ===== 关键：强制刷新 + 验证 =====
+    ' ===== 关键:强制刷新 + 验证 =====
     If result AndAlso ctx->io.hVol <> INVALID_HANDLE_VALUE Then
         FlushFileBuffers(ctx->io.hVol)
         
@@ -763,11 +740,13 @@ Function WriteDirEntryAt(ctx As FAT32_CONTEXT Ptr, _
         If verifyBuf <> NULL Then
             If DiskIO_Read(@ctx->io, sectorOffset, verifyBuf, sectorSize) Then
                 If verifyBuf[withinSector] <> entryBuf[0] Then
-                    Print "[WriteDirEntryAt] 验证失败：写入未生效！"
+                    MyLog.PrintLog LOG_ERROR, "WriteDirEntryAt", "DiskIO_Read", "验证失败:写入未生效,sectorOffset=" & sectorOffset & ",sectorSize=" & sectorSize
                     result = False
                 Else
-                    Print "[WriteDirEntryAt] 验证通过：首字节=&h" & Hex(verifyBuf[withinSector], 2)
+                    MyLog.PrintLog LOG_INFO, "WriteDirEntryAt", "DiskIO_Read", "验证通过:首字节=&h" & WHex(verifyBuf[withinSector], 2) & ",sectorOffset=" & sectorOffset & ",sectorSize=" & sectorSize
                 End If
+            Else
+                MyLog.PrintLog LOG_ERROR, "WriteDirEntryAt", "DiskIO_Read", "sectorOffset=" & sectorOffset & ",sectorSize=" & sectorSize
             End If
             Deallocate verifyBuf
         End If
@@ -778,7 +757,7 @@ Function WriteDirEntryAt(ctx As FAT32_CONTEXT Ptr, _
 End Function
 
 ' ============================================================================
-' 辅助：设置 FAT 表项（分配/释放簇）
+' 辅助:设置 FAT 表项（分配/释放簇）
 ' ============================================================================
 Function SetFATEntry(ctx As FAT32_CONTEXT Ptr, cluster As ULong, value As ULong) As Boolean
     If cluster < 2 Or cluster > ctx->maxCluster Then Return False
@@ -813,7 +792,7 @@ Function SetFATEntry(ctx As FAT32_CONTEXT Ptr, cluster As ULong, value As ULong)
 End Function
 
 ' ============================================================================
-' 辅助：释放整个簇链
+' 辅助:释放整个簇链
 ' ============================================================================
 Function FreeClusterChain(ctx As FAT32_CONTEXT Ptr, startCluster As ULong) As Boolean
     If startCluster < 2 Or startCluster > ctx->maxCluster Then Return False
@@ -847,15 +826,21 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
                                    targetName As String) As Boolean
     
     targetName = UCase(Trim(targetName))
-    If targetName = "" Or targetName = "." Or targetName = ".." Then Return False
+    If targetName = "" Or targetName = "." Or targetName = ".." Then
+        MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile_Internal",, "无效文件名: " & targetName
+        Return False
+    End If
     
     Dim clusterSize As ULong = CULng(ctx->sectorsPerCluster) * ctx->bytesPerSector
     Dim clusterBuf As UByte Ptr = Allocate(clusterSize)
-    If clusterBuf = NULL Then Return False
+    If clusterBuf = NULL Then
+        MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile_Internal",, "内存分配失败"
+        Return False
+    End If
     
     Dim currentCluster As ULong = parentCluster
     
-    ' 跨簇收集 LFN（记录所在簇号和偏移，防止 LFN 与 SFN 跨簇）
+    ' 跨簇收集 LFN
     Dim lfnClusters(0 To 19) As ULong
     Dim lfnOffsets(0 To 19) As ULong
     Dim lfnEntries(0 To 19) As FAT32_DIR_ENTRY_LFN
@@ -863,7 +848,7 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
     
     Do While currentCluster >= 2 And currentCluster <= ctx->maxCluster
         If Not ReadCluster(ctx, currentCluster, clusterBuf) Then
-            Print "ReadCluster失败"
+            MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile_Internal", "ReadCluster", "簇=" & currentCluster
             Deallocate clusterBuf
             Return False
         End If
@@ -874,9 +859,9 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
             Dim firstByte As UByte = entryPtr[0]
             
             If firstByte = 0 Then
-                Print "未找到"
+                MyLog.PrintLog LOG_INFO, "FAT32_DeleteFile_Internal",, "未找到目标文件"
                 Deallocate clusterBuf
-                Return False  ' 未找到
+                Return False
             End If
             
             If firstByte = &hE5 Then
@@ -893,6 +878,8 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
                     lfnOffsets(lfnCount) = offset
                     memcpy(@lfnEntries(lfnCount), entryPtr, 32)
                     lfnCount += 1
+                Else
+                    MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal",, "LFN 数量超过20，可能损坏"
                 End If
             Else
                 If attr = ATTR_VOLUME_ID Then
@@ -916,7 +903,7 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
                     Dim c As Integer
                     For c = 0 To lfnCount - 1
                         If lfnEntries(c).checksum <> calcChecksum Then
-                            Print "校验和不匹配"
+                            MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal",, "LFN校验和不匹配, 序号=" & c
                             valid = False
                             Exit For
                         End If
@@ -932,58 +919,58 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
                 Dim entryName As String = UCase(AssembleFileName(@collected))
                 
                 If entryName = targetName Then
-                    Print "找到目标"
-                    ' 找到目标，禁止删除目录
+                    MyLog.PrintLog LOG_INFO, "FAT32_DeleteFile_Internal",, "找到目标文件: " & targetName
+                    
+                    ' 禁止删除目录
                     If (sfn.attr And ATTR_DIRECTORY) <> 0 Then
-                        Print "禁止删除目录"
+                        MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal",, "目标为目录，禁止删除"
                         Deallocate clusterBuf
                         Return False
                     End If
                     
                     ' 1. 标记所有 LFN 条目为已删除
-                    Print "LFN过程:"
-                    Dim c As Integer
-                    For c = 0 To lfnCount - 1
+                    For c As Integer = 0 To lfnCount - 1
                         Dim delEntry(0 To 31) As UByte
                         memcpy(@delEntry(0), @lfnEntries(c), 32)
                         delEntry(0) = &hE5
                         If Not WriteDirEntryAt(ctx, lfnClusters(c), lfnOffsets(c), @delEntry(0), 32) Then
-                            Print "修改LFN失败"
+                            MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile_Internal", "WriteDirEntryAt", "修改LFN条目失败, 簇=" & lfnClusters(c)
                             ' 继续尝试删除其余条目
                         End If
                     Next
                     
                     ' 2. 标记 SFN 条目为已删除
-                    Print "SFN过程:"
                     Dim delSFN(0 To 31) As UByte
                     memcpy(@delSFN(0), @sfn, 32)
                     delSFN(0) = &hE5
                     If Not WriteDirEntryAt(ctx, currentCluster, offset, @delSFN(0), 32) Then
-                        Print "修改SFN失败"
+                        MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile_Internal", "WriteDirEntryAt", "修改SFN失败, 簇=" & currentCluster
                         Deallocate clusterBuf
                         Return False
                     End If
                     
-                    ' 标记 SFN 为删除后，立即验证
+                    ' 验证写入（可选日志）
                     Dim sectorSize As ULong = ctx->bytesPerSector
                     Dim sectorOffset As ULongLong = (ClusterToOffset(ctx, currentCluster) + offset) \ sectorSize * sectorSize
                     Dim withinSector As ULong = CULng((ClusterToOffset(ctx, currentCluster) + offset) - sectorOffset)
                     Dim verifyBuf As UByte Ptr = Allocate(sectorSize)
-
-                    If DiskIO_Read(@ctx->io, sectorOffset, verifyBuf, sectorSize) Then
-                        Print "验证读取: 首字节=&h" & Hex(verifyBuf[withinSector], 2)
-                        If verifyBuf[withinSector] <> &hE5 Then Print "错误：写入未生效！"
-                    Else
-                        Print "验证读取失败"
+                    If verifyBuf Then
+                        If DiskIO_Read(@ctx->io, sectorOffset, verifyBuf, sectorSize) Then
+                            If verifyBuf[withinSector] <> &hE5 Then
+                                MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal", "DiskIO_Read", "验证读取发现写入未生效！"
+                            End If
+                        Else
+                            MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal", "DiskIO_Read", "验证读取失败"
+                        End If
+                        Deallocate verifyBuf
                     End If
-
-                    Deallocate verifyBuf
                     
-                    ' 3. 释放簇链（0字节文件 startCluster 可能为 0，跳过）
+                    ' 3. 释放簇链
                     Dim startCluster As ULong = (CULng(sfn.fstClusHI) Shl 16) Or sfn.fstClusLO
                     If startCluster >= 2 And startCluster <= ctx->maxCluster Then
-                        Print "释放簇链过程:"
-                        FreeClusterChain(ctx, startCluster)
+                        If Not FreeClusterChain(ctx, startCluster) Then
+                            MyLog.PrintLog LOG_WARN, "FAT32_DeleteFile_Internal", "FreeClusterChain", "startCluster=" & startCluster
+                        End If
                     End If
                     
                     Deallocate clusterBuf
@@ -1000,12 +987,13 @@ Function FAT32_DeleteFile_Internal(ctx As FAT32_CONTEXT Ptr, _
         If IsEOC(currentCluster) Then Exit Do
     Loop
     
+    MyLog.PrintLog LOG_INFO, "FAT32_DeleteFile_Internal",, "遍历结束未找到文件: " & targetName
     Deallocate clusterBuf
     Return False
 End Function
 
 ' ============================================================================
-' 辅助：从完整路径提取盘符和相对路径
+' 辅助:从完整路径提取盘符和相对路径
 ' ============================================================================
 Function ExtractDriveFromPath(fullPath As String, ByRef relPath As String) As String
     fullPath = Trim(fullPath)
@@ -1030,7 +1018,7 @@ Function ExtractDriveFromPath(fullPath As String, ByRef relPath As String) As St
 End Function
 
 ' ============================================================================
-' 对外接口：单路径参数删除文件
+' 对外接口:单路径参数删除文件
 ' ============================================================================
 Function FAT32_DeleteFile2(ByVal fullPath As String) As Boolean
     fullPath = Trim(fullPath)
@@ -1047,7 +1035,10 @@ Function FAT32_DeleteFile2(ByVal fullPath As String) As Boolean
     If relPath = "" Or relPath = "\" Then Return False
     
     Dim ctx As FAT32_CONTEXT Ptr = OpenFAT32VolumeContext(fullPath)
-    If ctx = NULL Then Print "ctx = NULL" : Return False
+    If ctx = NULL Then
+        MyLog.PrintLog LOG_ERROR, "FAT32_DeleteFile2", "OpenFAT32VolumeContext", "fullPath=" & fullPath
+        Return False
+    End If
     
     Dim parentDir As String = ""
     Dim fileName As String = relPath
@@ -1072,7 +1063,7 @@ Function FAT32_DeleteFile2(ByVal fullPath As String) As Boolean
         result = FAT32_DeleteFile_Internal(ctx, parentCluster, fileName)
     End If
     
-    ' ===== 关键修复：强制刷新并关闭 =====
+    ' ===== 关键修复:强制刷新并关闭 =====
     If ctx->io.hVol <> INVALID_HANDLE_VALUE And ctx->io.hVol <> NULL Then
         FlushFileBuffers(ctx->io.hVol)   ' 强制把缓存刷到磁盘
     End If
@@ -1082,7 +1073,7 @@ Function FAT32_DeleteFile2(ByVal fullPath As String) As Boolean
 End Function
 
 ' ============================================================================
-' 对外接口：物理磁盘方式删除文件
+' 对外接口:物理磁盘方式删除文件
 ' ============================================================================
 Function FAT32_DeleteFile2Physical(ByVal diskIndex As Integer, _
                                    ByVal startLBA As ULongLong, _

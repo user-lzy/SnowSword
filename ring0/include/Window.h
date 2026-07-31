@@ -32,25 +32,6 @@ typedef struct _WIN32K_MSG_HOOK_INFO
     ULONG         ThreadId;            // 线程ID
 } WIN32K_MSG_HOOK_INFO, * PWIN32K_MSG_HOOK_INFO;
 
-// 从反汇编逆向的Win11 x64 Win32k内部EVENTHOOK结构（大小0x50字节）
-typedef struct _INTERNAL_EVENT_HOOK
-{
-    // 0x00: HM对象头开始
-    HANDLE                      HookHandle;         // 0x00: 钩子句柄 (你的输出: 0x60FD9)
-    ULONGLONG                   Reserved1;          // 0x08: 未知 (全0)
-    PETHREAD*                   pInstallerThread;   // 0x10: 安装钩子的线程 PETHREAD 指针
-    // 0x18: 链表和事件信息
-    struct _INTERNAL_EVENT_HOOK* pNext;             // 0x18: 下一个钩子
-    DWORD                       EventMin;           // 0x20: 最小事件ID (0x8000)
-    DWORD                       EventMax;           // 0x24: 最大事件ID (0x8001)
-    DWORD                       Flags;              // 0x28: 标志位 (0x0)
-    DWORD                       ReservedPad1;       // 0x2C: 对齐填充
-    ULONGLONG                   TargetProcessId;    // 0x30: 目标进程ID (0)
-    ULONGLONG                   TargetThreadId;     // 0x38: 目标线程ID (0)
-    PVOID                       pfnWinEventProc;    // 0x40: 回调函数指针 (你的输出: 0x00007FF7242813B1)
-	ULONGLONG                   Unknown48;          // 0x48: 未知 (0x00006010FFFFFFFF)()可能是hmodWinEventProc的64位版本，或者其他数据
-} INTERNAL_EVENT_HOOK, * PINTERNAL_EVENT_HOOK;
-
 // Win11 全局事件钩子链表头偏移（从SetWinEventHook反汇编逆向）
 #define WIN11_GPSI_EVENT_HOOK_LIST_OFFSET 0x11380
 
@@ -159,62 +140,6 @@ typedef enum _HANDLE_TYPE {
     TYPE_GENERIC = 255
 }HANDLE_TYPE, *PHANDLE_TYPE;
 
-typedef struct _HEAD {
-    PVOID unk[3];
-    PVOID threadInfo;
-}HEAD;
-
-// win32k!tagTHREADINFO 结构体（文章中直接给出）
-typedef struct _tagTHREADINFO {
-    PETHREAD    pEThread;       // +0x00 【第一个成员】→ 直接指向 NT 内核线程对象
-    ULONG       RefCount;       // +0x08
-    PVOID64     ptlW32;         // +0x10
-    PVOID64     pgdiDcattr;     // +0x18
-    // ... 其他成员
-} tagTHREADINFO, * PtagTHREADINFO;
-
-typedef struct _tagHOTKEY {
-    PVOID64       pThreadInfo;      // +0x00
-    PVOID64       pCallback;        // +0x08
-    _HWND         hWnd;             // +0x10
-    WORD          fsModifiers;      // +0x18
-    WORD          flags;            // +0x1A
-    DWORD         vk;               // +0x1C
-    DWORD         id;               // +0x20
-    struct _tagHOTKEY* pNext;       // +0x28
-    // 以下为 +0x30 开始的双向链表头，枚举时无需关心
-    PVOID64       pChildListHead;   // +0x30
-    PVOID64       pChildListTail;   // +0x38
-} tagHOTKEY, * PTAG_HOTKEY;
-
-// 热键哈希表结构（0x80个桶，固定大小）
-typedef struct _HOTKEY_HASH_TABLE
-{
-    PTAG_HOTKEY   Buckets[0x80];    // 128个哈希桶，拉链法存储
-} HOTKEY_HASH_TABLE, * PHOTKEY_HASH_TABLE;
-
-// ==============================================
-// 【修正】Win11 tagHOTKEY 结构体（匹配IDA反汇编）
-// ==============================================
-typedef struct _tagHOTKEY_WIN11 {
-    PVOID64  pThreadInfo;   // 0x00
-    PVOID64  pCallback;     // 0x08
-    PVOID64  pWnd;          // 0x10
-    PVOID64  hWnd;          // 0x18
-    WORD     fsModifiers;   // 0x20  <-- 对应 w20（真实 mod，如 0x000a=Win+Ctrl）
-    WORD     unk_22;        // 0x22  <-- 对应 w22（扩展标志，暂不处理）
-    DWORD    vk;            // 0x24  <-- 对应 d24（真实 vk，如 0x7d=F14）
-    PVOID64  id;            // 0x28  <-- 对应 q28（热键 ID）
-    PVOID64  pNext;         // 0x30
-    LIST_ENTRY HashLink;    // 0x38
-} tagHOTKEY_WIN11, * PTAG_HOTKEY_WIN11;
-
-// 哈希表结构（128个桶，匹配id&0x7F的索引计算）
-typedef struct _HOTKEY_HASH_TABLE_WIN11
-{
-    PTAG_HOTKEY_WIN11 Buckets[0x80];
-} HOTKEY_HASH_TABLE_WIN11, * PHOTKEY_HASH_TABLE_WIN11;
-
 // 池标签（和事件钩子风格统一）
 #define HOTKEY_POOL_TAG 'ktHo'
 
@@ -232,91 +157,6 @@ typedef struct _WIN32K_HOTKEY_INFO
     ULONG         ThreadId;            // 线程ID
 	PVOID         pfnCallback;        // 回调函数地址
 } WIN32K_HOTKEY_INFO, * PWIN32K_HOTKEY_INFO;
-
-// 统一的定时器条目结构（Win10/Win11通用布局）
-typedef struct _TIMER_ENTRY_WIN10 {
-    // 0x00-0x17: 保留字段
-    //UCHAR Reserved1[0x18];
-
-    // 0x18: tagPROCESSINFO (Win11) 或 EPROCESS (Win10)
-    //PVOID Process;
-
-    HEAD head;
-
-    // 0x20: 回调函数地址
-    WNDPROC pfn;
-
-    // 0x28: 超时时间(ms)
-    ULONG nTimeout;
-
-    // 0x2C: 合并超时时间
-    ULONG nTimeoutCoalesced;
-
-    // 0x30: 标志位 (0x1000=待删除, 0x40=TIF_SYSTEM_TIMER)
-    ULONG flags;
-
-    // 0x34: 超时时间副本
-    ULONG nTimeout2;
-
-    // 0x38-0x47: 保留
-    UCHAR Reserved2[0x10];
-
-    // 0x48: 全局链表 (gtmrListHead)
-    LIST_ENTRY TmrListEntry;
-
-    // 0x58: 窗口对象 (tagWND*)
-    PVOID windowPtr;
-
-    // 0x60: 定时器ID
-    ULONG64 nIDEvent;
-
-    // 0x68: 回调参数
-    ULONG_PTR param;
-
-    // 0x70: 哈希表链表 (gTimerHashTable)
-    LIST_ENTRY HashListEntry;
-} TIMER_ENTRY_WIN10, * PTIMER_ENTRY_WIN10;
-
-//typedef struct _TIMER_ENTRY_WIN11 {
-//    UCHAR           Reserved1[0x18];     // 0x00 ~ 0x17  保留
-//    PVOID           threadInfo;         // 0x18         tagTHREADINFO*（伪代码+3）
-//    WNDPROC         pfn;                // 0x20         定时器回调（伪代码+4）
-//    ULONG           nTimeout;           // 0x28         超时时间（伪代码+10）
-//    ULONG           Reserved2;          // 0x2C         填充
-//    ULONG           flags;              // 0x30         标志位(0x1000=删除)（伪代码+12）
-//    UCHAR           Reserved3[0x18];     // 0x34 ~ 0x4F  保留
-//    PVOID           hWnd;               // 0x50         ✅【核心】用户态窗口句柄（就是你要的0x330554）
-//    UCHAR           Reserved4[0x18];     // 0x58 ~ 0x6F  保留
-//    ULONG64         nIDEvent;           // 0x70         定时器ID（伪代码+14）
-//    LIST_ENTRY      HashListEntry;      // 0x78 ~ 0x87  哈希链表（伪代码+120）
-//    UCHAR           Reserved5[0x8];      // 0x88 ~ 0x8F  补齐到144字节
-//} TIMER_ENTRY_WIN11, * PTIMER_ENTRY_WIN11;
-
-typedef struct _TIMER_ENTRY_WIN11 {
-    /* 0x00 */ HEAD             head;                // 句柄表头，8字节
-    /* 0x08 */ PVOID           unk_08;
-    /* 0x10 */ PVOID           unk_10;
-    /* 0x18 */ PVOID           pti;                 // 与旧版 threadInfo 一致
-    /* 0x20 */ PVOID           pfn;                 // 回调函数 / 上下文
-    /* 0x28 */ ULONG           nTimeout;            // 到期时间
-    /* 0x2C */ ULONG           dwContextId;         // 若 dwFlags & 0x200
-    /* 0x30 */ ULONG           flags;               // 标志位 (0x1000=已删除)
-    /* 0x34 */ ULONG           msPeriod;            // 周期
-    /* 0x38 */ LIST_ENTRY      ReadyListEntry;      // 自环就绪链表
-    /* 0x48 */ LIST_ENTRY      GlobalListEntry;     // 全局定时器链表（非哈希）
-    /* 0x58 */ LIST_ENTRY      FreezeThawList;      // 冻结/解冻异步链表
-    /* 0x68 */ PVOID           pWnd;                // ✅ 正确的窗口指针
-    /* 0x70 */ UINT_PTR        nIDEvent;            // 定时器 ID
-    /* 0x78 */ LIST_ENTRY      HashListEntry;       // ✅ 窗口定时器哈希链表
-    /* 0x88 */ ULONG           dwTimeStamp;
-    /* 0x8C */ ULONG           dwPadding;           // 对齐至 0x90
-} TIMER_ENTRY_WIN11, * PTIMER_ENTRY_WIN11;
-
-// 联合体：同时容纳 Win10/Win11 结构体
-typedef union _TIMER_ENTRY {
-    PTIMER_ENTRY_WIN10 Win10;
-    PTIMER_ENTRY_WIN11 Win11;
-} TIMER_ENTRY, * PTIMER_ENTRY;
 
 typedef struct _PEB_LDR_DATA {
     ULONG Length;                           // +0x00 结构体长度
@@ -351,27 +191,6 @@ typedef VOID(*PFN_UserSessionSwitchLeaveCrit)(VOID);
 typedef PWND(*PFN_ValidateHwnd)(HWND);
 typedef PVOID(*PFN_W32GetUserSessionState)(VOID);
 typedef NTSTATUS(*PFN_RtlQueryAtomInAtomTable)(PVOID AtomTable, ATOM Atom, PULONG RefCount, PULONG PinCount, PWSTR AtomName, PULONG NameLength);
-//typedef PHOOK(*PFN_HMValidateHandle)(HANDLE hHandle, HANDLE_TYPE hType);
-//typedef PHOOK(*PFN_HMValidateHandleWithDescriptor)(HANDLE hHandle, BYTE DescriptorType);
-//typedef PHOOK(*PFN_PhkFirstGlobalValid)(PTHREADINFO pti, int HookType);
-//typedef PHOOK(*PFN_PhkNextValid)(PHOOK Current);
-
-// 枚举上下文（运行时自动检测版本）
-typedef struct _TIMER_ENUM_CONTEXT {
-    BOOLEAN isV2;                   // TRUE=Win11, FALSE=Win10
-
-    // 动态获取的函数地址
-    union {
-        PFN_W32GetUserSessionState W32GetUserSessionState;  // Win11
-        PVOID gTimerHashTable;            // Win10 备用
-    };
-
-    // 函数指针（通用）
-    PFN_EnterCrit EnterCrit;
-    PFN_UserSessionSwitchLeaveCrit UserSessionSwitchLeaveCrit;
-    PFN_ValidateHwnd ValidateHwnd;
-    //PVOID PsGetCurrentProcessWin32Process;
-} TIMER_ENUM_CONTEXT, * PTIMER_ENUM_CONTEXT;
 
 typedef struct _WINDOW_TIMER {
     WNDPROC pfn;               // 回调函数地址
@@ -382,6 +201,60 @@ typedef struct _WINDOW_TIMER {
     PVOID hWnd;                // 所属窗口
     ULONG_PTR param;          // 回调参数
 } WINDOW_TIMER, * PWINDOW_TIMER;
+
+// 签名结构体 - 统一描述各版本 Timer 对象布局
+typedef struct _TIMER_ERA_SIGNATURE {
+    // === Timer 对象字段偏移 (相对对象基址) ===
+    ULONG Timer_pThreadInfo;        // PTHREADINFO (pti) 指针偏移
+    ULONG Timer_pfn;                // 回调函数指针偏移
+    ULONG Timer_nTimeout;           // 超时时间偏移
+    ULONG Timer_nIDEvent;           // 事件ID偏移
+    ULONG Timer_flags;              // 标志位偏移
+    ULONG Timer_nTimeoutDup;        // 超时时间副本偏移
+    ULONG Timer_windowPtr;          // 窗口指针偏移 (tagWND*)
+    ULONG Timer_nIDEventDup;        // 事件ID副本偏移
+    ULONG Timer_TimeStamp;          // 时间戳偏移
+    ULONG Timer_HashListEntry;      // 哈希桶链表节点 LIST_ENTRY 偏移
+    ULONG Timer_ObjectSize;         // HMAllocObject 分配大小
+
+    // === 哈希表配置 ===
+    ULONG Timer_HashBuckets;        // 哈希桶数量 (通常为64)
+
+    // === 哈希表获取方式 (二选一) ===
+    BOOLEAN bUseSessionHashTable;   // TRUE = W32GetUserSessionState + 偏移
+    ULONG SessionHashOffset;        // 相对 W32GetUserSessionState 的偏移
+    PCSTR HashTableSymbol;          // NULL = 使用 SessionHashOffset
+
+    // === PTHREADINFO 内部偏移 ===
+    ULONG Pti_ProcessOffset;        // pti 结构体内进程指针偏移
+    ULONG Pti_EthreadOffset;        // pti 结构体内 ETHREAD 指针偏移 (0 = 首成员)
+
+    // === 标志位定义 ===
+    ULONG Flag_InUse;               // 条目使用中标志 (bit 0 = 0x1)
+    ULONG Flag_Deleted;             // 已删除标志
+
+    // === 版本范围 ===
+    ULONG OsBuildMin;               // 最小支持构建号
+    ULONG OsBuildMax;               // 最大支持构建号 (0xFFFFFFFF = 无上限)
+
+    // === 元数据 ===
+    PCSTR EraName;                  // 版本名称
+    PCSTR EnterCritSymbol;          // EnterCrit 符号名
+    PCSTR LeaveCritSymbol;          // LeaveCrit 符号名
+} TIMER_ERA_SIGNATURE, * PTIMER_ERA_SIGNATURE;
+typedef const TIMER_ERA_SIGNATURE* PCTIMER_ERA_SIGNATURE;
+
+typedef struct _TIMER_CONTEXT {
+    PFN_EnterCrit EnterCrit;
+    PFN_UserSessionSwitchLeaveCrit UserSessionSwitchLeaveCrit;
+    PFN_ValidateHwnd ValidateHwnd;
+
+    const TIMER_ERA_SIGNATURE* pSig;    // 当前匹配的签名
+    PVOID HashTableBase;                // 哈希表基址
+
+    // Win11 24H2+ 专用
+    PFN_W32GetUserSessionState W32GetUserSessionState;
+} TIMER_CONTEXT, * PTIMER_CONTEXT;
 
 NTSTATUS EnumProcessTimers(
     _Out_ PWINDOW_TIMER* pArray,
@@ -401,8 +274,7 @@ EnumEventHook(
     OUT PULONG                       pulHookCount    // 返回钩子数量
 );
 
-NTSTATUS
-EnumHotkey(
-    OUT PWIN32K_HOTKEY_INFO* ppHotkeyList,
-    OUT PULONG pulHotkeyCount
+NTSTATUS EnumHotkey(
+    _Out_ PWIN32K_HOTKEY_INFO* ppHotkeyList,
+    _Out_ PULONG pulHotkeyCount
 );

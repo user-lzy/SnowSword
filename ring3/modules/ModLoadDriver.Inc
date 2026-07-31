@@ -9,7 +9,7 @@ Function OpenDrv(ByVal szDrvLinkName As String, IsAsycn As Boolean = False) As H
     Dim hDrvHandle As HANDLE, dwFlags As DWORD = FILE_ATTRIBUTE_NORMAL
     If IsAsycn Then dwFlags Or= FILE_FLAG_OVERLAPPED
     hDrvHandle = CreateFile(szDrvLinkName, GENERIC_READ Or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, dwFlags, NULL)
-    If (hDrvHandle = INVALID_HANDLE_VALUE) Then Print WinErrorMsg(GetLastError) & "(CreateFile)"
+    If (hDrvHandle = INVALID_HANDLE_VALUE) Then MyLog.PrintWin32Error "OpenDrv", "CreateFile"
     Return hDrvHandle
 End Function
 
@@ -79,12 +79,12 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     End If'/
     Dim hNtdll As HMODULE = DyLibLoad("ntdll.dll")
     If (hNtdll = NULL) Then
-        Print "DyLibLoad(NTDLL.DLL) Error: " & GetLastError
+        MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibLoad" "加载NTDLL"
         Return False
     End If
     Dim hFltdll As HMODULE = DyLibLoad("FltLib.dll")
     If (hNtdll = NULL) Then
-        Print "DyLibLoad(FltLib.dll) Error: " & GetLastError
+        MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibLoad" "加载FltLib"
         Return False
     End If
 
@@ -93,7 +93,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     'Dim RtlFreeUnicodeString As Sub(ByVal As PUNICODE_STRING) = DyLibSymbol(hNtdll, "RtlFreeUnicodeString")
 
     If (ZwLoadDriver = NULL) Then
-        Print "DyLibSymbol Error: " & GetLastError
+        MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibSymbol"
         DyLibFree hNtdll
         Return False
     End If
@@ -101,7 +101,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     Dim driverPath As StringW
     If LeftW(szDrvPath, 2) = "\\" OrElse LeftW(szDrvPath, 2) = "//" Then '如果是网络路径
         driverPath = "C:\Windows\System32\drivers\" & RightW(szDrvPath, LenW(szDrvPath) - InStrRevW(szDrvPath, "\"))
-        Print driverPath
+        'Print driverPath
         CopyFileW szDrvPath, StrPtrW(driverPath), False
         szDrvPath = driverPath
     End If
@@ -116,7 +116,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     Dim dwDisposition As DWORD
     Dim ret As Long = RegCreateKeyEx(HKEY_LOCAL_MACHINE, @szSubKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, @KeyHandle, @dwDisposition)
     If (ret <> ERROR_SUCCESS) Then
-        Print " Error: " & WinErrorMsg(ret) & "(" & ret & ")"
+        MyLog.PrintWin32Error "LoadDriver", "RegCreateKeyEx", "szSubKey=" & szSubKey
         DyLibFree hNtdll
         DyLibFree hFltdll
         Return False
@@ -144,7 +144,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     Dim InstanceName As Const WString * 20 = szDrvName & " Instance"
     ret = RegCreateKeyEx(HKEY_LOCAL_MACHINE, @szSubKey1, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, @KeyHandle, @dwDisposition)
     If (ret <> ERROR_SUCCESS) Then
-        Print " Error: " & WinErrorMsg(ret) & "(" & ret & ")"
+        MyLog.PrintWin32Error "LoadDriver", "RegCreateKeyEx", "szSubKey1=" & szSubKey1
         DyLibFree hNtdll
         DyLibFree hFltdll
         Return False
@@ -155,7 +155,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     Dim szSubKey2 As Const WString * 260 = "SYSTEM\\CurrentControlSet\\Services\\" & szDrvName & "\\Instances\\" & InstanceName
     ret = RegCreateKeyEx(HKEY_LOCAL_MACHINE, @szSubKey2, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, @KeyHandle, @dwDisposition)
     If (ret <> ERROR_SUCCESS) Then
-        Print " Error: " & WinErrorMsg(ret) & "(" & ret & ")"
+        MyLog.PrintWin32Error "LoadDriver", "RegCreateKeyEx", "szSubKey2=" & szSubKey2
         DyLibFree hNtdll
         DyLibFree hFltdll
         Return False
@@ -180,7 +180,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
         Dim FilterName As WString * 20 = szDrvName
         Dim result As HRESULT = FilterLoad(@FilterName)
         If (result <> S_OK) Then
-            Print "FilterLoad Error:" & Hex(result)
+            MyLog.PrintNtError "LoadDriver", "FilterLoad", result, "FilterName=" & FilterName
             DyLibFree hNtdll
             DyLibFree hFltdll
             Return False
@@ -188,7 +188,7 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     Else
         Dim st As NTSTATUS = ZwLoadDriver(@uDriverServiceName)
         If Not (NT_SUCCESS(st) Or st = STATUS_IMAGE_ALREADY_LOADED) Then
-            Print "ZwLoadDriver Error: " & WinErrorMsg(st) & "(" & WStr(Hex(st)) & ")"
+            MyLog.PrintNtError "LoadDriver", "ZwLoadDriver", st, "szSubPath=" & szSubPath
             Function = False
         End If
         'RtlFreeUnicodeString(@uDriverServiceName)'为什么不能去掉括号?
@@ -207,11 +207,11 @@ Public Function UnloadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Bo
     Dim hFltdll As HMODULE = DyLibLoad("FltLib.dll")
     Dim ret As ULong
     If (hNtdll = NULL) Then
-        Print "DyLibLoad(NTDLL.DLL) Error: " & GetLastError
+        MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibLoad" "加载NTDLL"
         Return False
     End If
     If (hFltdll = NULL) Then
-        Print "DyLibLoad(FltLib.dll) Error: " & GetLastError
+        MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibLoad" "加载Fltlib"
         DyLibFree hNtdll
         Return False
     End If
@@ -226,14 +226,19 @@ Public Function UnloadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Bo
         Dim FilterName As WString * 20 = szDrvName
         Dim result As HRESULT = FilterUnload(@FilterName)
         If (result <> S_OK) Then
-            Print "FilterUnload Error:" & Hex(result)
+            MyLog.PrintNtError "LoadDriver", "FilterUnload", result, "FilterName=" & FilterName
             DyLibFree hNtdll
             DyLibFree hFltdll
             Return False
         End If
     Else
         ret = ZwUnloadDriver(@uDriverServiceName)
-        If (ret <> 0) Then Print "ZwUnloadDriver Error: " & WinErrorMsg(ret) & "(" & WStr(Hex(ret)) & ")"
+        If (ret <> 0) Then
+            MyLog.PrintNtError "LoadDriver", "ZwUnloadDriver", ret, "szSubPath=" & szSubPath
+            DyLibFree hNtdll
+            DyLibFree hFltdll
+            Return False
+        End If
     End If
     '删除注册表信息
     RegDeleteKey HKEY_LOCAL_MACHINE, szSubKey1
@@ -241,14 +246,14 @@ Public Function UnloadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Bo
     'RtlFreeUnicodeString(@uDriverServiceName)
     DyLibFree hNtdll
     DyLibFree hFltdll
-    Return (ret = 0)
+    Return True
 End Function
 
 Function InitDriver() As Boolean
-    If Not IsSupportOS Then
+    /'If Not IsSupportOS Then
         AfxMsg "很抱歉,该功能暂仅支持Win10 2004 (19041)~Win11 24H2!", "提示"
         Return False
-    End If 
+    End If'/
     If Not LoadDriver(App.Path & "SnowSword.sys", False) Then Return False
     hDrv = OpenDrv("\\.\\SnowSword", True)
     If (hDrv = INVALID_HANDLE_VALUE) Then Return False

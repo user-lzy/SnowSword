@@ -79,7 +79,7 @@ NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 		status = ObQueryNameString(HandleInfo->Object, NULL, 0, &nameLength);
 
 		if (status == STATUS_INFO_LENGTH_MISMATCH) {
-			POBJECT_NAME_INFORMATION nameInfo = (POBJECT_NAME_INFORMATION)ExAllocatePool2(POOL_FLAG_NON_PAGED, nameLength, 'MyTg');
+			POBJECT_NAME_INFORMATION nameInfo = (POBJECT_NAME_INFORMATION)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, nameLength, 'MyTg');
 			if (nameInfo) {
 				status = ObQueryNameString(HandleInfo->Object, nameInfo, nameLength, &nameLength);
 				if (NT_SUCCESS(status)) {
@@ -229,7 +229,7 @@ NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
 		goto QueryType;
 	}
 	bufferSize = returnLength;
-	NameInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
+	NameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
 	if (!NameInfo)
 	{
 		DbgPrint("查询0x%p名称分配空间失败:%X", HandleInfo->Handle, STATUS_INSUFFICIENT_RESOURCES);
@@ -260,7 +260,7 @@ QueryType:
 		goto Cleanup;
 	}
 	bufferSize = returnLength;
-	TypeInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
+	TypeInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
 	if (!TypeInfo)
 	{
 		DbgPrint("查询类型分配空间失败:%X", STATUS_INSUFFICIENT_RESOURCES);
@@ -398,7 +398,7 @@ NTSTATUS CloseHandle(PDO_SOMETHING DoSomething) {
 
 	// 处理 STATUS_INFO_LENGTH_MISMATCH 错误 
 	if (status == STATUS_INFO_LENGTH_MISMATCH) {
-		pBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, 'HdlT');
+		pBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'HdlT');
 		status = ZwQuerySystemInformation(SystemHandleInformation, pBuffer, bufferSize, NULL);
 		if (!NT_SUCCESS(status)) {
 			DbgPrint("ZwQuerySysytemInformation failed!status=%X", status);
@@ -440,7 +440,7 @@ PVOID FindObTypeIndexTable() {
 	PVOID result = SearchSpecialCode(ObGetObjectTypeAddr, 0x30, ulSpecialCode, sizeof(ulSpecialCode));
 	if (result == NULL) return NULL;
 
-	ULONG offset = *(PULONG)((PUCHAR)result + sizeof(ulSpecialCode));
+	LONG offset = *(PLONG)((PUCHAR)result + sizeof(ulSpecialCode));
 	return (PVOID)((PUCHAR)result + 7 + offset);
 }
 
@@ -501,7 +501,7 @@ POBJECT_TYPE* FindExCallbackObjectType() {
 		if (pBuffer != NULL) ExFreePoolWithTag(pBuffer, 'pbuf');
 
 		ulLength = ulLength * 2;
-		pBuffer = (PDIRECTORY_BASIC_INFORMATION)ExAllocatePool2(POOL_FLAG_NON_PAGED, ulLength, 'pbuf');
+		pBuffer = (PDIRECTORY_BASIC_INFORMATION)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, ulLength, 'pbuf');
 		if (NULL == pBuffer)
 		{
 			if (pBuffer != NULL) ExFreePoolWithTag(pBuffer, 'pbuf');

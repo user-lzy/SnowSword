@@ -227,7 +227,7 @@ void EnumerateFilterDrivers() {
 			status = IoEnumerateDeviceObjectList(driverObject, NULL, 0, &actualNumberOfDeviceObjects);
 			if (status == STATUS_BUFFER_TOO_SMALL) {
 				deviceObjectListSize = actualNumberOfDeviceObjects * sizeof(PDEVICE_OBJECT);
-				deviceObjectList = (PDEVICE_OBJECT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, deviceObjectListSize, 'dOeD');
+				deviceObjectList = (PDEVICE_OBJECT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, deviceObjectListSize, 'dOeD');
 				if (deviceObjectList) {
 					// 第二次调用IoEnumerateDeviceObjectList，获取设备对象列表
 					status = IoEnumerateDeviceObjectList(driverObject, deviceObjectList, deviceObjectListSize, &actualNumberOfDeviceObjects);
@@ -329,7 +329,7 @@ NTSTATUS InjectDllByApc(
 	//---------------------------------------------------------
 	// 构造 APC
 	//---------------------------------------------------------
-	KAPC* pApc = (KAPC*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KAPC), 'apcX');
+	KAPC* pApc = (KAPC*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KAPC), 'apcX');
 
 	/*KeInitializeApc(
 		pApc,

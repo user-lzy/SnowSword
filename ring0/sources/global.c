@@ -73,7 +73,7 @@ NTSTATUS ValidateUserUnicodeString(PUNICODE_STRING pUserUnicodeString, PUNICODE_
 
     // 步骤5：（可选）将用户空间字符串复制到内核空间（避免用户后续修改内存）
     pKernelUnicodeString->MaximumLength = pUserUnicodeString->MaximumLength;
-    pKernelUnicodeString->Buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, pKernelUnicodeString->MaximumLength, 'tag');
+    pKernelUnicodeString->Buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pKernelUnicodeString->MaximumLength, 'tag');
     if (pKernelUnicodeString->Buffer == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -343,8 +343,8 @@ PVOID FindExportedFunctionByName(
  * @return 函数地址（NULL表示未找到/参数错误）
  */
 PVOID KernelGetProcAddress(
-    _In_ PCHAR ModuleName,
-    _In_ PCHAR FunctionName
+    _In_ PCSTR ModuleName,
+    _In_ PCSTR FunctionName
 )
 {
     // 1. 基础参数校验

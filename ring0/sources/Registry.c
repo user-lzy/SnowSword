@@ -14,7 +14,7 @@ BOOLEAN GetFullPath(PUNICODE_STRING pRegistryPath, PVOID pRegistryObject)
     }
     // …Í«Îƒ⁄¥Ê
     ULONG ulSize = 512;
-    PVOID lpObjectNameInfo = ExAllocatePool2(POOL_FLAG_NON_PAGED, ulSize, 'lpon');
+    PVOID lpObjectNameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, ulSize, 'lpon');
     if (NULL == lpObjectNameInfo)
     {
         return FALSE;

@@ -234,7 +234,7 @@ Public Sub GetFileList(CurrentNode As HTREEITEM, treFolder As Class_TreeView, lv
         If IsPhysicalAnalyze Then
             IsBeAccess = False
         Else
-            Print "[GetFileList]FindFirstFileW" & WinErrorMsg(GetLastError)
+            MyLog.PrintWin32Error "GetFileList", "FindFirstFileW", "szPath=" & szPath
             Exit Sub
         End If
     End If
@@ -329,7 +329,7 @@ Public Sub GetFileList_CLI(ByVal szPath As StringW, ByVal IsPhysicalAnalyze As B
         If IsPhysicalAnalyze Then
             IsBeAccess = False
         Else
-            Print "[GetFileList_CLI]FindFirstFileW" & WinErrorMsg(GetLastError)
+            MyLog.PrintWin32Error "GetFileList_CLI", "FindFirstFileW", "szPath=" & szPath
             Dim emptyRows() As CuiFlatRow
             ReDim emptyRows(-1) As CuiFlatRow
             CuiPrintFlatData("FILE", emptyRows(), colNames(), 3)
@@ -750,7 +750,7 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
         Wend
 
         If Not bFound Then
-            Print "Not found: " & sParts(i)
+            MyLog.PrintInfo "GetNodeByFolderPathW",, "Not found: " & sParts(i)
             Return NULL
         End If
     Next
@@ -768,24 +768,128 @@ End Function
 Function ForceDeleteFile(ByVal lpFilePath As LPCWSTR) As Boolean
     Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
     If (strFile = NULL) Then
-        Print "[FrmMain_mnuFile_ForceDelete]分配内存失败"
+        MyLog.PrintLog LOG_ERROR, "ForceDeleteFile", "Allocate"
         Return False
     End If
     *strFile = "\??\" & *lpFilePath
-    'AfxMsg *strFile
+    
     If IsDriverLoaded Then
         #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
         Dim status As NTSTATUS = MyDeleteFile(strFile)
         SetLastError 0
         If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
-            If IoControl(hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then Print "[ForceDeleteFile]IOCTL_DeleteFileByIRP:" & WinErrorMsg(GetLastError) & GetLastError
+            If IoControl(hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then
+                MyLog.PrintWin32Error "ForceDeleteFile", "IOCTL_DeleteFileByIRP", "strFile=" & *strFile
+                Deallocate strFile
+                Return False
+            End If
         Else ' 是被打开的文件
-            If IoControl(hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then Print "[ForceDeleteFile]IOCTL_DeleteFileByXCB:" & WinErrorMsg(GetLastError) & GetLastError
-            DeleteFile strFile
-            Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
+            If IoControl(hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)) = 0 Then
+                MyLog.PrintWin32Error "ForceDeleteFile", "IOCTL_DeleteFileByXCB", "strFile=" & *strFile
+                Deallocate strFile
+                Return False
+            End If
+            If DeleteFile(strFile) = 0 Then
+                MyLog.PrintWin32Error "ForceDeleteFile", "DeleteFile", "strFile=" & *strFile
+                Deallocate strFile
+                Return False
+            End If
         End If
     End If
     Deallocate strFile
+    Return True
+End Function
+
+Function DeleteDirectoryIterative(ByVal lpPath As StringW) As Boolean
+    ' 使用栈模拟递归，避免深层嵌套导致栈溢出
+    ' 栈元素：待处理的文件夹路径
+    Dim stackPaths() As StringW
+    ReDim stackPaths(0 To 15)  ' 预分配，动态扩容
+    Dim stackTop As Long = -1  ' 栈顶指针，-1表示空
+    
+    ' 辅助函数：压栈
+    #Macro PushStack(p)
+        stackTop += 1
+        If stackTop > UBound(stackPaths) Then
+            ReDim Preserve stackPaths(0 To UBound(stackPaths) * 2 + 1)
+        End If
+        stackPaths(stackTop) = (p)
+    #EndMacro
+    
+    ' 辅助函数：弹栈
+    #Macro PopStack()
+        stackTop -= 1
+    #EndMacro
+    
+    ' 第一步：将初始路径压栈
+    PushStack(lpPath)
+    
+    ' 栈不为空时循环处理
+    While stackTop >= 0
+        Dim wszCurrent As StringW = stackPaths(stackTop)
+        PopStack()
+        
+        ' 枚举当前目录内容
+        Dim wfd As WIN32_FIND_DATAW
+        Dim hFind As HANDLE
+        Dim wszSearch As StringW = wszCurrent & "\*"
+        
+        hFind = FindFirstFile(wszSearch, @wfd)
+        If hFind = INVALID_HANDLE_VALUE Then
+            ' 无法打开或为空，尝试直接删除文件夹
+            RemoveDirectory(wszCurrent)
+            Continue While
+        End If
+        
+        ' 先收集所有子项，避免FindFirstFile/FindNextFile句柄冲突
+        Dim subDirs() As StringW
+        Dim subFiles() As StringW
+        Dim dirCount As Long = 0
+        Dim fileCount As Long = 0
+        ReDim subDirs(0 To 7)
+        ReDim subFiles(0 To 15)
+        
+        Do
+            If wfd.cFileName <> "." AndAlso wfd.cFileName <> ".." Then
+                Dim wszFull As StringW = wszCurrent & "\" & wfd.cFileName
+                If (wfd.dwFileAttributes And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then
+                    ' 子文件夹
+                    If dirCount > UBound(subDirs) Then
+                        ReDim Preserve subDirs(0 To UBound(subDirs) * 2 + 1)
+                    End If
+                    subDirs(dirCount) = wszFull
+                    dirCount += 1
+                Else
+                    ' 文件
+                    If fileCount > UBound(subFiles) Then
+                        ReDim Preserve subFiles(0 To UBound(subFiles) * 2 + 1)
+                    End If
+                    subFiles(fileCount) = wszFull
+                    fileCount += 1
+                End If
+            End If
+        Loop While FindNextFile(hFind, @wfd)
+        
+        FindClose hFind
+        
+        ' 先删除所有文件
+        For i As Long = 0 To fileCount - 1
+            DeleteFile(subFiles(i))
+        Next
+        
+        ' 如果没有子文件夹，直接删除当前文件夹
+        If dirCount = 0 Then
+            RemoveDirectory(wszCurrent)
+        Else
+            ' 有子文件夹：先把自己重新压栈（等子文件夹处理完后再删）
+            PushStack(wszCurrent)
+            ' 再把所有子文件夹压栈（后进先出，保证深度优先）
+            For i As Long = dirCount - 1 To 0 Step -1
+                PushStack(subDirs(i))
+            Next
+        End If
+    Wend
+    
     Return True
 End Function
 
@@ -794,22 +898,22 @@ Function LocateFilePath(ByVal lpFilePath As StringW) As Boolean
     Dim pos1 As Integer = InStrRevW(lpFilePath, "\")
     Dim FileName As StringW = UCaseW(RightW(lpFilePath, LenW(lpFilePath) - pos1))
     Dim FolderPath As StringW = UCaseW(LeftW(lpFilePath, pos1 - 1))
-    'Print "FolderPath:" & FolderPath & " FileName:" & FileName
+    
     If InStrW(lpFilePath, "PhysicalDrive") = 1 Then
-        Print "无盘符"
+        MyLog.PrintInfo "LocateFilePath",, lpFilePath & ":无盘符"
         SetMenuCheckState FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, True
     End If
     SwitchToModule "文件"
     Dim FolderNode As HTREEITEM = GetNodeByFolderPathW(FolderPath, FrmMain.TreeView, FrmMain.ListView1)
     'SendMessage TreeView.hWnd, TVM_SELECTITEM, TVGN_CARET, Cast(lParam, FolderNode) ' 选中这项
-    'Print "FolderNode:" & FolderNode
+    
     GetFileList FolderNode, FrmMain.TreeView, FrmMain.ListView1, False, True, GetMenuCheckState(FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
-    'FF_DoEvents
+    
     For i As Integer = 0 To FrmMain.ListView1.ItemCount - 1
         If UCaseW(FrmMain.ListView1.GetItemText(i, 0)) = FileName Then
             FrmMain.ListView1.SelectedItem = i
             ListView_EnsureVisible(FrmMain.ListView1.hWnd, i, False)
-            'Print "找到"
+            
             SetMenuCheckState FrmMain.mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, False
             Return True
         End If
@@ -828,7 +932,7 @@ Function LocateFilePathByExplorer(ByVal lpFilePath As LPCWSTR) As Boolean
         ILFree pidl
         Return True
     Else
-        Print "无法创建文件路径的 ITEMIDLIST。:" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "ILCreateFromPathW", "lpFilePath=" & *lpFilePath
         Return False
     End If 
 End Function
@@ -864,13 +968,13 @@ Function FB_ShellCopyFile(sFrom As StringW, sTo As StringW, ByVal hOwner As HWND
 
     ' 5. 检查用户是否取消了操作
     If FileOp.fAnyOperationsAborted <> 0 Then
-        Print "操作被用户取消！"
+        MyLog.PrintInfo "FB_ShellCopyFile", "SHFileOperationW", "操作被用户取消!"
         Return False
     End If
     If ret = 0 Then
         Return True
     Else
-        Print "SHFileOperationW failed, 0x" & WHex(ret)
+        MyLog.PrintNtError "FB_ShellCopyFile", "SHFileOperationW", ret
         Return False
     End If
 End Function
@@ -1112,7 +1216,7 @@ Private Function IsMicrosoftSignatureFromFile(ByVal filePath As LPCWSTR) As Bool
                         
                         If InStrW(subject, "MICROSOFT") > 0 Or InStrW(subject, "Microsoft") > 0 Then
                             result = True
-                            'Print "√ 匹配到微软签名！"
+                            'Print "√ 匹配到微软签名!"
                         Else
                             'Print "× 未匹配到 MICROSOFT 关键词"
                         End If
@@ -1165,19 +1269,19 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR, ByVal pIsMicrosoftSign As
     
     ' 1. 获取目录管理员上下文
     If CryptCATAdminAcquireContext(@hCatAdmin, NULL, 0) = False Then
-        Print "CryptCATAdminAcquireContext failed: " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "VerifyFileSign", "CryptCATAdminAcquireContext"
         Return False
     End If
     
     ' 2. 打开文件并计算哈希
     hFile = CreateFileW(pwszFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
     If hFile = INVALID_HANDLE_VALUE Then
-        Print "CreateFile failed: " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "VerifyFileSign", "CreateFile", "pwszFilePath=" & *pwszFilePath
         Goto cleanup
     End If
     
     If CryptCATAdminCalcHashFromFileHandle(hFile, @cbHash, @rgbHash(0), 0) = False Then
-        Print "CryptCATAdminCalcHashFromFileHandle failed: " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "VerifyFileSign", "CryptCATAdminCalcHashFromFileHandle", "pwszFilePath=" & *pwszFilePath
         Goto cleanup
     End If
     
@@ -1194,8 +1298,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR, ByVal pIsMicrosoftSign As
     ' 3. 根据哈希查找目录
     hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, @rgbHash(0), cbHash, 0, NULL)
     If hCatInfo = NULL Then
-        'Print "CryptCATAdminEnumCatalogFromHash failed. No catalog found for the file." & WinErrorMsg(GetLastError) & GetLastError
-        'Goto cleanup
+        'MyLog.PrintInfo "VerifyFileSign", "CryptCATAdminEnumCatalogFromHash", "szMemberTag=" & szMemberTag
         Goto CheckFileSign
     End If
     
@@ -1222,8 +1325,7 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR, ByVal pIsMicrosoftSign As
         wtd.dwUnionChoice = WTD_CHOICE_CATALOG
         wtd.fdwRevocationChecks = RevocationChecks
         wtd.dwStateAction = StateAction
-        'For a2 As Integer = 0 To 0 ' 1
-        wtd.dwProvFlags = ProvFlags ' (a2)
+        wtd.dwProvFlags = ProvFlags
         
         ' 5. 调用WinVerifyTrust验证目录签名
         Dim Status As Long = WinVerifyTrust(NULL, @wvtGUID, @wtd)
@@ -1235,7 +1337,6 @@ Function VerifyFileSign(ByVal pwszFilePath As LPCWSTR, ByVal pIsMicrosoftSign As
         If Status = ERROR_SUCCESS Then
             If pIsMicrosoftSign Then *pIsMicrosoftSign = IsMicrosoftSignatureFromFile(catalogInfo.wszCatalogFile)
         End If
-        'Next
     Else
 CheckFileSign:
         Dim wfi As WINTRUST_FILE_INFO
@@ -1382,8 +1483,8 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
                 ' ==============================================
                 Case Else
                     ' 其他所有异常 → 判定为危险
-                    Print "状态:0x" & WHex(verifyResult) & "(" & verifyResult & ")" & " TRUST_E_EXPIRED:0x" & WHex(TRUST_E_EXPIRED) & "(" & TRUST_E_EXPIRED & ")"
-                    'ForeColor = FB_Red
+                    'Print "状态:0x" & WHex(verifyResult) & "(" & verifyResult & ")" & " TRUST_E_EXPIRED:0x" & WHex(TRUST_E_EXPIRED) & "(" & TRUST_E_EXPIRED & ")"
+                    BackColor = FB_Grey
             End Select
             
             Dim msg As SIGNVERIFY_MSG Ptr = Callocate(SizeOf(SIGNVERIFY_MSG))
@@ -1440,7 +1541,8 @@ Function ForceCopyFolder(SourcePath As StringW, TargetPath As StringW) As Boolea
     StringCbCopyW @pCopyPath->TargetPath, MAX_PATH, TargetPath.WstrPtr
     pCopyPath->IsDirectory = True
     If IoControl(hDrv, IOCTL_CopyFolder, pCopyPath, SizeOf(COPY_PATH)) = 0 Then
-        AfxMsg "强制复制失败![ForceCopyFolder]" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "ForceCopyFolder", "IOCTL_CopyFolder", "SourcePath=" & SourcePath & ",TargetPath=" & TargetPath
+        AfxMsg "强制复制失败!"
         Function = False
     Else
         AfxMsg "强制复制成功!"

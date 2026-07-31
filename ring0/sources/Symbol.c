@@ -294,7 +294,7 @@ NTSTATUS InternalQuerySymbol(
     if (!g_SymbolCtx || !Request || !Response)
         return STATUS_INVALID_PARAMETER;
 
-    PSYMBOL_JOB job = ExAllocatePool2(
+    PSYMBOL_JOB job = KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         sizeof(SYMBOL_JOB),
         'jbS');
@@ -353,7 +353,7 @@ NTSTATUS InternalQuerySymbol(
         Executive,
         KernelMode,
         FALSE,
-        &timeout
+        NULL
     );
 
     NTSTATUS finalStatus;
@@ -499,7 +499,7 @@ NTSTATUS GetNtStructOffset(PCWSTR StructName, PCWSTR MemberName, PLONG Offset)
 // ==============================
 NTSTATUS InitSymbolContext(PDEVICE_OBJECT deviceObj)
 {
-    g_SymbolCtx = ExAllocatePool2(
+    g_SymbolCtx = KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         sizeof(DEVICE_CONTEXT),
         'SmbS'

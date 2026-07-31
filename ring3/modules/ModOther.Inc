@@ -18,28 +18,28 @@ Private Function GetDllExports(ByVal DllName As String, ByRef exportDir As IMAGE
     dllBase = LoadLibrary(DllName)
     'dllBase = GetModuleHandle(DllName)
     If dllBase = NULL Then
-        Print "无法获取ntdll.dll模块句柄"
+        MyLog.PrintLog LOG_ERROR, "GetDllExports", "LoadLibrary", "获取ntdll.dll模块句柄"
         Return NULL
     End If
     
     ' 获取DOS头
     Dim dosHeader As IMAGE_DOS_HEADER Ptr = Cast(IMAGE_DOS_HEADER Ptr, dllBase)
     If dosHeader->e_magic <> &H5A4D Then ' "MZ"
-        Print "无效的PE文件"
+        MyLog.PrintLog LOG_ERROR, "GetDllExports",, "无效的PE文件"
         Return NULL
     End If
     
     ' 获取NT头
     Dim ntHeaders As IMAGE_NT_HEADERS64 Ptr = Cast(IMAGE_NT_HEADERS64 Ptr, Cast(Byte Ptr, dllBase) + dosHeader->e_lfanew)
     If ntHeaders->Signature <> &H4550 Then ' "PE"
-        Print "无效的PE签名"
+        MyLog.PrintLog LOG_ERROR, "GetDllExports",, "无效的PE签名"
         Return NULL
     End If
     
     ' 获取导出表目录
     Dim exportDirRVA As Long = ntHeaders->OptionalHeader.DataDirectory(0).VirtualAddress
     If exportDirRVA = 0 Then
-        Print "没有导出表"
+        MyLog.PrintLog LOG_ERROR, "GetDllExports",, "无导出表"
         Return NULL
     End If
     
@@ -206,15 +206,15 @@ Sub CopyDataToClipboard(ByVal strData As String)
                 ' 7. 将数据设置到剪贴板，系统将管理 hMemory
                 SetClipboardData CF_TEXT, hMemory
             Else
-                Print "[CopyDataToClipboard]GlobalLock:" & WinErrorMsg(GetLastError) & GetLastError
+                MyLog.PrintWin32Error "CopyDataToClipboard", "GlobalLock"
             End If
         Else
-            Print "[CopyDataToClipboard]GlobalAlloc:" & WinErrorMsg(GetLastError) & GetLastError
+            MyLog.PrintWin32Error "CopyDataToClipboard", "GlobalAlloc"
         End If
         ' 8. 关闭剪贴板
         CloseClipboard
     Else
-        Print "[CopyDataToClipboard]OpenClipboard:" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "CopyDataToClipboard", "OpenClipboard"
     End If
 End Sub
 
@@ -228,7 +228,7 @@ Sub CopyFileToClipboard(sFilePath As StringW)
     
     ' 打开剪贴板
     If OpenClipboard(GetForegroundWindow) = 0 Then
-        Print "[CopyFileToClipboard]OpenClipboard 失败"
+        MyLog.PrintLog LOG_ERROR, "CopyFileToClipboard", "OpenClipboard"
         Exit Sub
     End If
     EmptyClipboard
@@ -242,7 +242,7 @@ Sub CopyFileToClipboard(sFilePath As StringW)
     hDrop = GlobalAlloc(GMEM_MOVEABLE Or GMEM_ZEROINIT, bufSize)
     If hDrop = NULL Then
         CloseClipboard
-        Print "[CopyFileToClipboard]GlobalAlloc 失败"
+        MyLog.PrintWin32Error "CopyFileToClipboard", "GlobalAlloc"
         Exit Sub
     End If
 
@@ -250,7 +250,7 @@ Sub CopyFileToClipboard(sFilePath As StringW)
     If pDrop = NULL Then
         GlobalFree hDrop
         CloseClipboard
-        Print "[CopyFileToClipboard]GlobalLock 失败"
+        MyLog.PrintWin32Error "CopyFileToClipboard", "GlobalLock"
         Exit Sub
     End If
 
@@ -291,14 +291,14 @@ Sub CopyFileToClipboardFull(sFilePath As StringW)
     ' 初始化 COM
     hr = OleInitialize(NULL)
     If hr <> 0 And hr <> &H1 Then ' S_OK 或 S_FALSE
-        Print "CoInitialize FAILED: "; hr
+        MyLog.PrintNtError "CopyFileToClipboardFull", "OleInitialize", hr
         Exit Sub
     End If
 
     ' 获取文件完整 PIDL
     pidlFile = ILCreateFromPathW(StrPtrW(sFilePath))
     If pidlFile = NULL Then
-        Print "ILCreateFromPathW FAILED, "; GetLastError()
+        MyLog.PrintWin32Error "CopyFileToClipboardFull", "ILCreateFromPathW", "sFilePath=" & sFilePath
         CoUninitialize
         Exit Sub
     End If
@@ -307,7 +307,7 @@ Sub CopyFileToClipboardFull(sFilePath As StringW)
     parentPath = LeftW(sFilePath, InStrRevW(sFilePath, "\") - 1)
     pidlFolder = ILCreateFromPathW(StrPtrW(parentPath))
     If pidlFolder = NULL Then
-        Print "ILCreateFromPathW parent FAILED, "; GetLastError()
+        MyLog.PrintWin32Error "CopyFileToClipboardFull", "ILCreateFromPathW", "parentPath=" & parentPath
         ILFree pidlFile
         CoUninitialize
         Exit Sub
@@ -316,7 +316,7 @@ Sub CopyFileToClipboardFull(sFilePath As StringW)
     ' 获取子 PIDL（文件名相对父目录）
     apidl(0) = ILFindLastID(pidlFile)
     If apidl(0) = NULL Then
-        Print "ILFindLastID FAILED"
+        MyLog.PrintWin32Error "CopyFileToClipboardFull", "ILFindLastID"
         ILFree pidlFile
         ILFree pidlFolder
         CoUninitialize
@@ -326,7 +326,7 @@ Sub CopyFileToClipboardFull(sFilePath As StringW)
     ' 创建 IDataObject
     hr = SHCreateDataObject(pidlFolder, 1, Varptr(apidl(0)), NULL, @IID_IDataObject, pDataObject)
     If hr <> 0 Or pDataObject = NULL Then
-        Print "SHCreateDataObject FAILED, "; hr
+        MyLog.PrintNtError "CopyFileToClipboardFull", "SHCreateDataObject", hr
         ILFree pidlFile
         ILFree pidlFolder
         CoUninitialize
@@ -336,7 +336,7 @@ Sub CopyFileToClipboardFull(sFilePath As StringW)
     ' 设置到剪贴板
     hr = OleSetClipboard(pDataObject)
     If hr <> 0 Then
-        Print "OleSetClipboard FAILED, "; hr
+        MyLog.PrintNtError "CopyFileToClipboardFull", "OleSetClipboard", hr
     End If
 
     ' 释放 PIDL

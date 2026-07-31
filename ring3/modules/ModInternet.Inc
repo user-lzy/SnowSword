@@ -107,7 +107,7 @@ Function IPStringToIPADDR(ipStr As String) As UInteger
     'Dim library As Any Ptr = DyLibLoad("")
     Dim hostentPtr As hostent Ptr = gethostbyname(ipStr)
     If hostentPtr = NULL Then
-        Print "无法解析IP地址," & WinErrorMsg(GetLastError)
+        MyLog.PrintLog LOG_ERROR, "IPStringToIPADDR", "gethostbyname", "ipStr=" & ipStr
         Return 0
     End If
     Dim ipAddr As UInteger
@@ -143,8 +143,6 @@ Sub NetworkListenerThread(ByVal userdata As Any Ptr)
         Dim ret As Long = recv(sock, buffer, dwBuf, 0)
         If ret <= 0 Then Continue Do
         
-        Print "ret > 0"
-        
         ' ============== 安全校验：避免内存越界 ==============
         If ret < SizeOf(IPHeader) Then Continue Do
         memcpy @ip, buffer, SizeOf(IPHeader)
@@ -163,8 +161,8 @@ End Sub
 ' 使用inet_ntop将IPADDR转换回IP字符串
 Function IPADDRToIPString(ipAddr As UInteger) As String
     Dim ipStr As ZString * 16
-    If inet_ntop(AF_INET, @IPAddr, @ipStr, 16) = 0 Then
-        Print "转换失败," & WinErrorMsg(GetLastError)
+    If inet_ntop(AF_INET, @ipAddr, @ipStr, 16) = 0 Then
+        MyLog.PrintLog LOG_ERROR, "IPADDRToIPString" "inet_ntop", "ipAddr=" & ipAddr
         Return ""
     End If
     Return ipStr
@@ -184,7 +182,7 @@ Sub PingThread(ByVal Param As Any Ptr)
         'Print IPADDRToIPString(tdata->ip)
     Else
         ' 主机离线或拒绝响应
-        Print "IP: " & IPADDRToIPString(tdata->ip) & " 离线或拒绝响应"
+        MyLog.PrintLog LOG_ERROR, "PingThread", "IcmpSendEcho", "IP: " & IPADDRToIPString(tdata->ip) & " 离线或拒绝响应"
     End If
     'IPScanProgress += 1
     'FrmFireWall.lblStatus.Caption = WStr(IPScanProgress)
@@ -196,14 +194,14 @@ Sub GetAliveHostList(ByVal TheIP As String, ByVal startIP As ULong, ByVal endIP 
     ' 初始化WinSock
     Dim wsaData As WSADATA
     If WSAStartup(MAKEWORD(2, 2), @wsaData) <> 0 Then
-        Print "WSAStartup failed"
+        MyLog.PrintLog LOG_ERROR, "GetAliveHostList", "WSAStartup"
         Exit Sub
     End If
-    Print TheIP & " " & startIP & " " & endIP
+    'Print TheIP & " " & startIP & " " & endIP
     ' 定义ICMP句柄
     Dim IcmpHandle As Any Ptr = IcmpCreateFile
     If IcmpHandle = 0 Then
-        Print "无法创建ICMP句柄," & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "GetAliveHostList", "IcmpCreateFile"
         Exit Sub
     End If
     
@@ -244,14 +242,14 @@ Function SetSnifferStatus(ListView As Class_ListView, ByVal IsStart As Boolean) 
         ' 初始化Winsock
         Dim wsaData As WSADATA
         If WSAStartup(MAKEWORD(2, 2), @wsaData) <> 0 Then
-            Print "WSAStartup failed"
+            MyLog.PrintLog LOG_ERROR, "SetSnifferStatus", "WSAStartup"
             Return False
         End If
 
         ' 创建原始套接字
         sock = socket_(AF_INET, SOCK_RAW, IPPROTO_IP)
         If sock = INVALID_SOCKET Then
-            Print "Socket creation failed:" & WinErrorMsg(GetLastError)
+            MyLog.PrintLog LOG_ERROR, "SetSnifferStatus", "socket_", "WSAGetLastError: " & WSAGetLastError
             WSACleanup
             Return False
         End If
@@ -282,7 +280,7 @@ Function SetSnifferStatus(ListView As Class_ListView, ByVal IsStart As Boolean) 
         addr_in.sin_addr.S_addr = htonl(INADDR_ANY)
         addr_in.sin_port = htons(0)
         If bind(sock, Cast(SOCKADDR Ptr, @addr_in), Len(addr_in)) <> 0 Then
-            Print "Bind failed: " & WSAGetLastError
+            MyLog.PrintLog LOG_ERROR, "SetSnifferStatus", "bind", "WSAGetLastError: " & WSAGetLastError
             closesocket(sock)
             sock = INVALID_SOCKET
             Return False

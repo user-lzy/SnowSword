@@ -4,6 +4,9 @@ Dim Shared g_OutputJson As Boolean = False
 Dim Shared g_AgentPipeName As WString * 128
 Dim Shared g_hAgentPipe As HANDLE = INVALID_HANDLE_VALUE
 Dim Shared g_InAgentMode As Boolean = False
+' 【新增】单次命令字符串（用于 -c "command string" 模式）
+Dim Shared g_SingleCommand As WString * 1024
+
 #define vbCrlfW WChr(13, 10)
 #define CUI_MAX_COLUMNS 32
 
@@ -14,6 +17,14 @@ Sub ProceedCommandLine(CommandLine As String)
     
     For i As Integer = 1 To 10
         If Command(i) = "" Then Exit For
+        ' 新增：-c 模式
+        If UCase(Command(i)) = "--C" OrElse UCase(Command(i)) = "--CMD" Then
+            g_CuiMode = True
+            If (i + 1) <= 10 AndAlso Command(i + 1) <> "" Then
+                g_SingleCommand = Command(i + 1)
+                i += 1
+            End If
+        End If
         If UCase(Command(i)) = "--CLI" Then g_CuiMode = True
         If UCase(Command(i)) = "--FORMAT" AndAlso UCase(Command(i + 1)) = "JSON" Then g_OutputJson = True
         If UCase(Command(i)) = "--AGENT-PIPE" AndAlso (i + 1) <= 10 Then
@@ -53,45 +64,85 @@ End Function
 ' ---------- 重载1：接受 StringW ----------
 Sub SafeStdOut Overload(ByVal szText As StringW)
     If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
+        ' Agent 模式：走管道（已有 UTF-8 转换）
         If Not _PipeWriteRaw(StrPtrW(szText)) Then
             OutputDebugStringW(StrPtrW("PipeWrite failed, err=" & GetLastError()))
         End If
-    ElseIf g_InAgentMode Then
-        ' Agent模式但管道尚未就绪（如初始化阶段），回退到调试输出
+        Exit Sub
+    End If
+    
+    Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
+    If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
         OutputDebugStringW(StrPtrW(szText))
-    Else
-        Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
-        If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
-            OutputDebugStringW(StrPtrW(szText))
-            Exit Sub
-        End If
+        Exit Sub
+    End If
+    
+    ' ========== 关键修复：检测是否被重定向（管道/文件）==========
+    Dim dwMode As DWORD
+    Dim isConsole As Boolean = GetConsoleMode(hOut, @dwMode)
+    
+    If isConsole Then
+        ' ===== 控制台模式：用 WriteConsoleW =====
         Dim written As DWORD
-        ' 先尝试控制台输出，失败则尝试标准文件写入（兼容无窗口模式）
-        If WriteConsoleW(hOut, StrPtrW(szText), LenW(szText), @written, NULL) = 0 Then
-            WriteFile(hOut, StrPtrW(szText), LenW(szText) * 2, @written, NULL)
-        End If
+        WriteConsoleW(hOut, StrPtrW(szText), LenW(szText), @written, NULL)
+    Else
+        ' ===== 管道/重定向模式：转 UTF-8 后 WriteFile =====
+        Dim cbNeeded As Integer = WideCharToMultiByte(CP_UTF8, 0, _
+            StrPtrW(szText), LenW(szText), NULL, 0, NULL, NULL)
+        If cbNeeded <= 0 Then Exit Sub
+        
+        Dim utf8Buf As ZString Ptr = Allocate(cbNeeded)
+        If utf8Buf = NULL Then Exit Sub
+        
+        WideCharToMultiByte(CP_UTF8, 0, StrPtrW(szText), LenW(szText), _
+            utf8Buf, cbNeeded, NULL, NULL)
+        
+        Dim written As DWORD
+        WriteFile(hOut, utf8Buf, cbNeeded, @written, NULL)
+        
+        Deallocate(utf8Buf)
     End If
 End Sub
 
 ' ---------- 重载2：接受 WString Ptr ----------
 Sub SafeStdOut Overload(ByVal pwText As WString Ptr)
     If pwText = NULL Then Exit Sub
+    
     If g_InAgentMode AndAlso g_hAgentPipe <> INVALID_HANDLE_VALUE Then
         If Not _PipeWriteRaw(pwText) Then
             OutputDebugStringW(StrPtrW("PipeWrite failed, err=" & GetLastError()))
         End If
-    ElseIf g_InAgentMode Then
+        Exit Sub
+    End If
+    
+    Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
+    If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
         OutputDebugStringW(pwText)
-    Else
-        Dim hOut As HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)
-        If hOut = INVALID_HANDLE_VALUE OrElse hOut = NULL Then
-            OutputDebugStringW(pwText)
-            Exit Sub
-        End If
+        Exit Sub
+    End If
+    
+    Dim dwMode As DWORD
+    Dim isConsole As Boolean = GetConsoleMode(hOut, @dwMode)
+    Dim textLen As Long = lstrlenW(pwText)
+    
+    If isConsole Then
         Dim written As DWORD
-        If WriteConsoleW(hOut, pwText, lstrlenW(pwText), @written, NULL) = 0 Then
-            WriteFile(hOut, pwText, lstrlenW(pwText) * 2, @written, NULL)
-        End If
+        WriteConsoleW(hOut, pwText, textLen, @written, NULL)
+    Else
+        Dim cbNeeded As Integer = WideCharToMultiByte(CP_UTF8, 0, _
+            pwText, textLen, NULL, 0, NULL, NULL)
+        If cbNeeded <= 0 Then Exit Sub
+        
+        Dim utf8Buf As ZString Ptr = Allocate(cbNeeded)
+        If utf8Buf = NULL Then Exit Sub
+        
+        WideCharToMultiByte(CP_UTF8, 0, pwText, textLen, _
+            utf8Buf, cbNeeded, NULL, NULL)
+        
+        Dim written As DWORD
+        WriteFile(hOut, utf8Buf, cbNeeded, @written, NULL)
+        
+        Deallocate(utf8Buf)
     End If
 End Sub
 
@@ -633,7 +684,8 @@ Sub InitCommandRegistry()
     RegisterCmd "wfp-filter",    "list", "",                 True,  False, False, False, False, False, "List WFP filters"
     RegisterCmd "winsock-spi",   "list", "",                 False, False, False, False, False, False, "List Winsock SPI entries"
     RegisterCmd "task-scheduler","list", "任务计划",         False, False, False, False, False, False, "List scheduled tasks"
-    RegisterCmd "violent-check", "scan", "暴力检测",         True,  False, False, False, False, False, "Perform kernel memory scan"
+    RegisterCmd "violent-check", "scan", "暴力检测", True, False, False, False, False, False, "Perform kernel memory scan"
+    RegisterCmd "unlock-file", "list", "显示文件占用情况",         True,  False, False, False, False, False, "List all handle of file"
     
     ' ===== 文件/注册表查询（需要 --path）=====
     RegisterCmd "file",     "list", "文件",   False, False, False, True, False, False, "List files (empty path = drives)"
@@ -748,10 +800,11 @@ Sub InitCommandRegistry()
     RegisterCmd "memory",   "write",   "", False, True,  False, False, True,  True, "Write to process memory"
     RegisterCmd "registry", "write",   "", False, False, False, True,  False, True, "Write registry value"
     RegisterCmd "registry", "delete",  "", False, False, False, True,  False, True, "Delete registry value"
-    RegisterCmd "file",     "delete",  "", False, False, False, True,  False, True, "Delete a file"
+    RegisterCmd "file", "delete", "", False, False, False, True, False, True, "Delete a file"
+    RegisterCmd "unlock-file", "unlock", "", True,  False, False, False, False, True, "unlock handle of file"
 End Sub
 
-Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outResult As ParsedCmd Ptr) As Boolean
+/'Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outResult As ParsedCmd Ptr) As Boolean
     ' 初始化默认值 + 显式清除标志
     outResult->pid = 0 : outResult->tid = 0 : outResult->addr = 0 : outResult->size = 0
     outResult->force = False : outResult->dryRun = False : outResult->showHelp = False
@@ -814,6 +867,98 @@ Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outR
         Else
             outResult->hasError = True
             outResult->errorMsg = "ERROR: Unexpected positional argument '" & parts(i) & "'. All arguments must use --key value format."
+            Return False
+        End If
+    Loop
+    Return True
+End Function '/
+
+Function ParseCommandLine(parts() As StringW, ByVal numParts As Long, ByVal outResult As ParsedCmd Ptr) As Boolean
+    ' 初始化默认值 + 显式清除标志
+    outResult->pid = 0 : outResult->tid = 0 : outResult->addr = 0 : outResult->size = 0
+    outResult->force = False : outResult->dryRun = False : outResult->showHelp = False
+    outResult->hasError = False : outResult->path = "" : outResult->hexData = ""
+    outResult->regName = "" : outResult->regType = "REG_SZ"
+    outResult->hasPid = False : outResult->hasTid = False
+    outResult->hasPath = False : outResult->hasAddr = False
+    
+    If numParts < 2 Then
+        outResult->hasError = True
+        outResult->errorMsg = "Usage: <category> <action> [options]. Example: 'process list' or 'thread list --pid 1234'"
+        Return False
+    End If
+    
+    outResult->category = parts(0)
+    outResult->action = parts(1)
+    
+    Dim i As Integer = 2
+    Do While i < numParts
+        Dim arg As StringW = LCaseW(parts(i))
+        
+        ' 处理 --key "value with spaces"
+        If LeftW(arg, 2) = "--" Then
+            Dim key As StringW = arg
+            Dim value As StringW = ""
+            i += 1
+            
+            ' 收集值（支持引号包裹的多段）
+            If i < numParts Then
+                If LeftW(parts(i), 1) = """" Then
+                    ' 引号开始
+                    value = MidW(parts(i), 2)  ' 去掉开头引号
+                    Do While i < numParts - 1 AndAlso RightW(parts(i), 1) <> """"
+                        i += 1
+                        value = value & " " & parts(i)
+                    Loop
+                    If RightW(value, 1) = """" Then
+                        value = LeftW(value, LenW(value) - 1)  ' 去掉结尾引号
+                    End If
+                Else
+                    value = parts(i)
+                End If
+                i += 1
+            End If
+            
+            ' 根据 key 赋值
+            If arg = "--help" OrElse arg = "-h" OrElse arg = "/?" Then
+                outResult->showHelp = True
+                i += 1 : Continue Do
+            End If
+            
+            If arg = "--pid" AndAlso (i + 1 < numParts) Then
+                outResult->pid = ValULng(parts(i + 1))
+                outResult->hasPid = True          ' ← 置位
+                i += 2
+            ElseIf arg = "--tid" AndAlso (i + 1 < numParts) Then
+                outResult->tid = ValULng(parts(i + 1))
+                outResult->hasTid = True          ' ← 置位
+                i += 2
+            ElseIf arg = "--path" AndAlso (i + 1 < numParts) Then
+                outResult->path = parts(i + 1)
+                outResult->hasPath = True         ' ← 置位
+                i += 2
+            ElseIf arg = "--addr" AndAlso (i + 1 < numParts) Then
+                outResult->addr = ParseUInt64(parts(i + 1))
+                outResult->hasAddr = True         ' ← 置位
+                i += 2
+            ElseIf arg = "--size" AndAlso (i + 1 < numParts) Then
+                outResult->size = ValULng(parts(i + 1)) : i += 2
+            ElseIf arg = "--data" AndAlso (i + 1 < numParts) Then
+                outResult->hexData = parts(i + 1) : i += 2
+            ElseIf arg = "--name" AndAlso (i + 1 < numParts) Then
+                outResult->regName = parts(i + 1) : i += 2
+            ElseIf arg = "--type" AndAlso (i + 1 < numParts) Then
+                outResult->regType = parts(i + 1) : i += 2
+            ElseIf arg = "--force" OrElse arg = "-f" Then
+                outResult->force = True : i += 1
+            ElseIf arg = "--dry-run" OrElse arg = "-d" Then
+                outResult->dryRun = True : i += 1
+            End If
+        Else
+            ' 非 -- 开头的参数，报错
+            outResult->hasError = True
+            outResult->unknownArg = parts(i)
+            outResult->errorMsg = "ERROR: Unknown argument '" & parts(i) & "'. Use '<category> <action> --help' for usage."
             Return False
         End If
     Loop
@@ -1636,6 +1781,10 @@ Function Exec_Registry_Delete(ByVal pc As ParsedCmd Ptr) As Boolean
     Return True
 End Function
 
+Function Exec_File_Unlock(ByVal pc As ParsedCmd Ptr) As Boolean
+    Return False
+End Function
+
 ' --------------- 统一分发器 ---------------
 Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) As Boolean
     Select Case def->pidMode
@@ -1702,6 +1851,7 @@ Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) A
         Case "winsock-spi|list"   : InitializeListView WinsockSPI, FrmMain.ListView1 : GetWinsockSPIList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         Case "task-scheduler|list": InitializeListView TaskScheduler, FrmMain.ListView1 : GetTaskSchedulerList FrmMain.ListView1 : CuiPrintListViewData() : Return True
         'Case "violent-check|scan" : InitializeListView ViolentCheck, FrmMain.ListView1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else ScanKernelMemoryMultiThread FrmMain.ListView1 : CuiPrintListViewData() : Return True
+        Case "unlock-file|list" : InitializeListView UnlockTheFile, FrmMain.ListView1 : Unlock_File FrmMain.ListView1 : CuiPrintListViewData() : Return True
         
         ' GDT / IDT / Minifilter / FilterDriver 等 TreeList 模块保持原样
         Case "gdt|read"           : InitializeTreeList GDT, FrmMain.mCtrlTreeList1 : If Not IsDriverLoaded Then SafeStdOut("warning: driver hasn't been loaded." & vbCrlfW) : Return False Else GetGDT FrmMain.mCtrlTreeList1 : Return True
@@ -1748,7 +1898,9 @@ Function DispatchCommand(ByVal pc As ParsedCmd Ptr, ByVal def As CmdEntry Ptr) A
         Case "memory|write"       : Return Exec_Memory_Write(pc)
         Case "registry|write"        : Return Exec_Registry_Write(pc)
         Case "registry|delete"      : Return Exec_Registry_Delete(pc)
-        Case "file|delete"             : SafeStdOut("Executing: Delete file " & pc->path & vbCrlfW) : Return True
+        Case "file|delete" : SafeStdOut("Executing: Delete file " & pc->path & vbCrlfW) : Return True
+        
+        Case "unlock-file|unlock" : Return 1
         
         Case Else
             SafeStdOut("ERROR: Command '" & key & "' registered but handler not implemented." & vbCrlfW)
@@ -1979,3 +2131,53 @@ Sub RunAgentPipeRepl()
         
     Loop
 End Sub
+
+' ===================== 单次命令执行 =====================
+Function RunSingleCommand(cmdParts() As StringW, numParts As Long) As Integer
+    ' 解析命令
+    Dim pc As ParsedCmd
+    If Not ParseCommandLine(cmdParts(), numParts, @pc) Then
+        SafeStdOut(pc.errorMsg & vbCrlfW)
+        Return 1
+    End If
+    
+    ' 内联 --help
+    If pc.showHelp Then
+        Dim def As CmdEntry Ptr = FindCmd(pc.category, pc.action)
+        If def <> NULL Then
+            PrintActionHelp(def)
+        Else
+            SafeStdOut("Unknown command. Type 'help' for available commands." & vbCrlfW)
+        End If
+        Return 0
+    End If
+    
+    ' 查找命令定义
+    Dim def As CmdEntry Ptr = FindCmd(pc.category, pc.action)
+    If def = NULL Then
+        SafeStdOut("ERROR: Unknown command '" & pc.category & " " & pc.action & "'. Type 'help' for available commands." & vbCrlfW)
+        Return 1
+    End If
+    
+    ' 按需加载驱动
+    Dim driverLoadedByUs As Boolean = False
+    If def->needsDriver Then
+        If Not IsDriverLoaded Then
+            If Not InitDriver() Then
+                SafeStdOut("ERROR: Driver load failed." & vbCrlfW)
+                Return 1
+            End If
+            driverLoadedByUs = True
+        End If
+    End If
+    
+    ' 执行
+    Dim result As Boolean = DispatchCommand(@pc, def)
+    
+    ' 按需卸载
+    If driverLoadedByUs Then
+        UninitDriver()
+    End If
+    
+    Return IIf(result, 0, 1)
+End Function

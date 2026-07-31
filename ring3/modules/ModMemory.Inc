@@ -182,12 +182,16 @@ Private Sub GetMemoryBlockList(ByVal dwProcessId As DWORD, lvwMemory As Class_Li
     
     If IsDriverLoaded Then
         hProcess = SnowSword_OpenProcess(dwProcessId)
+        If (hProcess <= 0) Then
+            MyLog.PrintWin32Error "GetMemoryBlockList", "SnowSword_OpenProcess", "dwProcessId=" & dwProcessId
+            Exit Sub
+        End If
     Else
         hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, dwProcessId)
-    End If
-    If (hProcess <= 0) Then
-        Print "OpenProcess " & dwProcessId & " Failed!"
-        Exit Sub
+        If (hProcess <= 0) Then
+            MyLog.PrintWin32Error "GetMemoryBlockList", "OpenProcess", "dwProcessId=" & dwProcessId
+            Exit Sub
+        End If
     End If
     
     InitListViewData lvwMemory

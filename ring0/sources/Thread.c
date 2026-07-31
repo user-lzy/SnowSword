@@ -236,7 +236,7 @@ NTSTATUS EnumWorkItemThread(
     }
 
     // ==================== 第二步：分配内存 ====================
-    pArray = (PWORKER_THREAD_INFO)ExAllocatePool2(
+    pArray = (PWORKER_THREAD_INFO)KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         threadCount * sizeof(WORKER_THREAD_INFO),
         'WrkE'  // 内存标签: WorkE
@@ -343,7 +343,7 @@ PETHREAD GetFirstThreadFromProcess(PEPROCESS TargetProcess)
 
     // 3. 分配内核内存存储DLL路径
     SIZE_T pathSize = (wcslen(DllPath) + 1) * sizeof(WCHAR);
-    remoteBuffer = ExAllocatePool2(
+    remoteBuffer = KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         pathSize,
         'dllp');
@@ -360,7 +360,7 @@ PETHREAD GetFirstThreadFromProcess(PEPROCESS TargetProcess)
     }
 
     // 6. 分配并初始化APC
-    apc = (PKAPC)ExAllocatePool2(
+    apc = (PKAPC)KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         sizeof(KAPC),
         'apct');
@@ -720,7 +720,7 @@ NTSTATUS ForceKillThread(HANDLE ThreadId)
 
     BOOLEAN status;
     PKAPC ExitApc = NULL;
-    ExitApc = (PKAPC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KAPC), '1111');
+    ExitApc = (PKAPC)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KAPC), '1111');
     if (ExitApc == NULL)
     {
         DbgPrint("[KillProcessWithApc] malloc memory failed \n");

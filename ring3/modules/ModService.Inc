@@ -130,7 +130,7 @@ Function SafeGetWString(ByVal pWStr As WString Ptr) As StringW
     Return result
 End Function
 
-Public Sub GetServiceList1(lvwService As Class_ListView)
+Public Sub GetServiceList(lvwService As Class_ListView)
     Dim hSCM As SC_HANDLE, bytServices() As Byte, lpServices As ENUM_SERVICE_STATUS_PROCESS Ptr
     Dim lngBytesNeeded As Long, lngServicesReturned As Long, lngResumeHandle As Long
     Dim lngResult As Long, i As Long
@@ -141,7 +141,7 @@ Public Sub GetServiceList1(lvwService As Class_ListView)
     ' 1. 打开SCM管理器（枚举所有服务需要足够权限）
     hSCM = OpenSCManager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE)
     If hSCM = NULL Then
-        Print "OpenSCManager失败: " & GetLastError
+        MyLog.PrintWin32Error "GetServiceList1", "OpenSCManager"
         Exit Sub
     End If
     
@@ -161,7 +161,7 @@ Public Sub GetServiceList1(lvwService As Class_ListView)
     )
     
     If GetLastError <> ERROR_MORE_DATA  Then
-        Print "EnumServicesStatusEx第一步失败: " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetServiceList1", "EnumServicesStatusEx", "第一次调用"
         CloseServiceHandle hSCM
         Exit Sub
     End If
@@ -182,7 +182,7 @@ Public Sub GetServiceList1(lvwService As Class_ListView)
     )
     
     If lngResult = 0 Then
-        Print "EnumServicesStatusEx第二步失败: " & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "GetServiceList1", "EnumServicesStatusEx", "第一次调用"
         CloseServiceHandle hSCM
         Exit Sub
     End If
@@ -195,27 +195,8 @@ Public Sub GetServiceList1(lvwService As Class_ListView)
     'Print lngServicesReturned
     For i = 0 To lngServicesReturned - 1
         ' 基础信息
-        'Dim lpServiceName As StringW = *lpServices->lpServiceName
         Dim lpServiceName As WString * MAX_PATH = *lpServices->lpServiceName ' 这里有个问题,用StringW就崩
-        'Print *lpServices->lpServiceName
-        /'If lpServices->lpServiceName <> NULL Then
-            'Dim lpServiceName As StringW = *lpServices->lpServiceName ' 这里有一个问题...
-            strServiceName = *lpServices->lpServiceName
-            Print strServiceName
-            'Print strServiceName
-            'strServiceName = StripTerminator(lpServiceName)
-            'strServiceName = StripTerminator(strServiceName)
-        End If'/
         Dim lpDisplayName As StringW = *lpServices->lpDisplayName
-        /'If lpServices->lpDisplayName <> NULL Then
-            'Dim lpDisplayName As StringW = *lpServices->lpDisplayName
-            strDisplayName = *lpServices->lpDisplayName
-            'Print lpDisplayName
-            'Print strDisplayName
-            'strDisplayName = StripTerminator(lpDisplayName)
-            'lpDisplayName = StripTerminator(lpDisplayName)
-        End If '/
-        'Print StripTerminator(*lpServices->lpServiceName)
         strState = GetServiceState(lpServices->ServiceStatusProcess.dwCurrentState)
         strServiceType = GetServiceType(lpServices->ServiceStatusProcess.dwServiceType)
         
@@ -237,198 +218,6 @@ Public Sub GetServiceList1(lvwService As Class_ListView)
     CommitListViewView lvwService
 End Sub
 
-Public Sub GetServiceList(lvwService As Class_ListView)
-    ' 计时总起点
-    Dim totalStart As Double = Timer()
-    Dim segStart As Double, segFinish As Double
-    Dim timeOpenSCM As Double = 0.0    ' 环节1耗时：打开SCM+第一次EnumServicesStatusEx
-    Dim timeAllocBuf As Double = 0.0   ' 环节2耗时：重分配缓冲区+第二次EnumServicesStatusEx
-    Dim timeListInit As Double = 0.0   ' 环节3耗时：清空ListView初始化
-    Dim timeEnumLoop As Double = 0.0    ' 环节4总耗时：遍历所有服务循环处理
-    Dim timeListCommit As Double = 0.0  ' 环节5耗时：关闭句柄+提交视图刷新
-    
-    Dim hSCM As SC_HANDLE, bytServices() As Byte, lpServices As ENUM_SERVICE_STATUS_PROCESS Ptr
-    Dim lngBytesNeeded As Long, lngServicesReturned As Long, lngResumeHandle As Long
-    Dim lngResult As Long, i As Long
-    Dim strServiceName As WString * MAX_PATH = "", strDisplayName As WString * MAX_PATH = "", strState As StringW
-    Dim strServiceType As StringW, strStartType As StringW, strPID As StringW
-    Dim strProcessPath As StringW, strModulePath As StringW
-    
-    ' ====================== 环节1：打开SCM管理器、第一次Enum查询缓冲区大小 ======================
-    segStart = Timer()
-    hSCM = OpenSCManager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE)
-    If hSCM = NULL Then
-        Print "OpenSCManager失败: " & GetLastError
-        MyLog.PrintLog LOG_ERROR,,, "GetServiceList - OpenSCManager失败，错误码：" & GetLastError
-        Exit Sub
-    End If
-    
-    ' 第一次调用EnumServicesStatusEx获取所需缓冲区大小
-    lngResumeHandle = 0
-    lngResult = EnumServicesStatusEx( _
-        hSCM, _
-        SC_ENUM_PROCESS_INFO, _
-        SERVICE_WIN32 Or SERVICE_DRIVER, _
-        SERVICE_ACTIVE Or SERVICE_INACTIVE, _
-        0, _
-        0, _
-        @lngBytesNeeded, _
-        @lngServicesReturned, _
-        @lngResumeHandle, _
-        NULL _
-    )
-    
-    If GetLastError <> ERROR_MORE_DATA  Then
-        Print "EnumServicesStatusEx第一步失败: " & WinErrorMsg(GetLastError) & GetLastError
-        MyLog.PrintLog LOG_ERROR,,, "GetServiceList - 首次枚举获取缓冲区失败：" & WinErrorMsg(GetLastError) & " 错误码=" & GetLastError
-        CloseServiceHandle hSCM
-        Exit Sub
-    End If
-    segFinish = Timer()
-    timeOpenSCM = segFinish - segStart
-    
-    ' ====================== 环节2：分配缓冲区、完整枚举服务列表 ======================
-    segStart = Timer()
-    ReDim bytServices(lngBytesNeeded - 1) As Byte
-    lngResult = EnumServicesStatusEx( _
-        hSCM, _
-        SC_ENUM_PROCESS_INFO, _
-        SERVICE_WIN32 Or SERVICE_DRIVER, _
-        SERVICE_ACTIVE Or SERVICE_INACTIVE, _
-        @bytServices(0), _
-        lngBytesNeeded, _
-        @lngBytesNeeded, _
-        @lngServicesReturned, _
-        @lngResumeHandle, _
-        NULL _
-    )
-    
-    If lngResult = 0 Then
-        Print "EnumServicesStatusEx第二步失败: " & WinErrorMsg(GetLastError) & GetLastError
-        MyLog.PrintLog LOG_ERROR,,, "GetServiceList - 二次枚举服务列表失败：" & WinErrorMsg(GetLastError) & " 错误码=" & GetLastError
-        CloseServiceHandle hSCM
-        Exit Sub
-    End If
-    
-    lpServices = CPtr(ENUM_SERVICE_STATUS_PROCESS Ptr, @bytServices(0))
-    segFinish = Timer()
-    timeAllocBuf = segFinish - segStart
-    
-    ' ====================== 环节3：清空ListView初始化 ======================
-    segStart = Timer()
-    InitListViewData lvwService
-    segFinish = Timer()
-    timeListInit = segFinish - segStart
-    
-    ' ====================== 环节4：循环遍历所有服务、解析字段、填充列表 ======================
-    ' ===== 阶段4前声明子阶段累加变量 =====
-    Dim timeBaseParse As Double = 0.0     ' 基础字段解析
-    Dim timeStartType As Double = 0.0     ' 查询启动类型
-    Dim timeProcPath As Double = 0.0      ' 获取进程路径
-    Dim timeSvcPath As Double = 0.0       ' 获取服务模块路径
-    Dim timeAddItem As Double = 0.0       ' 虚拟列表项写入
-    Dim timeSignAsync As Double = 0.0     ' 异步签名提交
-    Dim timeDoEvents As Double = 0.0      ' DoEvents消息处理
-    Dim t1 As Double, t2 As Double
-    Dim dwPID As DWORD
-    segStart = Timer()
-    For i = 0 To lngServicesReturned - 1
-        ' 1. 基础字段解析
-        t1 = Timer()
-        strServiceName = *lpServices->lpServiceName
-        strDisplayName = *lpServices->lpDisplayName
-        strState = GetServiceState(lpServices->ServiceStatusProcess.dwCurrentState)
-        strServiceType = GetServiceType(lpServices->ServiceStatusProcess.dwServiceType)
-        dwPID = lpServices->ServiceStatusProcess.dwProcessId
-        strPID = WStr(dwPID)
-        t2 = Timer()
-        timeBaseParse += t2 - t1
-        
-        ' 2. 查询启动类型
-        t1 = Timer()
-        strStartType = GetServiceStartType(hSCM, lpServices->lpServiceName)
-        t2 = Timer()
-        timeStartType += t2 - t1
-        
-        ' 3. 获取进程路径（驱动PID为0，直接跳过）
-        t1 = Timer()
-        If dwPID > 0 Then
-            strProcessPath = GetProcessPath(dwPID)
-        Else
-            strProcessPath = ""
-        End If
-        t2 = Timer()
-        timeProcPath += t2 - t1
-        
-        ' 4. 获取服务模块路径
-        t1 = Timer()
-        strModulePath = GetServiceModulePath(hSCM, lpServices->lpServiceName)
-        t2 = Timer()
-        timeSvcPath += t2 - t1
-        
-        ' 5. 写入虚拟列表
-        t1 = Timer()
-        Dim ItemIndex As Long = AddItemColListEx(lvwService, 8,,, strServiceName, WStr(strState), WStr(strServiceType), WStr(strStartType), WStr(strPID), WStr(strProcessPath), _
-        WStr(strModulePath), WStr(strDisplayName))
-        t2 = Timer()
-        timeAddItem += t2 - t1
-        
-        ' 6. 异步签名校验提交
-        t1 = Timer()
-        VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strModulePath
-        t2 = Timer()
-        timeSignAsync += t2 - t1
-        
-        ' 7. 消息处理（原逻辑，后续优化频率）
-        t1 = Timer()
-        FF_DoEvents
-        t2 = Timer()
-        timeDoEvents += t2 - t1
-        
-        lpServices += 1
-    Next
-    segFinish = Timer()
-    timeEnumLoop = segFinish - segStart
-    
-    ' 循环结束后统一输出子阶段耗时
-    MyLog.PrintLog LOG_INFO,,, "----- 阶段4 内部子阶段耗时 -----"
-    MyLog.PrintLog LOG_INFO,,, "基础字段解析: " & Format(timeBaseParse, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "查询启动类型: " & Format(timeStartType, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "获取进程路径: " & Format(timeProcPath, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "获取服务模块路径: " & Format(timeSvcPath, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "虚拟列表项写入: " & Format(timeAddItem, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "异步签名提交: " & Format(timeSignAsync, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "DoEvents消息处理: " & Format(timeDoEvents, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "------------------------------"
-    
-    ' ====================== 环节5：释放SCM句柄、提交ListView视图刷新 ======================
-    segStart = Timer()
-    CloseServiceHandle hSCM
-    CommitListViewView lvwService
-    segFinish = Timer()
-    timeListCommit = segFinish - segStart
-    
-    ' ====================== 统一输出各分段耗时、总耗时、单服务平均耗时 ======================
-    Dim totalCost As Double = Timer() - totalStart
-    Dim avgSingleService As Double = 0.0
-    If lngServicesReturned > 0 Then
-        ' 仅用循环总耗时计算单条平均（排除SCM打开、缓冲区、列表初始化、视图提交）
-        avgSingleService = timeEnumLoop / lngServicesReturned
-    End If
-    
-    ' 分段日志输出，保留4位小数
-    MyLog.PrintLog LOG_INFO,,, "===== GetServiceList 分段耗时统计 ====="
-    MyLog.PrintLog LOG_INFO,,, "1.打开SCM+首次枚举缓冲区：" & Format(timeOpenSCM, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "2.分配缓冲区+全量枚举服务：" & Format(timeAllocBuf, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "3.ListView清空初始化：" & Format(timeListInit, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "4.遍历解析所有服务循环总耗时：" & Format(timeEnumLoop, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "5.关闭句柄+提交列表视图：" & Format(timeListCommit, "0.0000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "服务总数：" & lngServicesReturned & " 条"
-    MyLog.PrintLog LOG_INFO,,, "单条服务平均解析耗时(仅循环同步逻辑)：" & Format(avgSingleService, "0.000000") & " s"
-    MyLog.PrintLog LOG_INFO,,, "函数整体执行总耗时：" & Format(totalCost, "0.0000") & " 秒"
-    MyLog.PrintLog LOG_INFO,,, "======================================"
-End Sub
-
 Function MyPauseService(ByVal ServiceName As StringW) As Boolean
     Dim hSCM As SC_HANDLE, hService As SC_HANDLE, ServiceStatus As SERVICE_STATUS
     
@@ -436,19 +225,19 @@ Function MyPauseService(ByVal ServiceName As StringW) As Boolean
 
     hSCM = OpenSCManager("", SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS)
     If hSCM = NULL Then
-        Print "[MyPauseService]OpenSCManager(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyPauseService", "OpenSCManager", "ServiceName=" & ServiceName
         Return False
     End If
     
     hService = OpenService(hSCM, ServiceName, SERVICE_ALL_ACCESS)
     If hService = NULL Then
-        Print "[MyPauseService]OpenService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyPauseService", "OpenService", "ServiceName=" & ServiceName
         CloseServiceHandle hSCM
         Return False
     End If
     
     If ControlService(hService, SERVICE_CONTROL_PAUSE, @ServiceStatus) = 0 Then
-        Print "[MyPauseService]ControlService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyPauseService", "ControlService", "ServiceName=" & ServiceName
         Function = False
     End If
     
@@ -463,19 +252,19 @@ Function MyContinueService(ByVal ServiceName As StringW) As Boolean
 
     hSCM = OpenSCManager("", SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS)
     If hSCM = NULL Then
-        Print "[MyContinueService]OpenSCManager(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyContinueService", "OpenSCManager", "ServiceName=" & ServiceName
         Return False
     End If
     
     hService = OpenService(hSCM, ServiceName, SERVICE_ALL_ACCESS)
     If hService = NULL Then
-        Print "[MyContinueService]OpenService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyContinueService", "OpenService", "ServiceName=" & ServiceName
         CloseServiceHandle hSCM
         Return False
     End If
     
     If ControlService(hService, SERVICE_CONTROL_CONTINUE, @ServiceStatus) = 0 Then
-        Print "[MyContinueService]ControlService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyContinueService", "ControlService", "ServiceName=" & ServiceName
         Function = False
     End If
     
@@ -490,19 +279,19 @@ Function MyStartService(ByVal ServiceName As StringW) As Boolean
 
     hSCM = OpenSCManager("", SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS)
     If hSCM = NULL Then
-        Print "[MyStartService]OpenSCManager(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStartService", "OpenSCManager", "ServiceName=" & ServiceName
         Return False
     End If
     
     hService = OpenService(hSCM, ServiceName, SERVICE_ALL_ACCESS)
     If hService = NULL Then
-        Print "[MyStartService]OpenService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStartService", "OpenService", "ServiceName=" & ServiceName
         CloseServiceHandle hSCM
         Return False
     End If
     
     If StartService(hService, 0, NULL) = 0 Then
-        Print "[MyStartService]ControlService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStartService", "StartService", "ServiceName=" & ServiceName
         Function = False
     End If
     
@@ -517,19 +306,19 @@ Function MyStopService(ByVal ServiceName As StringW) As Boolean
 
     hSCM = OpenSCManager("", SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS)
     If hSCM = NULL Then
-        Print "[MyStopService]OpenSCManager(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStopService", "OpenSCManager", "ServiceName=" & ServiceName
         Return False
     End If
     
     hService = OpenService(hSCM, ServiceName, SERVICE_ALL_ACCESS)
     If hService = NULL Then
-        Print "[MyStopService]OpenService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStopService", "OpenService", "ServiceName=" & ServiceName
         CloseServiceHandle hSCM
         Return False
     End If
     
     If ControlService(hService, SERVICE_CONTROL_STOP, @ServiceStatus) = 0 Then
-        Print "[MyStopService]ControlService(" & ServiceName & "):" & WinErrorMsg(GetLastError) & GetLastError
+        MyLog.PrintWin32Error "MyStopService", "ControlService", "ServiceName=" & ServiceName
         Function = False
     End If
     

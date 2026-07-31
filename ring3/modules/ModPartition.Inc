@@ -136,14 +136,14 @@ Function DiskIO_Read(io As DISK_IO_CONTEXT Ptr, _
                      ByVal buf As Any Ptr, _
                      ByVal size As ULong) As Boolean
     
-    If buf = NULL Or size = 0 Then Print "参数非法" : Return False
+    If buf = NULL Or size = 0 Then MyLog.PrintLog LOG_ERROR, "DiskIO_Read", "参数非法" : Return False
     
     ' 物理偏移 = 分区相对偏移 + 分区在磁盘上的起始偏移
     Dim actualOffset As ULongLong = offset + io->partitionStartOffset
     If IsDriverLoaded Then
         ' 驱动模式
         If (size Mod io->bytesPerSector) <> 0 Then
-            Print "未对齐:size=" & size & " bytesPerSector:" & io->bytesPerSector
+            MyLog.PrintLog LOG_ERROR, "DiskIO_Read",, "参数未对齐,size=" & size & " bytesPerSector:" & io->bytesPerSector
             io->lastError = ERROR_INVALID_PARAMETER
             Return False
         End If
@@ -159,12 +159,12 @@ Function DiskIO_Read(io As DISK_IO_CONTEXT Ptr, _
         Dim bSuccess As BOOL = IoControl(hDrv, IOCTL_SectorIo_Read, @req, SizeOf(req), buf, size, @bytesReturned)
         
         If bSuccess = 0 Then
-            Print "[DiskIO_Read]IOCTL_SectorIo_Read failed, err=" & GetLastError
+            MyLog.PrintWin32Error "DiskIO_Read" "IOCTL_SectorIo_Read", "offset=" & offset & ",size=" & size
             io->lastError = GetLastError()
             Return False
         End If
         If bytesReturned <> size Then
-            Print "[DiskIO_Read]IOCTL_SectorIo_Read failed, bytRead=" & bytesReturned
+            MyLog.PrintLog LOG_ERROR, "DiskIO_Read", "IOCTL_SectorIo_Read", "Read(" & bytesReturned & "/" & size & ")"
             io->lastError = ERROR_IO_INCOMPLETE
             Return False
         End If
@@ -182,7 +182,7 @@ Function DiskIO_Read(io As DISK_IO_CONTEXT Ptr, _
         
         Dim bytesRead As DWORD
         If ReadFile(io->hVol, buf, size, @bytesRead, NULL) = 0 Then
-            Print "[DiskIO_Read]ReadFile failed, err=" & GetLastError
+            MyLog.PrintWin32Error "DiskIO_Read" "ReadFile", "offset=" & offset & ",size=" & size
             io->lastError = GetLastError()
             Return False
         End If
@@ -204,7 +204,7 @@ Function DiskIO_Write(io As DISK_IO_CONTEXT Ptr, _
     
     If IsDriverLoaded Then
         If (size Mod io->bytesPerSector) <> 0 Then
-            Print "[DiskIO_Write]未对齐"
+            MyLog.PrintLog LOG_ERROR, "DiskIO_Write",, "参数未对齐,size=" & size & " bytesPerSector:" & io->bytesPerSector
             io->lastError = ERROR_INVALID_PARAMETER
             Return False
         End If
@@ -234,7 +234,7 @@ Function DiskIO_Write(io As DISK_IO_CONTEXT Ptr, _
         Deallocate sendBuf
         
         If bSuccess = 0 Then
-            Print "[DiskIO_Write]IOCTL_SectorIo_Write failed, err=" & GetLastError
+            MyLog.PrintWin32Error "DiskIO_Write" "IOCTL_SectorIo_Write", "offset=" & offset & ",size=" & size
             SetLastError(lastErr)
             io->lastError = lastErr
             Return False
@@ -343,13 +343,16 @@ Function IsGPTDisk(ByVal hDisk As HANDLE, ByVal bytesPerSec As ULong) As Boolean
     offset.QuadPart = bytesPerSec
     
     SetLastError 0
-    If SetFilePointerEx(hDisk, offset, NULL, FILE_BEGIN) = 0 Then Print "IsGPTDisk: SetFilePointerEx失败, err=" & GetLastError()
+    If SetFilePointerEx(hDisk, offset, NULL, FILE_BEGIN) = 0 Then
+        MyLog.PrintWin32Error "IsGPTDisk", "SetFilePointerEx", "hDisk=0x" & WHex(hDisk) & ",bytesPerSec=" & bytesPerSec
+        Return False
+    End If
     
     SetLastError 0
     Dim readOK As Boolean = (ReadFile(hDisk, pGPTBuf, bytesPerSec, @bytRead, NULL) <> 0)
     
     If Not readOK Then
-        Print "IsGPTDisk: ReadFile失败, err=" & GetLastError()
+        MyLog.PrintWin32Error "IsGPTDisk", "ReadFile", "hDisk=0x" & WHex(hDisk) & ",bytesPerSec=" & bytesPerSec
         Deallocate pGPTBuf
         Return False
     End If
@@ -366,7 +369,7 @@ Function IsGPTDisk(ByVal hDisk As HANDLE, ByVal bytesPerSec As ULong) As Boolean
     Next
     
     If sig <> "EFI PART" Then
-        Print "GPT签名不匹配: " & sig
+        MyLog.PrintLog LOG_INFO, "IsGPTDisk",, "GPT签名不匹配: " & sig
         Deallocate pGPTBuf
         Return False
     End If
@@ -703,7 +706,7 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     
     SetFilePointerEx(hDisk, offset, NULL, FILE_BEGIN)
     If ReadFile(hDisk, pGptBuf, bytesPerSec, @bytRead, NULL) = 0 Then
-        If g_CuiMode Then Print "PD" & diskIndex & " 读取 GPT 头失败"
+        MyLog.PrintWin32Error "ParseGPTAndMapVolumes", "ReadFile", "diskIndex=" & diskIndex
         Deallocate pGptBuf
         Return
     End If
@@ -714,13 +717,13 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     Dim gptSig As String = "EFI PART"
     For k As Integer = 0 To 7
         If gpt->signature(k) <> Asc(Mid(gptSig, k + 1, 1)) Then
-            Print "PD" & diskIndex & " GPT 签名无效"
+            MyLog.PrintInfo "ParseGPTAndMapVolumes",, "GPT 签名无效,diskIndex=" & diskIndex
             Deallocate pGptBuf
             Return
         End If
     Next
     
-    Print "PD" & diskIndex & " GPT 头验证通过"
+    MyLog.PrintInfo "ParseGPTAndMapVolumes",, "GPT 头验证通过,diskIndex=" & diskIndex
     
     '------------------------------------------------------------------
     ' 步骤 2：读取分区条目数组
@@ -730,7 +733,7 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     Dim entryLBA As ULongLong = gpt->partEntryLBA    ' 通常为 LBA 2
     
     If entrySize = 0 Or numEntries = 0 Then
-        Print "PD" & diskIndex & " GPT 分区条目数为0"
+        MyLog.PrintLog LOG_ERROR, "ParseGPTAndMapVolumes",, "GPT 分区条目数为0,diskIndex=" & diskIndex
         Deallocate pGptBuf
         Return
     End If
@@ -745,7 +748,7 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     ' 用堆分配大缓冲区（避免栈溢出）
     Dim entryBuf As UByte Ptr = Allocate(bufSize)
     If entryBuf = NULL Then
-        Print "PD" & diskIndex & " 内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "ParseGPTAndMapVolumes",, "内存分配失败"
         Deallocate pGptBuf
         Return
     End If
@@ -756,13 +759,13 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     Dim readOK As Boolean = (ReadFile(hDisk, entryBuf, bufSize, @bytRead, NULL) <> 0)
     
     If Not readOK Then
-        Print "PD" & diskIndex & " 读取分区条目失败"
+        MyLog.PrintWin32Error "ParseGPTAndMapVolumes", "ReadFile", "读取分区条目失败,diskIndex=" & diskIndex
         Deallocate(entryBuf)
         Deallocate pGptBuf
         Return
     End If
     
-    Print "PD" & diskIndex & " 分区条目数: " & numEntries
+    MyLog.PrintInfo "ParseGPTAndMapVolumes",, "分区条目数: " & numEntries & ",diskIndex=" & diskIndex
     
     '------------------------------------------------------------------
     ' 步骤 3：遍历分区条目
@@ -835,9 +838,9 @@ Sub ParseGPTAndMapVolumes(ByVal diskIndex As Integer, _
     
     diskInfo->partitionCount = partCount
     
-    Deallocate(entryBuf)
+    Deallocate entryBuf
     Deallocate pGptBuf
-    Print "PD" & diskIndex & " 有效GPT分区: " & partCount
+    MyLog.PrintInfo "ParseGPTAndMapVolumes",, "有效GPT分区: " & partCount & ",diskIndex=" & diskIndex
 End Sub
 
 ' ============================================================================
@@ -845,7 +848,6 @@ End Sub
 ' 与 UI 完全解耦，只操作全局数据结构
 ' ============================================================================
 Sub EnumerateAllDisks()
-    Print "EnumerateAllDisks"
     ' 清空旧数据
     Erase g_DiskList
     g_DiskCount = 0
@@ -1081,15 +1083,11 @@ Function ConvertToPhysicalPath(ByVal lpPath As String) As String
     If parsed.isPhysicalPath Then Return lpPath  ' 已经是物理路径
     
     ' 查 g_DiskList 找盘符对应的分区
-    'Print "parsed.driveLetter:" & parsed.driveLetter
     For d As Integer = 0 To g_DiskCount - 1
         For p As Integer = 0 To g_DiskList(d).partitionCount - 1
             Dim part As PARTITION_INFO Ptr = @g_DiskList(d).partitions(p)
-            'Print "part->drvLetter:" & part->drvLetter
             If UCase(Trim(part->drvLetter)) = UCase(Trim(parsed.driveLetter)) Then
-                Print "[ConvertToPhysicalPath]找到"
                 Dim result As String = PHYSICAL_DRIVE_PREFIX & g_DiskList(d).diskIndex & "\Partition" & part->partitionIndex
-                'Print "result:" & result
                 If parsed.relativePath <> "" Then
                     result &= "\" & parsed.relativePath
                 End If
@@ -1136,29 +1134,31 @@ End Function
 
 Function GetDirList(lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) As Long
     Dim parsed As PARSED_PATH_INFO
-    If Not ParsePath(lpDirPath, parsed) Then Print "ParsePath " & lpDirPath & " failed" : Return -1
-    Print "lpDirPath:" & lpDirPath
+    If Not ParsePath(lpDirPath, parsed) Then
+        MyLog.PrintLog LOG_ERROR, "GetDirList", "ParsePath", "lpDirPath=" & lpDirPath
+        Return -1
+    End If
     
     '========== 盘符路径：直接打开 ==========
     If Not parsed.isPhysicalPath Then
         Dim idx As Integer = Asc(UCase(parsed.driveLetter)) - Asc("A")
-        If idx < 0 Or idx > 25 Then Print "idx非法" : Return -1
+        If idx < 0 Or idx > 25 Then
+            MyLog.PrintLog LOG_ERROR, "GetDirList",, "idx-" & idx & "非法,lpDirPath=" & lpDirPath
+            Return -1
+        End If
         
         ' 先尝试 NTFS
         Dim ctxNTFS As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpDirPath)
         If ctxNTFS <> NULL Then
-            Print "ctxNTFS <> NULL"
             Dim result As Long = NTFS_GetDirList_Internal(ctxNTFS, lpDirPath, fileInfoList())
             CloseNTFSVolumeContext(ctxNTFS)  ' 立即关闭
             
             Return result
         End If
-        Print "ctxNTFS = NULL"
         
         ' 再尝试 FAT32
         Dim ctxFAT32 As FAT32_CONTEXT Ptr = OpenFAT32VolumeContext(lpDirPath)
         If ctxFAT32 <> NULL Then
-            Print "ctxFAT32 <> NULL"
             Dim result As Long = FAT32_GetDirList_Internal(ctxFAT32, lpDirPath, fileInfoList())
             CloseFAT32VolumeContext(ctxFAT32)  ' 立即关闭
             
@@ -1174,8 +1174,6 @@ Function GetDirList(lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) 
     End If
     
     '========== 物理路径：查 g_HiddenParts / g_DiskList ==========
-    Print "parsed.diskIndex:" & parsed.diskIndex & " parsed.partitionIndex:" & parsed.partitionIndex
-    
     ' 先查 g_HiddenParts
     For i As Integer = 0 To g_HiddenPartCount - 1
         If g_HiddenParts(i).diskIndex <> parsed.diskIndex Then Continue For
@@ -1185,8 +1183,7 @@ Function GetDirList(lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) 
         
         Select Case g_HiddenParts(i).fsType
         Case FS_TYPE_NTFS
-            Dim tempCtx As NTFS_CONTEXT Ptr = OpenNTFSVolumePhysical( _
-                parsed.diskIndex, g_HiddenParts(i).startLBA, g_HiddenParts(i).bytesPerSector)
+            Dim tempCtx As NTFS_CONTEXT Ptr = OpenNTFSVolumePhysical(parsed.diskIndex, g_HiddenParts(i).startLBA, g_HiddenParts(i).bytesPerSector)
             If tempCtx = NULL Then Return -1
             
             Dim result As Long = NTFS_GetDirList_Internal(tempCtx, internalPath, fileInfoList())
@@ -1194,11 +1191,9 @@ Function GetDirList(lpDirPath As String, fileInfoList() As WIN32_FILE_DATAEX2W) 
             Return result
             
         Case FS_TYPE_FAT32
-            Print "找到了,是FAT32"
-            Dim tempCtx As FAT32_CONTEXT Ptr = OpenFAT32VolumePhysical( _
-                parsed.diskIndex, g_HiddenParts(i).startLBA, g_HiddenParts(i).bytesPerSector)
+            Dim tempCtx As FAT32_CONTEXT Ptr = OpenFAT32VolumePhysical(parsed.diskIndex, g_HiddenParts(i).startLBA, g_HiddenParts(i).bytesPerSector)
             If tempCtx = NULL Then Return -1
-            Print "打开成功"
+                
             Dim result As Long = FAT32_GetDirList_Internal(tempCtx, internalPath, fileInfoList())
             CloseFAT32VolumeContext(tempCtx)
             Return result

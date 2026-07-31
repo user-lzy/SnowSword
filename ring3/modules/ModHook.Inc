@@ -289,7 +289,7 @@ Function IsForwarderExport(diskImg As UByte Ptr, rva As DWORD, imgSize As ULongI
     Next
     
     ' 调试时可临时打开确认
-    Print "[IsForwarderExport] fwdStr:" & fwdStr
+    'Print "[IsForwarderExport] fwdStr:" & fwdStr
     
     ' 转发字符串格式: DLLNAME.FunctionName 或 DLLNAME.#Ordinal
     Dim dotPos As Integer = InStr(fwdStr, ".")
@@ -982,12 +982,16 @@ Function GetModuleHookList(ByVal ProcessId As DWORD, ModuleName As StringW, ByVa
     Dim hProc As HANDLE = NULL
     If IsDriverLoaded Then
         hProc = SnowSword_OpenProcess(ProcessId)
+        If (hProc <= 0) Then
+            MyLog.PrintWin32Error "GetModuleHookList", "SnowSword_OpenProcess", "ProcessId=" & ProcessId
+            Return 0
+        End If
     Else
         hProc = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, ProcessId)
-    End If
-    If (hProc <= 0) Then
-        Print "OpenProcess " & ProcessId & " Failed!"
-        Return 0
+        If (hProc <= 0) Then
+            MyLog.PrintWin32Error "GetModuleHookList", "OpenProcess", "ProcessId=" & ProcessId
+            Return 0
+        End If
     End If
 
     Dim img As RemotePeImageEx
@@ -1035,12 +1039,16 @@ Sub GetProcessHookList(ByVal ProcessId As DWORD, lvwHook As Class_ListView)
     Dim hProc As HANDLE = NULL
     If IsDriverLoaded Then
         hProc = SnowSword_OpenProcess(ProcessId)
+        If (hProc <= 0) Then
+            MyLog.PrintWin32Error "GetModuleHookList", "SnowSword_OpenProcess", "ProcessId=" & ProcessId
+            Return
+        End If
     Else
         hProc = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, ProcessId)
-    End If
-    If (hProc <= 0) Then
-        Print "OpenProcess " & ProcessId & " Failed!"
-        Exit Sub
+        If (hProc <= 0) Then
+            MyLog.PrintWin32Error "GetModuleHookList", "OpenProcess", "ProcessId=" & ProcessId
+            Return
+        End If
     End If
     
     InitListViewData lvwHook
@@ -1085,13 +1093,13 @@ Function GetObjectInfo(lvwObjectHook As Class_ListView) As ULong
         If IoControl(hDrv, IOCTL_GetObjectInfo, @ObjIndex, SizeOf(ULong), @ObjInfo, SizeOf(OBJECT_INFORMATION)) = 0 Then
             If GetLastError = ERROR_NO_MORE_ITEMS Then Exit Do
             
-            Print "[GetObjectInfo]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
+            'Print "[GetObjectInfo]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
             ObjIndex += 1
             Continue Do
         End If
         For i As Integer = 0 To 7
             If ObjInfo.Procedure(i) <> NULL Then AddItemColListEx lvwObjectHook, 4,,, ProcedureNames(i), _
-"0x" & WHex(Cast(UInteger, ObjInfo.Procedure(i))), ObjInfo.ObjectName, WStr(GetDriverPathByAddr(Cast(ULONG64, ObjInfo.Procedure(i))))
+            "0x" & WHex(Cast(UInteger, ObjInfo.Procedure(i))), ObjInfo.ObjectName, WStr(GetDriverPathByAddr(Cast(ULONG64, ObjInfo.Procedure(i))))
         Next
         ObjIndex += 1
         FF_DoEvents
@@ -1099,336 +1107,3 @@ Function GetObjectInfo(lvwObjectHook As Class_ListView) As ULong
     CommitListViewView lvwObjectHook
     Return 0
 End Function
-
-'' 架构类型枚举
-'Enum Architecture
-'    ARCH_X86 = 32
-'    ARCH_X64 = 64
-'End Enum
-'
-'' Hook检测器基类（包含通用逻辑）
-'Type HookAnalyzerBase
-'    img As RemotePeImageEx
-'    hProc As HANDLE
-'    maxHops As Integer
-'    visited() As ULongInt   ' 动态数组记录访问过的地址
-'    
-'    Declare Constructor(img As RemotePeImageEx)
-'    Declare Function IsVAInCodeRange(va As ULongInt) As Boolean
-'    Declare Function ReadRawBytes(va As ULongInt, buf As Any Ptr, size As Integer) As Boolean
-'    Declare Function DetectLoop(va As ULongInt, hopIndex As Integer) As Boolean
-'End Type
-'
-'Constructor HookAnalyzerBase(img As RemotePeImageEx)
-'    This.img = img
-'    This.hProc = img.hProc
-'    This.maxHops = 8
-'    ReDim This.visited(0 To This.maxHops-1)
-'End Constructor
-'
-'Function HookAnalyzerBase.IsVAInCodeRange(va As ULongInt) As Boolean
-'    ' 子类需要重写此方法
-'    Return True
-'End Function
-'
-'Function HookAnalyzerBase.ReadRawBytes(va As ULongInt, buf As Any Ptr, size As Integer) As Boolean
-'    Return ReadMem(This.hProc, Cast(Any Ptr, va), buf, size)
-'End Function
-'
-'Function HookAnalyzerBase.DetectLoop(va As ULongInt, hopIndex As Integer) As Boolean
-'    For i As Integer = 0 To hopIndex-1
-'        If This.visited(i) = va Then Return True
-'    Next
-'    This.visited(hopIndex) = va
-'    Return False
-'End Function
-'
-'' 32位专用分析器
-'Type HookAnalyzer32 Extends HookAnalyzerBase
-'    codeStart As ULongInt
-'    codeEnd As ULongInt
-'    
-'    Declare Constructor(img As RemotePeImageEx)
-'    Declare Function IsVAInCodeRange(va As ULongInt) As Boolean Override
-'    Declare Function Analyze(funcVA As Any Ptr, ByRef info As InlineHookInfo) As Boolean
-'End Type
-'
-'Constructor HookAnalyzer32(img As RemotePeImageEx)
-'    Base(img)
-'    
-'    ' 获取32位代码段范围
-'    Dim codeSize As DWORD
-'    If GetSizeOfCode32(img, @codeSize) Then
-'        This.codeStart = img.pebImageBase + img.ntHeaders.OptionalHeader.BaseOfCode
-'        This.codeEnd = This.codeStart + codeSize
-'    End If
-'End Constructor
-'
-'Function HookAnalyzer32.IsVAInCodeRange(va As ULongInt) As Boolean
-'    Return (va >= This.codeStart AndAlso va < This.codeEnd)
-'End Function
-'
-'' 64位专用分析器
-'Type HookAnalyzer64 Extends HookAnalyzerBase
-'    codeStart As ULongInt
-'    codeEnd As ULongInt
-'    
-'    Declare Constructor(img As RemotePeImageEx)
-'    Declare Function IsVAInCodeRange(va As ULongInt) As Boolean Override
-'    Declare Function Analyze(funcVA As Any Ptr, ByRef info As InlineHookInfo) As Boolean
-'End Type
-'
-'Constructor HookAnalyzer64(img As RemotePeImageEx)
-'    Base(img)
-'    
-'    ' 获取64位代码段范围
-'    Dim codeSize As ULongInt
-'    If GetSizeOfCode64(img, @codeSize) Then
-'        This.codeStart = img.pebImageBase + img.ntHeaders.OptionalHeader.BaseOfCode
-'        This.codeEnd = This.codeStart + codeSize
-'    End If
-'End Constructor
-'
-'Function HookAnalyzer64.IsVAInCodeRange(va As ULongInt) As Boolean
-'    Return (va >= This.codeStart AndAlso va < This.codeEnd)
-'End Function
-'
-'' 统一入口函数
-'Function AnalyzeInlineHook(img As RemotePeImageEx, funcVA As Any Ptr, ByRef info As InlineHookInfo) As Boolean
-'    Dim arch As Architecture = DetectArchitecture(img)
-'    
-'    Select Case arch
-'        Case ARCH_X86
-'            Dim analyzer32 As HookAnalyzer32 = HookAnalyzer32(img)
-'            Return analyzer32.Analyze(funcVA, info)
-'            
-'        Case ARCH_X64
-'            Dim analyzer64 As HookAnalyzer64 = HookAnalyzer64(img)
-'            Return analyzer64.Analyze(funcVA, info)
-'            
-'        Case Else
-'            info.hookType = "unsupported_arch"
-'            Return False
-'    End Select
-'End Function
-'
-'' 自动检测架构
-'Function DetectArchitecture(img As RemotePeImageEx) As Architecture
-'    ' 检查PE头魔数
-'    If img.ntHeaders.OptionalHeader.Magic = &H10B Then
-'        Return ARCH_X86
-'    ElseIf img.ntHeaders.OptionalHeader.Magic = &H20B Then
-'        Return ARCH_X64
-'    End If
-'    
-'    ' 备用方案：通过进程句柄查询
-'    Dim isWow64 As BOOL
-'    If IsWow64Process(img.hProc, @isWow64) Then
-'        Return IIf(isWow64, ARCH_X86, ARCH_X64)
-'    End If
-'    
-'    Return 0
-'End Function
-'
-'Function HookAnalyzer32.Analyze(funcVA As Any Ptr, ByRef info As InlineHookInfo) As Boolean
-'    info.hookType = ""
-'    info.proxyFunc = 0
-'    
-'    Dim curVA As ULongInt = Cast(ULongInt, funcVA)
-'    Dim buf(31) As UByte
-'    
-'    For hop As Integer = 0 To This.maxHops-1
-'        ' 1. 循环检测
-'        If This.DetectLoop(curVA, hop) Then
-'            info.hookType = "LoopJump"
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        ' 2. 边界检查
-'        If Not This.IsVAInCodeRange(curVA) Then
-'            info.hookType = "OutOfCodeRange"
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        ' 3. 读取指令
-'        If Not This.ReadRawBytes(curVA, @buf(0), 32) Then Return False
-'        
-'        ' 4. 模式匹配（32位专用）
-'        Select Case As Const buf(0)
-'        ' JMP rel8
-'        Case &HEB
-'            Dim disp As Byte = *Cast(Byte Ptr, @buf(1))
-'            curVA = curVA + 2 + CLngInt(disp)
-'            info.hookType = "jmp rel8"
-'            Continue For
-'            
-'        ' JMP rel32
-'        Case &HE9
-'            Dim disp As Long = *Cast(Long Ptr, @buf(1))
-'            curVA = curVA + 5 + CLngInt(disp)
-'            info.hookType = "jmp rel32"
-'            Continue For
-'            
-'        ' CALL rel32
-'        Case &HE8
-'            Dim disp As Long = *Cast(Long Ptr, @buf(1))
-'            curVA = curVA + 5 + CLngInt(disp)
-'            info.hookType = "call rel32"
-'            Continue For
-'            
-'        ' JMP [mem32] : FF 25 xx xx xx xx
-'        Case &HFF
-'            If buf(1) = &H25 Then
-'                Dim disp As Long = *Cast(Long Ptr, @buf(2))
-'                Dim targetPtr As ULongInt = curVA + 6 + CLngInt(disp)
-'                
-'                ' 32位下读取4字节地址
-'                Dim targetVA As ULongInt
-'                If Not This.ReadRawBytes(targetPtr, @targetVA, 4) Then Return False
-'                
-'                curVA = targetVA
-'                info.hookType = "jmp [mem32]"
-'                Continue For
-'            End If
-'            
-'            ' CALL [mem32] : FF 15 xx xx xx xx
-'            If buf(1) = &H15 Then
-'                Dim disp As Long = *Cast(Long Ptr, @buf(2))
-'                Dim targetPtr As ULongInt = curVA + 6 + CLngInt(disp)
-'                
-'                Dim targetVA As ULongInt
-'                If Not This.ReadRawBytes(targetPtr, @targetVA, 4) Then Return False
-'                
-'                curVA = targetVA
-'                info.hookType = "call [mem32]"
-'                Continue For
-'            End If
-'            
-'        ' PUSH + RET
-'        Case &H68  ' PUSH imm32
-'            Dim imm As ULongInt = *Cast(ULongInt Ptr, @buf(1))
-'            If buf(5) = &HC3 Then  ' RET
-'                curVA = imm
-'                info.hookType = "push+ret"
-'                Continue For
-'            End If
-'            
-'        End Select
-'        
-'        ' 5. 无匹配指令，跳转链终止
-'        If info.hookType <> "" Then
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        info.hookType = "unknown"
-'        Return False
-'    Next
-'    
-'    info.hookType = "DeepChain"
-'    info.proxyFunc = curVA
-'    Return True
-'End Function
-'
-'Function HookAnalyzer64.Analyze(funcVA As Any Ptr, ByRef info As InlineHookInfo) As Boolean
-'    info.hookType = ""
-'    info.proxyFunc = 0
-'    
-'    Dim curVA As ULongInt = Cast(ULongInt, funcVA)
-'    Dim buf(31) As UByte
-'    
-'    For hop As Integer = 0 To This.maxHops-1
-'        If This.DetectLoop(curVA, hop) Then
-'            info.hookType = "LoopJump"
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        If Not This.IsVAInCodeRange(curVA) Then
-'            info.hookType = "OutOfCodeRange"
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        If Not This.ReadRawBytes(curVA, @buf(0), 32) Then Return False
-'        
-'        ' 64位模式匹配（支持RIP相对寻址）
-'        Select Case As Const buf(0)
-'        ' REX.W + MOV RAX, imm64
-'        Case &H48
-'            If buf(1) = &HB8 Then
-'                Dim imm64 As ULongInt = *Cast(ULongInt Ptr, @buf(2))
-'                
-'                ' 检查后续是否为 JMP RAX (FF E0)
-'                If buf(10) = &HFF AndAlso buf(11) = &HE0 Then
-'                    curVA = imm64
-'                    info.hookType = "mov rax+jmp rax"
-'                    Continue For
-'                End If
-'                
-'                ' 检查 MOV RAX, imm64 + JMP [RAX]
-'                If buf(10) = &HFF AndAlso buf(11) = &H20 Then
-'                    Dim targetVA As ULongInt
-'                    If Not This.ReadRawBytes(imm64, @targetVA, 8) Then Return False
-'                    curVA = targetVA
-'                    info.hookType = "mov rax+jmp [rax]"
-'                    Continue For
-'                End If
-'            End If
-'            
-'        ' JMP rel32 (E9)
-'        Case &HE9
-'            Dim disp As Long = *Cast(Long Ptr, @buf(1))
-'            curVA = curVA + 5 + CLngInt(disp)
-'            info.hookType = "jmp rel32"
-'            Continue For
-'            
-'        ' JMP [RIP+imm32] (FF 25)
-'        Case &HFF
-'            If buf(1) = &H25 Then
-'                Dim disp As Long = *Cast(Long Ptr, @buf(2))
-'                Dim targetPtr As ULongInt = curVA + 6 + CLngInt(disp)
-'                
-'                Dim targetVA As ULongInt
-'                If Not This.ReadRawBytes(targetPtr, @targetVA, 8) Then Return False
-'                
-'                curVA = targetVA
-'                info.hookType = "jmp [rip]"
-'                Continue For
-'            End If
-'            
-'            ' CALL [RIP+imm32] (FF 15)
-'            If buf(1) = &H15 Then
-'                Dim disp As Long = *Cast(Long Ptr, @buf(2))
-'                Dim targetPtr As ULongInt = curVA + 6 + CLngInt(disp)
-'                
-'                Dim targetVA As ULongInt
-'                If Not This.ReadRawBytes(targetPtr, @targetVA, 8) Then Return False
-'                
-'                curVA = targetVA
-'                info.hookType = "call [rip]"
-'                Continue For
-'            End If
-'            
-'        ' ... 其他64位特殊模式
-'            
-'        End Select
-'        
-'        If info.hookType <> "" Then
-'            info.proxyFunc = curVA
-'            Return True
-'        End If
-'        
-'        info.hookType = "unknown"
-'        Return False
-'    Next
-'    
-'    info.hookType = "DeepChain"
-'    info.proxyFunc = curVA
-'    Return True
-'End Function
-
-
-

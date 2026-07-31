@@ -26,7 +26,7 @@ ULONG g_AddedDeviceCount = 0;
 #define MAX_PATH 260
 
 VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
-	//PDRIVER_INFO pDriverInfo = (PDRIVER_INFO)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
+	//PDRIVER_INFO pDriverInfo = (PDRIVER_INFO)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
 	if (!pDriverInfo) return;
 	RtlZeroMemory(pDriverInfo, sizeof(DRIVER_INFO));
 	pDriverInfo->DriverObjectAddr = pDriverObject;
@@ -225,7 +225,7 @@ NTSTATUS GetDeviceObjectName(
     }
 
     // 分配缓冲区
-    nameInfo = (POBJECT_NAME_INFORMATION)ExAllocatePool2(
+    nameInfo = (POBJECT_NAME_INFORMATION)KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         returnLength,
         MAP_POOL_TAG
@@ -427,7 +427,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
 
             if (buffer) ExFreePoolWithTag(buffer, MAP_POOL_TAG);
             bufferSize = max(bufferSize, sizeof(DIRECTORY_BASIC_INFORMATION) + 0x200);
-            buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, MAP_POOL_TAG);
+            buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, MAP_POOL_TAG);
             if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; break; }
 
             status = ZwQueryDirectoryObject(hDriverDir, buffer, bufferSize, TRUE, restartScan, &context, &bufferSize);
@@ -468,7 +468,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
                 // ==============================================
                 // 【修复1】标记根设备 = 原始设备
                 // ==============================================
-                PDEVICE_ATTACHMENT_ENTRY pRootEntry = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                PDEVICE_ATTACHMENT_ENTRY pRootEntry = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
                     sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
                 if (pRootEntry)
                 {
@@ -514,7 +514,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
                     }
 
                     // 录入过滤设备（fltmgr在这里）
-                    PDEVICE_ATTACHMENT_ENTRY pFilterEntry = ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                    PDEVICE_ATTACHMENT_ENTRY pFilterEntry = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
                         sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
                     if (pFilterEntry)
                     {
@@ -662,7 +662,7 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
     // ==============================================
     // 【修复2】第二步：分配临时节点内存 (统计后再分配！)
     // ==============================================
-    tempNodes = ExAllocatePool2(POOL_FLAG_NON_PAGED, totalEntries * sizeof(TEMP_NODE), MAP_POOL_TAG);
+    tempNodes = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, totalEntries * sizeof(TEMP_NODE), MAP_POOL_TAG);
     if (!tempNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(tempNodes, totalEntries * sizeof(TEMP_NODE));
 
@@ -711,7 +711,7 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
             }
         }
         if (!found) {
-            PDRV_INFO newInfos = ExAllocatePool2(POOL_FLAG_NON_PAGED, (drvCount + 1) * sizeof(DRV_INFO), MAP_POOL_TAG);
+            PDRV_INFO newInfos = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, (drvCount + 1) * sizeof(DRV_INFO), MAP_POOL_TAG);
             if (!newInfos) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
             if (drvInfos) {
                 RtlCopyMemory(newInfos, drvInfos, drvCount * sizeof(DRV_INFO));
@@ -727,17 +727,17 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
     }
 
     // 分配驱动节点索引
-    drvNodes = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvCount * sizeof(DRV_NODES), MAP_POOL_TAG);
+    drvNodes = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvCount * sizeof(DRV_NODES), MAP_POOL_TAG);
     if (!drvNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(drvNodes, drvCount * sizeof(DRV_NODES));
 
     for (d = 0; d < drvCount; d++) {
         drvNodes[d].Count = drvInfos[d].DeviceCount;
-        drvNodes[d].Indices = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvInfos[d].DeviceCount * sizeof(ULONG), MAP_POOL_TAG);
+        drvNodes[d].Indices = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvInfos[d].DeviceCount * sizeof(ULONG), MAP_POOL_TAG);
         if (!drvNodes[d].Indices) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     }
 
-    counters = ExAllocatePool2(POOL_FLAG_NON_PAGED, drvCount * sizeof(ULONG), MAP_POOL_TAG);
+    counters = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvCount * sizeof(ULONG), MAP_POOL_TAG);
     if (!counters) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(counters, drvCount * sizeof(ULONG));
 

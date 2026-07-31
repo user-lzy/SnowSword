@@ -866,7 +866,7 @@ End Sub
 ' 释放 TreeList 快照内存（避免内存泄漏）
 ' ==============================================
 Private Sub FreeTreeListSnapshot(ByVal snap As TreeListSnapshot Ptr)
-    Print "Enter FreeTreeListSnapshot"
+    'Print "Enter FreeTreeListSnapshot"
     If snap = 0 Then Exit Sub
 
     Dim i As Long, c As Long
@@ -887,7 +887,7 @@ Private Sub FreeTreeListSnapshot(ByVal snap As TreeListSnapshot Ptr)
     End If
 
     Deallocate snap
-    Print "Exit FreeTreeListSnapshot"
+    'Print "Exit FreeTreeListSnapshot"
 End Sub
 
 Private Sub InitAllModuleCache()
@@ -1171,7 +1171,7 @@ End Sub
 Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As Interface)
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = NULL OrElse cache->IsCached = False OrElse cache->pListSnap = NULL Then 
-        Print "  缓存无效"
+        'Print "  缓存无效"
         Exit Sub
     End If
 
@@ -1341,7 +1341,7 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
     'Print "===== [DEBUG] RestoreTreeView 模块: " & moduleType & " ====="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = NULL OrElse cache->IsCached = False OrElse cache->pTreeSnap = NULL Then 
-        Print "  缓存无效，退出"
+        'Print "  缓存无效，退出"
         Exit Sub
     End If
 
@@ -2338,7 +2338,7 @@ Sub SetItemColor(lvw As Class_ListView, Row As Long, Fore As COLORREF, Back As C
     If ctx->Snap = 0 Then Exit Sub
     If Row < 0 Or Row >= ctx->Snap->RowCount Then Exit Sub
     Dim r As LVRow Ptr = ctx->Snap->Rows[Row]  ' 🔥 修复指针访问
-    If r = 0 Then Print "行指针已释放" : Exit Sub
+    If r = 0 Then Exit Sub
     r->Fore = Fore
     r->Back = Back
 End Sub
@@ -2534,7 +2534,7 @@ End Sub
 Function GetMenuText(Menu As Class_Menu, ByVal iditem As Long) As String
     Dim pBuffer As LPSTR = Allocate(MAX_PATH)
     GetMenuStringA Menu.HMENU, iditem, pBuffer, MAX_PATH, MF_BYCOMMAND
-    Print WinErrorMsg(GetLastError) ' 这里GetLastError会是"句柄无效",但我们不用管它,反正已经拿到了pBuffer
+    'Print WinErrorMsg(GetLastError) ' 这里GetLastError会是"句柄无效",但我们不用管它,反正已经拿到了pBuffer
     Return *pBuffer
 End Function
 
@@ -2559,8 +2559,7 @@ Sub SetMenuText(ByVal hWndForm As hWnd, Menu As Class_Menu, ByVal iditem As Long
     End With
 
     If SetMenuItemInfo(Menu.HMENU, iditem, FALSE, @mii) = 0 Then
-        Print "SetMenuItemInfo失败: "; GetLastError
-        Print WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetMenuText", "SetMenuItemInfo", "Menu=" & Menu.Text(iditem)
     End If
 
     ' ✔ 正确：刷新窗口菜单

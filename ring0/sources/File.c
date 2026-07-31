@@ -138,25 +138,25 @@ IrpCreateFile(
     IO_SECURITY_CONTEXT* pSecurityContext = NULL;
 
     //为结构体分配空间
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
-    pAccessState = (ACCESS_STATE*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACCESS_STATE), 'aest');
+    pAccessState = (ACCESS_STATE*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(ACCESS_STATE), 'aest');
     if (!pAccessState) {
         DbgPrint("Failed to allocate memory for AccessState\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
-    pAuxData = (AUX_ACCESS_DATA*)ExAllocatePool2(POOL_FLAG_NON_PAGED, 0xE0, 'aaed');
+    pAuxData = (AUX_ACCESS_DATA*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, 0xE0, 'aaed');
     if (!pAuxData) {
         DbgPrint("Failed to allocate memory for AUX_ACCESS_DATA\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
-    pSecurityContext = (IO_SECURITY_CONTEXT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(IO_SECURITY_CONTEXT), 'iosc');
+    pSecurityContext = (IO_SECURITY_CONTEXT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(IO_SECURITY_CONTEXT), 'iosc');
     if (!pSecurityContext) {
         DbgPrint("Failed to allocate memory for IO_SECURITY_CONTEXT\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
@@ -328,9 +328,9 @@ NTSTATUS IrpCreateFile_New(
     IO_STATUS_BLOCK ioStatusBlock = { 0 };
 
     // 1. 分配安全上下文
-    pAccessState = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACCESS_STATE), 'aest');
-    pAuxData = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(AUX_ACCESS_DATA), 'aaed');
-    pSecCtx = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(IO_SECURITY_CONTEXT), 'iosc');
+    pAccessState = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(ACCESS_STATE), 'aest');
+    pAuxData = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(AUX_ACCESS_DATA), 'aaed');
+    pSecCtx = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(IO_SECURITY_CONTEXT), 'iosc');
     if (!pAccessState || !pAuxData || !pSecCtx) {
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
@@ -379,7 +379,7 @@ NTSTATUS IrpCreateFile_New(
     pFile->FileName.MaximumLength = relativePath.Length;
 
     // 3. 分配事件 + IRP
-    pkEvent = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) { ntStatus = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
     KeInitializeEvent(pkEvent, SynchronizationEvent, FALSE);
 
@@ -448,7 +448,7 @@ IrpCloseFile(
     Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
     if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -524,7 +524,7 @@ IrpCloseFile_New(
     if (Irp == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         IoFreeIrp(Irp);
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -609,7 +609,7 @@ IrpQueryDirectoryFile(
     }
 
     // 分配事件
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
@@ -676,7 +676,7 @@ IrpQueryInformationFile(
     Irp = IoAllocateIrp(FileObject->Vpb->DeviceObject->StackSize, FALSE);
     if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -730,7 +730,7 @@ IrpSetInformationFile(
     Irp = IoAllocateIrp(pDeviceObject->StackSize, TRUE);
     if (Irp == NULL) return STATUS_INSUFFICIENT_RESOURCES;
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -796,7 +796,7 @@ MySetInformationFile(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -872,7 +872,7 @@ IrpReadFile(
         Irp->UserBuffer = Buffer;
     }
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -943,7 +943,7 @@ IrpWriteFile(
         MmBuildMdlForNonPagedPool(Irp->MdlAddress);
     }
 
-    pkEvent = (KEVENT*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
+    pkEvent = (KEVENT*)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KEVENT), 'kevn');
     if (!pkEvent) {
         DbgPrint("Failed to allocate memory for KEVENT\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -1035,7 +1035,7 @@ NTSTATUS GetVolumeDiskExtentsInfo(
     deviceObject = IoGetRelatedDeviceObject(fileObject);
 
     // 分配缓冲区（非分页池）
-    buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
+    buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
     if (!buffer) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         goto cleanup;
@@ -1075,7 +1075,7 @@ retry_ioctl:
             ExFreePoolWithTag(buffer, SECTORIO_TAG);
             initialCount = neededCount;
             bufferSize = FIELD_OFFSET(VOLUME_DISK_EXTENTS, Extents) + neededCount * sizeof(DISK_EXTENT);
-            buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
+            buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, SECTORIO_TAG);
             if (!buffer) {
                 status = STATUS_INSUFFICIENT_RESOURCES;
                 goto cleanup;
@@ -1601,7 +1601,7 @@ Cleanup:
 VOID RtlGetEmptyUnicodeString(_Out_ PUNICODE_STRING str, _In_ USHORT length) {
     str->Length = length * sizeof(WCHAR);
     str->MaximumLength = (length + 1) * sizeof(WCHAR);
-    str->Buffer = (PWSTR)ExAllocatePool2(POOL_FLAG_NON_PAGED, str->MaximumLength, 'MyTg');
+    str->Buffer = (PWSTR)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, str->MaximumLength, 'MyTg');
     if (str->Buffer != NULL) {
         RtlZeroMemory(str->Buffer, str->Length);
     }
@@ -1841,7 +1841,7 @@ NTSTATUS ConcatPath(
     totalLen = BasePath->Length + (needsSlash ? sizeof(WCHAR) : 0) + (USHORT)SubPathLen;
 
     // 分配缓冲区（包含NULL终止符）
-    ResultPath->Buffer = (PWCH)ExAllocatePool2(
+    ResultPath->Buffer = (PWCH)KernelAlloc_NonPagedPoolNx(
         POOL_FLAG_NON_PAGED,
         totalLen + sizeof(WCHAR),  // +2字节用于NULL终止符
         POOL_TAG_PATH
@@ -1952,7 +1952,7 @@ NTSTATUS ForceCopyFile(IN PUNICODE_STRING SrcPath, IN PUNICODE_STRING DstPath)
 
     // 分配复制缓冲区（非分页池，避免栈溢出）
     const ULONG BUFFER_SIZE = 64 * 1024;  // 64KB块大小
-    buffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, BUFFER_SIZE, POOL_TAG_BUFFER);
+    buffer = (PUCHAR)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, BUFFER_SIZE, POOL_TAG_BUFFER);
     if (!buffer) {
         DbgPrint("[ForceCopyFile] Failed to allocate buffer\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -2089,7 +2089,7 @@ NTSTATUS ProcessDirectory(
     cleanSrcPath.Buffer[cleanSrcPath.Length / sizeof(WCHAR)] = L'\0';
 
     // 分配目录查询缓冲区
-    dirBuffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, dirBufferSize, POOL_TAG_BUFFER);
+    dirBuffer = (PUCHAR)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, dirBufferSize, POOL_TAG_BUFFER);
     if (!dirBuffer) {
         DbgPrint("[ProcessDirectory] Failed to allocate dirBuffer\n");
         RtlFreeUnicodeString(&cleanSrcPath);
@@ -2195,7 +2195,7 @@ NTSTATUS ProcessDirectory(
                 }
 
                 // 创建工作项
-                PCOPY_WORK_ITEM workItem = (PCOPY_WORK_ITEM)ExAllocatePool2(
+                PCOPY_WORK_ITEM workItem = (PCOPY_WORK_ITEM)KernelAlloc_NonPagedPoolNx(
                     POOL_FLAG_NON_PAGED,
                     sizeof(COPY_WORK_ITEM),
                     POOL_TAG_WORKITEM
@@ -2258,7 +2258,7 @@ NTSTATUS ForceCopyFolder(IN PUNICODE_STRING SrcFolder, IN PUNICODE_STRING DstFol
 
     __try {
         // 创建初始工作项（源目录）
-        initialItem = (PCOPY_WORK_ITEM)ExAllocatePool2(
+        initialItem = (PCOPY_WORK_ITEM)KernelAlloc_NonPagedPoolNx(
             POOL_FLAG_NON_PAGED,
             sizeof(COPY_WORK_ITEM),
             POOL_TAG_WORKITEM

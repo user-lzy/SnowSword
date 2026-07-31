@@ -180,7 +180,7 @@ TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
 Multiline=True
-Enabled=True
+Enabled=False
 Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
@@ -706,7 +706,7 @@ Tag=
 Name=mnuMinifilter
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuMinifilter_mnuRefresh0-10-FrmMain_mnuMinifilter_mnuStep10-10查看绑定实例FrmMain_mnuMinifilter_mnuViewInstance0-10移除过滤器FrmMain_mnuMinifilter_mnuRemoveFilter0-10暴力摘除过滤器FrmMain_mnuMinifilter_mnuViolentRemoveFilter0-10
+Menu=刷新FrmMain_mnuMinifilter_mnuRefresh0-10-FrmMain_mnuMinifilter_mnuStep10-10查看绑定实例FrmMain_mnuMinifilter_mnuViewInstance0-10移除过滤器FrmMain_mnuMinifilter_mnuRemoveFilter0-10暴力摘除过滤器FrmMain_mnuMinifilter_mnuViolentRemoveFilter0-10-FrmMain_mnuMinifilter_mnuStep20-10查看/编辑内存FrmMain_mnuMinifilter_mnuEditMemory0-10
 Left=300
 Top=220
 Tag=
@@ -762,6 +762,15 @@ Help=
 Index=-1
 Menu=刷新FrmMain_mnuTaskScheduler_mnuRefersh0-10-FrmMain_mnuTaskScheduler_mnuStep10-10启用FrmMain_mnuTaskScheduler_mnuEnable0-10运行FrmMain_mnuTaskScheduler_mnuRun0-10删除FrmMain_mnuTaskScheduler_mnuDelete0-10-FrmMain_mnuTaskScheduler_mnuStep20-10转到进程FrmMain_mnuTaskScheduler_mnuGotoProcess0-10
 Left=460
+Top=280
+Tag=
+
+[PopupMenu]
+Name=mnuNdis
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuNdis_mnuRefresh0-10-FrmMain_mnuNdis_mnuStep10-10查看/编辑内存FrmMain_mnuNdis_mnuEditMemory0-10
+Left=500
 Top=280
 Tag=
 
@@ -1415,34 +1424,117 @@ End Sub
 
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     ' ========== 1. 解析参数 ==========
-    'SetConsoleOutputCP(CP_UTF8)
-    ProceedCommandLine Command(1)
+    ProceedCommandLine(Command(1))
     
-    ' ========== 2. 如果是 CLI 模式，隐藏窗口并进入 REPL ==========
-    If g_CuiMode Then
-        ShowWindow(FrmMain.hWnd, SW_HIDE) ' 隐藏主窗口，但控件依然存在可当数据池
+    ' ========== 2. 解析 argc/argv 判断模式 ==========
+    Dim argc As Long
+    Dim argv As WString Ptr Ptr = CommandLineToArgvW(GetCommandLineW(), @argc)
+    
+    ' 模式判断：单次 CLI
+    Dim isSingleShot As Boolean = False
+    Dim singleShotOffset As Long = 1
+    
+    If argc >= 3 Then
+        Dim firstArg As StringW = *argv[1]   ' 【修复】用 [] 而不是 ()
+        If LeftW(firstArg, 2) <> "--" Then
+            isSingleShot = True
+        End If
+    End If
+    
+    ' 显式 -c / --command 模式
+    If argc >= 4 AndAlso (LCaseW(*argv[1]) = "-c" OrElse LCaseW(*argv[1]) = "--command") Then
+        isSingleShot = True
+        singleShotOffset = 2
+    End If
+    
+    ' ========== 3. 单次 CLI 模式 ==========
+    If isSingleShot Then
+        ShowWindow(FrmMain.hWnd, SW_HIDE)
         
-        ' 必须保留的核心初始化
+        ' 核心初始化
         AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
         AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
         AdjustPrivilege GetCurrentProcessId, SE_SHUTDOWN_NAME, True
         
-        ' 初始化必要的控件底层结构
+        InitNtUserFunction
+        InitAllModuleCache
+        InitThreadPool
+        InitLog
+        SymbolActor_Init
+        InitCommandRegistry()
+        
+        Dim cmdArgc As Long = argc - singleShotOffset
+        If cmdArgc < 2 Then
+            SafeStdOut("ERROR: Single-shot mode requires <category> <action>" & vbCrlfW)
+            ExitProcess(1)
+        End If
+        
+        ' 构建参数数组（支持引号内多 token 的二次分割）
+        Dim cmdParts() As StringW
+        ReDim cmdParts(0 To 255)
+        Dim cmdPartCount As Long = 0
+        
+        For i As Long = 0 To cmdArgc - 1
+            Dim raw As StringW = *argv[singleShotOffset + i]   ' 【修复】用 []
+            
+            ' 检测并分割合并的 token（如 "process list"）
+            If i = 0 AndAlso InStrW(raw, " ") > 0 Then
+                Dim subParts() As StringW
+                Dim subCount As Long = vbSplitW(raw, " ", subParts())
+                For j As Long = 0 To subCount - 1
+                    If LenW(subParts(j)) > 0 Then
+                        cmdParts(cmdPartCount) = subParts(j)
+                        cmdPartCount += 1
+                    End If
+                Next
+            Else
+                cmdParts(cmdPartCount) = raw
+                cmdPartCount += 1
+            End If
+        Next
+        
+        If cmdPartCount > 0 Then ReDim Preserve cmdParts(0 To cmdPartCount - 1)
+        
+        ' 执行并退出
+        Dim exitCode As Integer = RunSingleCommand(cmdParts(), cmdPartCount)
+        
+        ' 保险：如果 RunSingleCommand 里没卸载，这里再卸一次
+        If IsDriverLoaded Then UninitDriver()
+        
+        ExitProcess(exitCode)
+    End If
+    
+    ' ========== 4. CLI 交互模式（--cli / --agent-pipe） ==========
+    If g_CuiMode Then
+        ShowWindow(FrmMain.hWnd, SW_HIDE)
+        
+        ' 核心初始化
+        AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
+        AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
+        AdjustPrivilege GetCurrentProcessId, SE_SHUTDOWN_NAME, True
+        
         ListView_SetExtendedListViewStyleEx(ListView1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
         InitNtUserFunction
         InitAllModuleCache
         InitThreadPool
         InitLog
+        SymbolActor_Init
         
-        SymEngine_Init
         ' 启动 REPL 阻塞循环
-        If g_InAgentMode Then RunAgentPipeRepl Else RunAgentRepl
-        Exit Sub ' 保险，正常情况 End 在 REPL 内部执行
+        If g_InAgentMode Then
+            RunAgentPipeRepl
+        Else
+            RunAgentRepl
+        End If
+        
+        Exit Sub
     End If
-    'ChangeWindowMessageFilter(0x0049, MSGFLT_ADD)'允许拖放文件
+    
+    ' ========== 5. GUI 模式（原有逻辑） ==========
     AdjustPrivilege GetCurrentProcessId, SE_DEBUG_NAME, True
     AdjustPrivilege GetCurrentProcessId, SE_LOAD_DRIVER_NAME, True
     AdjustPrivilege GetCurrentProcessId, SE_SHUTDOWN_NAME, True
+    
     DrawTreeView
     FrmListView.Hide
     ListView_SetExtendedListViewStyleEx(ListView1.hWnd, LVS_EX_DOUBLEBUFFER, LVS_EX_DOUBLEBUFFER)
@@ -1451,11 +1543,11 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     
     Dim sfi As SHFILEINFO
     hSysImageList = Cast(HIMAGELIST, SHGetFileInfo( _
-        App.Path, _                          ' 任意存在的路径
-        0, _                               ' 文件属性
-        @sfi, _                            ' SHFILEINFO 结构
-        SizeOf(SHFILEINFO), _              ' 结构大小
-        SHGFI_SYSICONINDEX Or SHGFI_SMALLICON _  ' 【关键标志】
+        App.Path, _
+        0, _
+        @sfi, _
+        SizeOf(SHFILEINFO), _
+        SHGFI_SYSICONINDEX Or SHGFI_SMALLICON _
         ))
     ListView_SetImageList(ListView1.hWnd, hSysImageList, LVSIL_SMALL)
     
@@ -1463,8 +1555,6 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     gMainView = VIEW_LISTVIEW
     UpdateLayout
     
-    'CurrentInformation.hListView = Me.hWnd
-    'CurrentInformation.intType = Process
     InitializeListView Process, ListView1
     CurrentInformation.intType = -1
     
@@ -1472,81 +1562,34 @@ Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
     TrayIco1.Create
     AddRButtonMenu
     ReDim Preserve CurrentInformationArray(10) As CURRENT_INFORMATION
-    ' 移除根项线条样式
+    
     SendMessage mCtrlTreeList1.hWnd, TVM_SETEXTENDEDSTYLE, 0, _
     SendMessage(mCtrlTreeList1.hWnd, TVM_GETEXTENDEDSTYLE, 0, 0) And (Not TVS_LINESATROOT)
+    
+    ' 驱动自动加载提示（GUI 模式）
     If Command(1) = "-LoadDriver" And IsAdmin Then
         If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
             If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!"
         End If
-    /'ElseIf Command(1) = "-DeleteFile" Then
-        AfxMsg Command(2)
-        If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-            If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Exit Sub
-            Dim ustrFilePath As WString * MAX_PATH = "\??\" & Command(2)
-            #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
-            Dim status As NTSTATUS = MyDeleteFile(@ustrFilePath)
-            Print "MyDeleteFile:status=" & WHex(status)
-            If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
-                IoControl hDrv, IOCTL_DeleteFileByIRP, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
-            Else ' 是被打开的文件
-                IoControl hDrv, IOCTL_DeleteFileByXCB, @ustrFilePath, MAX_PATH * SizeOf(Wstring)
-                DeleteFile ustrFilePath
-                Print "[DeleteFile]GetLastError:" & WinErrorMsg(GetLastError) & GetLastError
-            End If
-            AfxMsg "粉碎成功!"
-        End If
-    ElseIf Command(1) = "-UnlockFile" Then
-        If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-            If LoadDriver(App.Path & "SnowSword.sys", False) Then
-                hDrv = OpenDrv("\\.\\SnowSword", True)
-                If (hDrv <> INVALID_HANDLE_VALUE) Then
-                    SymbolService_StartWorkers
-                    AfxMsg "加载成功!"
-                    Check6.Value =True
-                    IsDriverLoaded = True
-                    FilePathByUnlock = Command(2)
-                    Print "接收到文件路径:" & FilePathByUnlock
-                    FrmListView.Show ,, UnlockTheFile
-                Else
-                    AfxMsg "加载失败!"
-                End If
-            Else
-                AfxMsg "加载失败!"
-            End If
-        End If'/
     End If
     
     InitLog
-    /'For i As Integer = 0 To &H10000
-        MyLog.PrintLog LOG_INFO,,, WStr(i)
-    Next'/
     InitNtUserFunction
     InitAllModuleCache
     prevFrmMainProc = SetWindowLongPtr(FrmMain.hWnd, GWL_WNDPROC, Cast(LONG_PTR, @WndProc))
     InitCustomTooltip hWndForm
-    
     InitThreadPool
     bFrmMainShowed = True
+    SymbolActor_Init
     
-    SymEngine_Init
+    /'Sleep 1000
     
-    Dim hFile As HANDLE = CreateFileW("C:\Test1.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile <= 0 Then Print "第一次创建失败,err=" & GetLastError
-    Dim hToken As HANDLE = NULL
-    If CollectHighPrivToken(hToken, "C:\", GENERIC_WRITE) Then
-        Print "收集令牌成功"
-        If ImpersonateLoggedOnUser(hToken) <> 0 Then
-            Print "模拟令牌成功"
-            hFile = CreateFileW("C:\Test1.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-            If hFile <= 0 Then
-                Print "第二次创建失败,err=" & GetLastError
-            Else
-                Print "第二次创建成功"
-                CloseHandle hFile
-            End If
-        End If
-    End If
+    ' ---- 测试模糊搜索 ----
+    Dim modulePath As WString * 260 = "C:\Windows\System32\win32kfull.sys"
+    Dim pattern    As WString * 260 = "*SetWinEventHook*"
+
+    ' 直接调用 FuzzySymbolSearch
+    FuzzySymbolSearch(@modulePath, @pattern)'/
     
 End Sub
 
@@ -2252,8 +2295,8 @@ End Sub
 Function FrmMain_WM_Close(hWndForm As hWnd) As LResult
     CloseDrv hDrv
     SymbolService_StopWorkers
-    SymEngine_Cleanup
-    UnloadDriver "SnowSword", False
+    SymbolActor_Shutdown
+    If IsDriverLoaded Then UnloadDriver "SnowSword", False
     
     TrayIco1.Del
     UninitNtUserFunction
@@ -2417,7 +2460,7 @@ Sub FrmMain_Check6_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         SymbolService_StartWorkers
         AfxMsg "加载成功!"
         IsDriverLoaded = True '/
-        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!"
+        If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Check6.Value = 0
     Else
         /'CloseDrv hDrv
         SymbolService_StopWorkers
@@ -2507,7 +2550,7 @@ Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
         'Case FrmMain_TopMenu1_mnuFireWall ' 防火墙
         '    FrmFireWall.Show
         Case FrmMain_TopMenu1_mnuViewLog ' 显示日志
-           UltimateTest
+            'UltimateTest
             FrmLog.Show
         Case FrmMain_TopMenu1_mnuCheckUpdate ' 检测更新
             CheckUpdate
@@ -2579,7 +2622,7 @@ End Sub
 Sub FrmMain_Check9_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If Check9.Value Then 
         InitSelfProtect
-        'SetSecurityControls
+        SetSecurityControls
     Else
         UninitSelfProtect
     End If
@@ -3198,7 +3241,7 @@ Function FrmMain_VEH1_VectExcepHandler(ByRef excp As EXCEPTION_POINTERS) As Inte
     ' 过滤非致命异常
     If excp.ExceptionRecord->ExceptionCode = &H40010006 OrElse _   ' OutputDebugString C
        excp.ExceptionRecord->ExceptionCode = &H4001000A OrElse _   ' OutputDebugString W
-       excp.ExceptionRecord->ExceptionCode = &HE06D7363 Then       ' C++ 标准异常 (throw)
+       excp.ExceptionRecord->ExceptionCode = &HE06D7363 Then ' C++ 标准异常 (throw)
         Return 1   ' EXCEPTION_CONTINUE_SEARCH：让系统继续传递给 try...catch
     End If
 
@@ -3586,17 +3629,7 @@ Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmMain_mnuProcess_mnuForceTerminateProcess '强制结束进程
             Dim ret As String * 100, lpRet As DWORD, dwProcessId As DWORD
             If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-                If Not LoadDriver(App.Path & "SnowSword.sys", False) Then
-                    AfxMsg "加载失败!"
-                    Exit Sub
-                End If
-                hDrv = OpenDrv("\\.\\SnowSword", True)
-                If (hDrv <> INVALID_HANDLE_VALUE) Then
-                    SymbolService_StartWorkers
-                    AfxMsg "加载成功!"
-                    Check6.Value =True
-                    IsDriverLoaded = True
-                Else
+                If Not InitDriver Then
                     AfxMsg "加载失败!"
                     Exit Sub
                 End If
@@ -3897,6 +3930,8 @@ Sub FrmMain_mCtrlTreeList1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd,
             PopupMenu hWndForm, mnuMinifilter.HMENU
         Case FilterDriver
             PopupMenu hWndForm, mnuFilterDriver.HMENU
+        Case Ndis
+            PopupMenu hWndForm, mnuNdis.HMENU
     End Select
 End Sub
 
@@ -4148,7 +4183,14 @@ Sub FrmMain_mnuMinifilter_WM_Command(hWndForm As hWnd,wID As ULong)
                 AfxMsg "移除失败!"
             End If
         Case FrmMain_mnuMinifilter_mnuViolentRemoveFilter ' 暴力摘除过滤器
-
+            
+        Case FrmMain_mnuNdis_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(mCtrlTreeList1.GetItemText(LastSelectItem, 1), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = 0
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
     End Select
 
 End Sub
@@ -4188,6 +4230,15 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
+            
+            Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
+            If dwAttr <> INVALID_FILE_ATTRIBUTES Then
+                If AfxMsg("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
+                    If (dwAttr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then DeleteDirectoryIterative TargetPath Else DeleteFile TargetPath
+                Else
+                    Exit Sub
+                End If
+            End If
             'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If CopyFile(SourcePath, TargetPath, True) <> 0 Then
                 AfxMsg "复制成功!"
@@ -4201,6 +4252,15 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
+            
+            Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
+            If dwAttr <> INVALID_FILE_ATTRIBUTES Then
+                If AfxMsg("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
+                    If (dwAttr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then DeleteDirectoryIterative TargetPath Else DeleteFile TargetPath
+                Else
+                    Exit Sub
+                End If
+            End If
             'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
@@ -4289,6 +4349,15 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
             
+            Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
+            If dwAttr <> INVALID_FILE_ATTRIBUTES Then
+                If AfxMsg("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
+                    If (dwAttr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then DeleteDirectoryIterative TargetPath Else DeleteFile TargetPath
+                Else
+                    Exit Sub
+                End If
+            End If
+            
             If FB_ShellCopyFile(SourcePath, TargetPath, NULL) <> 0 Then
                 AfxMsg "复制成功!"
             Else
@@ -4301,6 +4370,15 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
+            
+            Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
+            If dwAttr <> INVALID_FILE_ATTRIBUTES Then
+                If AfxMsg("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
+                    If (dwAttr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then DeleteDirectoryIterative TargetPath Else DeleteFile TargetPath
+                Else
+                    Exit Sub
+                End If
+            End If
             'Print "SourcePath:" & SourcePath & " TargetPath:" & TargetPath
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
@@ -4308,7 +4386,7 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
                 If CopyFolder(SourcePath, TargetPath) Then AfxMsg "复制成功!" Else AfxMsg "复制失败!"
             End If
         Case FrmMain_mnuFolder_mnuDeleteFolder ' 删除
-            If RmDir(CurrentPath) = 0 Then
+            If DeleteDirectoryIterative(CurrentPath) Then
                 AfxMsg "删除文件夹成功!"
                 TreeView.DeleteItem CurrentNode
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
@@ -4482,6 +4560,27 @@ Sub FrmMain_mnuTaskScheduler_WM_Command(hWndForm As hWnd, wID As ULong)
             AfxMsg "未找到进程!"
    End Select
 End Sub
+
+'[FrmMain.mnuNdis]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuNdis_WM_Command(hWndForm As hWnd,wID As ULong)
+   Select Case wID
+        Case FrmMain_mnuNdis_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            lblNum.Caption = "数量:" & EnumNdisMiniport(mCtrlTreeList1)
+        Case FrmMain_mnuNdis_mnuEditMemory ' 查看/编辑内存
+            Dim Addr As ULONG64 = ValULng(FF_Replace(mCtrlTreeList1.GetItemText(LastSelectItem, 4), "0x", "&H"))
+            'Print "0x" & WHex(Addr)
+            Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
+            MemoryInfo->Addr = Cast(PVOID, Addr)
+            MemoryInfo->dwProcessId = 0
+            FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
+   End Select
+End Sub
+
+
 
 
 

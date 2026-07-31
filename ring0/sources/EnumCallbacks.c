@@ -179,7 +179,7 @@ PVOID FindPspCreateProcessNotifyRoutine()
 		return NULL;
 	}
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 1);
+	LONG offset = *(PLONG)((PUCHAR)result + 1);
 	PVOID PspSetCreateProcessNotifyRoutineAddr = (PVOID)((PUCHAR)result + 5 + offset);
 
 	DbgPrint("PspSetCreateProcessNotifyRoutineAddr首地址: 0x%p \n", PspSetCreateProcessNotifyRoutineAddr);
@@ -195,17 +195,19 @@ PVOID FindPspCreateProcessNotifyRoutine()
 
 	pSpecialCode[0] = 0x4c;
 	pSpecialCode[1] = 0x8d;
-	pSpecialCode[2] = 0x2d;
+	pSpecialCode[2] = 0x00;
+
+	UCHAR pMaskCode[3] = { 1, 1, 0 }; // 第三个字节是偏移量，使用通配符
 
 	// 开始搜索,找到后返回首地址
-	result = SearchSpecialCode(StartSearchAddress, size, pSpecialCode, ulSpecialCodeLength);
+	result = SearchSpecialCodeWithMask(StartSearchAddress, size, pSpecialCode, pMaskCode, ulSpecialCodeLength);
 	if (NULL == result)
 	{
 		DbgPrint("PspCreateProcessNotifyRoutineAddr is NULL");
 		return NULL;
 	}
 	// 计算目标地址
-	offset = *(PULONG)((PUCHAR)result + 3);
+	offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID PspCreateProcessNotifyRoutineAddr = (PVOID)((PUCHAR)result + 7 + offset);
 
 	//DbgPrint("PspCreateProcessNotifyRoutineAddr首地址: 0x%p \n", PspCreateProcessNotifyRoutineAddr);
@@ -260,7 +262,7 @@ PVOID FindPspCreateThreadNotifyRoutine()
 		return NULL;
 	}
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 1);
+	LONG offset = *(PLONG)((PUCHAR)result + 1);
 	PVOID PspSetCreateThreadNotifyRoutineAddr = (PVOID)((PUCHAR)result + 5 + offset);
 
 	DbgPrint("PspSetCreateThreadNotifyRoutineAddr首地址: 0x%p \n", PspSetCreateThreadNotifyRoutineAddr);
@@ -286,7 +288,7 @@ PVOID FindPspCreateThreadNotifyRoutine()
 		return NULL;
 	}
 	// 计算目标地址
-	offset = *(PULONG)((PUCHAR)result + 3);
+	offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID PspCreateThreadNotifyRoutineAddr = (PVOID)((PUCHAR)result + 7 + offset);
 
 	//DbgPrint("PspCreateThreadNotifyRoutineAddr首地址: 0x%p \n", PspCreateThreadNotifyRoutineAddr);
@@ -312,9 +314,6 @@ PVOID FindPspLoadImageNotifyRoutine()
 		return NULL;
 	}
 	DbgPrint("PsSetLoadImageNotifyRoutineExAddr: %p", PsSetLoadImageNotifyRoutineExAddr);
-	//4c8d2d
-	// ---------------------------------------------------
-	// LyShark 开始定位特征
 
 	// 设置起始位置
 	PUCHAR StartSearchAddress = (PUCHAR)PsSetLoadImageNotifyRoutineExAddr;
@@ -337,13 +336,10 @@ PVOID FindPspLoadImageNotifyRoutine()
 	if (NULL == result)
 	{
 		DbgPrint("PspLoadImageNotifyRoutineAddr is NULL");
-		// 打印前30字节
-		for (int i = 0; i < 30 && ((PUCHAR)PsSetLoadImageNotifyRoutineExAddr)[i] != 0xc3; i++)
-			DbgPrint("%02X", ((PUCHAR)PsSetLoadImageNotifyRoutineExAddr)[i]);
 		return NULL;
 	}
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID PspLoadImageNotifyRoutineAddr = (PVOID)((PUCHAR)result + 7 + offset);
 
 	DbgPrint("PspLoadImageNotifyRoutine: 0x%p \n", PspLoadImageNotifyRoutineAddr);
@@ -400,7 +396,7 @@ PVOID FindCallbackListHead()
 		return NULL;
 	}
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID CmCallbackListHeadAddr = (PVOID)((PUCHAR)result + 7 + offset);
 
 	DbgPrint("CmCallbackListHead: 0x%p \n", CmCallbackListHeadAddr);
@@ -594,7 +590,7 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount)
 	// =========================
 	FltEnumerateFilters(NULL, 0, &ulFilterListSize);
 
-	ppFilterList = (PFLT_FILTER*)ExAllocatePool2(
+	ppFilterList = (PFLT_FILTER*)KernelAlloc_NonPagedPoolNx(
 		POOL_FLAG_NON_PAGED,
 		ulFilterListSize * sizeof(PFLT_FILTER),
 		'cbin'
@@ -627,7 +623,7 @@ ULONG EnumMiniFilter(PMINIFILTER_OBJECT* Array, PULONG InOutCount)
 	// 分配 cache（一次性）
 	// =========================
 	PMINIFILTER_OBJECT cache =
-		ExAllocatePool2(POOL_FLAG_NON_PAGED,
+		KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
 			sizeof(MINIFILTER_OBJECT) * ulFilterListSize,
 			'mfin');
 
@@ -944,7 +940,7 @@ EnumerateMiniFilterInstances(
 	}
 
 	// 分配自定义结构体数组
-	instanceArray = (PINSTANCE_DETAIL_INFO)ExAllocatePool2(
+	instanceArray = (PINSTANCE_DETAIL_INFO)KernelAlloc_NonPagedPoolNx(
 		POOL_FLAG_PAGED,
 		count * sizeof(INSTANCE_DETAIL_INFO),
 		'tIsF'
@@ -1045,7 +1041,7 @@ EnumerateMiniFilterInstances(
 
 		if (status == STATUS_BUFFER_TOO_SMALL && aggBytesNeeded > 0)
 		{
-			aggBuffer = ExAllocatePool2(POOL_FLAG_PAGED, aggBytesNeeded, 'tIsF');
+			aggBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_PAGED, aggBytesNeeded, 'tIsF');
 			if (aggBuffer != NULL)
 			{
 				status = FltEnumerateInstanceInformationByFilter(
@@ -1138,7 +1134,7 @@ PVOID FindKeBugCheckCallbackListHead()
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID KeBugCheckCallbackListHead = (PVOID)((PUCHAR)result + 7 + offset);
 
 	return KeBugCheckCallbackListHead;
@@ -1189,7 +1185,7 @@ PVOID FindKeBugCheckReasonCallbackListHead()
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID KeBugCheckReasonCallbackListHead = (PVOID)((PUCHAR)result + 7 + offset);
 
 	return KeBugCheckReasonCallbackListHead;
@@ -1236,7 +1232,7 @@ PVOID FindPspLegoNotifyRoutine()
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	PVOID PspLegoNotifyRoutine = (PVOID)((PUCHAR)result + 7 + offset);
 
 	return PspLegoNotifyRoutine;
@@ -1302,7 +1298,7 @@ VOID FindIopNotifyShutdownQueueHead(PVOID* pIopNotifyShutdownQueueHead, PVOID* p
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	*pIopNotifyShutdownQueueHead = (PVOID)((PUCHAR)result + 7 + offset);
 
 	StartSearchAddress = (PUCHAR)IoRegisterLastChanceShutdownNotificationAddr;
@@ -1315,7 +1311,7 @@ VOID FindIopNotifyShutdownQueueHead(PVOID* pIopNotifyShutdownQueueHead, PVOID* p
 	}
 
 	// 计算目标地址
-	offset = *(PULONG)((PUCHAR)result + 3);
+	offset = *(PLONG)((PUCHAR)result + 3);
 	*pIopNotifyLastChanceShutdownQueueHead = (PVOID)((PUCHAR)result + 7 + offset);
 }
 
@@ -1345,7 +1341,7 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 	// -------------------------------------------
 	PUCHAR pFunc = NULL;
 	PUCHAR pSearch = NULL;
-	ULONG offset = 0;
+	LONG offset = 0;
 
 	// 初始化输出
 	*NormalHead = NULL;
@@ -1362,7 +1358,7 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 	pSearch = (PUCHAR)SearchSpecialCode(pFunc, 0x90, (UCHAR*)"\x48\x8B\x05", 3);
 	if (pSearch)
 	{
-		offset = *(PULONG)(pSearch + 3);
+		offset = *(PLONG)(pSearch + 3);
 		*NormalHead = (PVOID)(pSearch + 7 + offset);
 	}
 
@@ -1377,7 +1373,7 @@ NTSTATUS FindLogonSessionTerminatedHeads(
 		pSearch = (PUCHAR)SearchSpecialCode(pFunc, 0x90, (UCHAR*)"\x48\x8B\x05", 3);
 		if (pSearch)
 		{
-			offset = *(PULONG)(pSearch + 3);
+			offset = *(PLONG)(pSearch + 3);
 			*ExHead = (PVOID)(pSearch + 7 + offset);
 		}
 	}
@@ -1595,7 +1591,7 @@ PVOID FindIopFsNotifyChangeQueueHead()
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 1);
+	LONG offset = *(PLONG)((PUCHAR)result + 1);
 	//offset = (ULONG64)(0xFFFFFFFF00000000ULL | (offset & 0xFFFFFFFFULL)); //为什么?
 	//DbgPrint("result:0x%p,offset:0x%llx", result, offset);
 	PVOID StartSearchAddress = (PVOID)((PUCHAR)result + 5 + offset);
@@ -1619,7 +1615,7 @@ PVOID FindIopFsNotifyChangeQueueHead()
 	}
 
 	// 计算目标地址
-	offset = *(PULONG)((PUCHAR)result + 3);
+	offset = *(PLONG)((PUCHAR)result + 3);
 	return (PVOID)((PUCHAR)result + 7 + offset);
 }
 
@@ -1630,14 +1626,14 @@ BOOLEAN FindExpCallbackList(PVOID* pListHead, PEX_PUSH_LOCK* pListLock)
 	if (status == STATUS_SUCCESS && addr)
 	{
 		DbgPrint("Symbol: ExpCallbackListHead=%p\n", (PVOID)addr);
-		pListHead = (PVOID)addr;
+		*pListHead = (PVOID)addr;
 
 		status = GetNtSymbolAddress(L"ExpCallbackListLock", &addr);
 		if (status == STATUS_SUCCESS && addr)
 		{
 			DbgPrint("Symbol: ExpCallbackListLock=%p\n", (PVOID)addr);
 			*pListLock = (PVOID)addr;
-			return STATUS_SUCCESS;
+			return TRUE;
 		}
 
 	}
@@ -1654,7 +1650,7 @@ BOOLEAN FindExpCallbackList(PVOID* pListHead, PEX_PUSH_LOCK* pListLock)
 	}
 
 	// 计算目标地址
-	ULONG offset = *(PULONG)((PUCHAR)result + 3);
+	LONG offset = *(PLONG)((PUCHAR)result + 3);
 	DbgPrint("ExpCallbackListHead:0x%p", (PVOID)((PUCHAR)result + 7 + offset - 8));
 	*pListHead = (PVOID)((PUCHAR)result + 7 + offset - 8);
 
@@ -1916,7 +1912,7 @@ NTSTATUS InitializeCallbackTable() {
 
 	// 首次分配（16个条目）
 	g_CallbackTable.Capacity = 16;
-	g_CallbackTable.Entries = (PCALLBACK_ENTRY)ExAllocatePool2(
+	g_CallbackTable.Entries = (PCALLBACK_ENTRY)KernelAlloc_NonPagedPoolNx(
 		POOL_FLAG_NON_PAGED,
 		sizeof(CALLBACK_ENTRY) * g_CallbackTable.Capacity,
 		'cTbl'
@@ -1936,7 +1932,7 @@ NTSTATUS InitializeCallbackTable() {
 	do {
 		if (pBuffer) ExFreePoolWithTag(pBuffer, 'pbuf');
 		ulLength *= 2;
-		pBuffer = (PDIRECTORY_BASIC_INFORMATION)ExAllocatePool2(POOL_FLAG_NON_PAGED, ulLength, 'pbuf');
+		pBuffer = (PDIRECTORY_BASIC_INFORMATION)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, ulLength, 'pbuf');
 		if (!pBuffer) break;
 
 		status = ZwQueryDirectoryObject(hCallbackDir, pBuffer, ulLength, FALSE, TRUE, &ulContext, &ulRet);
@@ -1962,7 +1958,7 @@ NTSTATUS InitializeCallbackTable() {
 					// 动态扩容
 					if (g_CallbackTable.Count >= g_CallbackTable.Capacity) {
 						ULONG newCapacity = g_CallbackTable.Capacity * 2;
-						PCALLBACK_ENTRY newEntries = (PCALLBACK_ENTRY)ExAllocatePool2(
+						PCALLBACK_ENTRY newEntries = (PCALLBACK_ENTRY)KernelAlloc_NonPagedPoolNx(
 							POOL_FLAG_NON_PAGED,
 							sizeof(CALLBACK_ENTRY) * newCapacity,
 							'cTbl'
@@ -2057,18 +2053,18 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 	PVOID* tempFunc1 = NULL;
 
 	// 一次性分配堆内存，彻底解决栈溢出
-	tempFunc = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk1');
-	tempCtx = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk2');
-	tempCbObj = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PCALLBACK_OBJECT) * MAX_TEMP, 'stk3');
-	tempRegObj = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PCALLBACK_REGISTRATION) * MAX_TEMP, 'stkR');
+	tempFunc = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk1');
+	tempCtx = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk2');
+	tempCbObj = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PCALLBACK_OBJECT) * MAX_TEMP, 'stk3');
+	tempRegObj = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PCALLBACK_REGISTRATION) * MAX_TEMP, 'stkR');
 
-	tempFunc3 = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk4');
-	tempCtx3 = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk5');
+	tempFunc3 = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk4');
+	tempCtx3 = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * MAX_TEMP, 'stk5');
 
-	tempFunc2 = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 64, 'stk6');
-	tempCtx2 = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 64, 'stk7');
+	tempFunc2 = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 64, 'stk6');
+	tempCtx2 = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 64, 'stk7');
 
-	tempFunc1 = ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 16, 'stk8');
+	tempFunc1 = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(PVOID) * 16, 'stk8');
 
 	// 任意分配失败则直接禁用缓存，不崩溃
 	if (!tempFunc || !tempCtx || !tempCbObj || !tempRegObj || !tempFunc3 || !tempCtx3 || !tempFunc2 || !tempCtx2 || !tempFunc1)
@@ -2147,7 +2143,7 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 				{
 					ExFreePoolWithTag(Array, 'cbin');
 					max_num += 100;
-					Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * max_num, 'cbin');
+					Array = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * max_num, 'cbin');
 					if (!Array) break; // 分配失败直接退出
 					*pArray = Array;
 				}
@@ -2187,7 +2183,7 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 				{
 					ExFreePoolWithTag(Array, 'cbin');
 					max_num += 100;
-					Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * max_num, 'cbin');
+					Array = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * max_num, 'cbin');
 					if (!Array) break;
 					*pArray = Array;
 				}
@@ -2262,7 +2258,7 @@ ULONG EnumCallbacks(PCallbackInfo* pArray)
 			if (k >= max_num)
 			{
 				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
+				Array = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
 				max_num += 100;
 				*pArray = Array;
 			}
@@ -2311,7 +2307,7 @@ exit1:
 			if (k >= max_num)
 			{
 				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
+				Array = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
 				max_num += 100;
 				*pArray = Array;
 			}
@@ -2372,7 +2368,7 @@ exit2:
 			if (k >= max_num)
 			{
 				ExFreePoolWithTag(Array, 'cbin');
-				Array = (PCallbackInfo)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
+				Array = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * (max_num + 100), 'cbin');
 				max_num += 100;
 				*pArray = Array;
 			}
@@ -2408,7 +2404,7 @@ exit3:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -2443,7 +2439,7 @@ exit4:
 	if (k >= max_num)  // 修正边界
 	{
 		ULONG newSize = max_num + 100;
-		newArray = (PCallbackInfo)ExAllocatePool2(
+		newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 			POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 		if (!newArray) goto exit7;  // 必须检查
@@ -2479,7 +2475,7 @@ exit7:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -2520,7 +2516,7 @@ exit8:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -2567,7 +2563,7 @@ exit9:
 				if (k >= max_num)  // 修正边界
 				{
 					ULONG newSize = max_num + 100;
-					newArray = (PCallbackInfo)ExAllocatePool2(
+					newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 						POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 					if (!newArray) break;  // 必须检查
@@ -2608,7 +2604,7 @@ exit9:
 				if (k >= max_num)  // 修正边界
 				{
 					ULONG newSize = max_num + 100;
-					newArray = (PCallbackInfo)ExAllocatePool2(
+					newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 						POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 					if (!newArray) break;  // 必须检查
@@ -2648,7 +2644,7 @@ exit9:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -2677,7 +2673,7 @@ exit9:
 exit11:
 	// ===================== 【关键】遍历前一次性预分配内存（max_num + 128 个元素） =====================
 	// 先扩容：一次性分配足够内存，遍历中不再操作堆
-	newArray = (PCallbackInfo)ExAllocatePool2(
+	newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 		POOL_FLAG_NON_PAGED,
 		sizeof(CallbackInfo) * (max_num + 128),  // 按要求多分配128个
 		'cbin'
@@ -2807,7 +2803,7 @@ exit12:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -2860,7 +2856,7 @@ exit5:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -3002,7 +2998,7 @@ exit6:
 		if (k >= max_num)  // 修正边界
 		{
 			ULONG newSize = max_num + 100;
-			newArray = (PCallbackInfo)ExAllocatePool2(
+			newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 				POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 			if (!newArray) break;  // 必须检查
@@ -3082,7 +3078,7 @@ exit13:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -3149,7 +3145,7 @@ exit13:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) break;  // 必须检查
@@ -3196,7 +3192,7 @@ exit13:
 			if (k >= max_num)  // 修正边界
 			{
 				ULONG newSize = max_num + 100;
-				newArray = (PCallbackInfo)ExAllocatePool2(
+				newArray = (PCallbackInfo)KernelAlloc_NonPagedPoolNx(
 					POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * newSize, 'cbin');
 
 				if (!newArray) goto exit_bound;  // 必须检查
@@ -3463,7 +3459,7 @@ NTSTATUS EnumWfpCallouts(
 
 	DbgPrint("calloutCount:%d", calloutCount);
 	if (calloutCount > 0) {
-		pArray = (PWFP_CALLOUT_INFO)ExAllocatePool2(
+		pArray = (PWFP_CALLOUT_INFO)KernelAlloc_NonPagedPoolNx(
 			POOL_FLAG_NON_PAGED,
 			calloutCount * sizeof(WFP_CALLOUT_INFO),
 			'WfpE');
@@ -3563,7 +3559,7 @@ NTSTATUS EnumWfpFilters(
 	}
 
 	// 堆分配临时映射表（修复栈溢出）
-	tempMap = (PTEMP_MAP)ExAllocatePool2(
+	tempMap = (PTEMP_MAP)KernelAlloc_NonPagedPoolNx(
 		POOL_FLAG_NON_PAGED,
 		MAX_TEMP_MAP * sizeof(TEMP_MAP),
 		'WfpT'
@@ -3607,7 +3603,7 @@ NTSTATUS EnumWfpFilters(
 
 	// 分配结果内存
 	if (validCount > 0) {
-		pArray = (PWFP_FILTER_INFO)ExAllocatePool2(
+		pArray = (PWFP_FILTER_INFO)KernelAlloc_NonPagedPoolNx(
 			POOL_FLAG_NON_PAGED,
 			validCount * sizeof(WFP_FILTER_INFO),
 			'WfpE');

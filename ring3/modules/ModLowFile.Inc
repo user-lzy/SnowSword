@@ -218,10 +218,10 @@ Type WIN32_FILE_DATAEX2W
     LinkCount As DWORD ' 链接数
     bDeleted As Boolean ' 是否被删除
     'bStreamFile As Boolean ' 是否为ADS流文件(如$Repair:$Verify)
-    bHasAlternateStream As Boolean ' 新字段：是否包含附加数据流
-    bSuspicious As Boolean           ' 新增：存在多个数据流（含未命名流）
+    bHasAlternateStream As Boolean ' 新字段:是否包含附加数据流
+    bSuspicious As Boolean           ' 新增:存在多个数据流（含未命名流）
     bDirectory As Boolean
-    ' === 新增：重解析点信息 ===
+    ' === 新增:重解析点信息 ===
     bReparsePoint       As Boolean   ' 是否为重解析点
     reparseTag          As ULong     ' 重解析标签（如 0xA000000C）
 End Type
@@ -316,7 +316,7 @@ Const MFT_RECORD_IN_USE    = &H1
 Const MFT_RECORD_IS_DIR = &H2
 
 ' ============================================================================
-' NTFS 适配：内部调用统一 DiskIO
+' NTFS 适配:内部调用统一 DiskIO
 ' ============================================================================
 Private Function ReadAtOffset(ctx As NTFS_CONTEXT Ptr, _
                               ByVal offset As ULongLong, _
@@ -447,12 +447,12 @@ Private Function ParseRunList(ctx As NTFS_CONTEXT Ptr, _
         End If
     End If
     
-    ' === 核心修复：稀疏运行不得重置 currentCluster ===
+    ' === 核心修复:稀疏运行不得重置 currentCluster ===
     If offSize > 0 Then
         currentCluster += offsetDelta
         isSparse = False
     Else
-        ' 稀疏运行：VCN 继续推进，但物理 LCN 不变（保持上一个值）
+        ' 稀疏运行:VCN 继续推进，但物理 LCN 不变（保持上一个值）
         isSparse = True
     End If
     
@@ -464,7 +464,7 @@ Private Function ParseMFTDataAttribute(ctx As NTFS_CONTEXT Ptr) As Boolean
     
     ' 读取 $MFT 记录（使用简化方式，假设前几个记录连续）
     Dim recOffset As ULongLong = ctx->mftStartLCN * ctx->clusterSize
-    If Not ReadAtOffset(ctx, recOffset, pMftBuf, ctx->mftRecordSize) Then Print "[ParseMFTDataAttribute]ReadAtOffset failed" : Return False
+    If Not ReadAtOffset(ctx, recOffset, pMftBuf, ctx->mftRecordSize) Then MyLog.PrintLog LOG_ERROR, "ParseMFTDataAttribute", "ReadAtOffset", "failed" : Return False
     If Not FixupMFTRecord(ctx, pMftBuf, ctx->mftRecordSize) Then Return False
     
     Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, pMftBuf)
@@ -525,7 +525,7 @@ Private Function GetDriveIndex(ByVal path As String) As Integer
 End Function
 
 ' ============================================================================
-' 核心：打开卷并自动获取物理磁盘号和分区偏移
+' 核心:打开卷并自动获取物理磁盘号和分区偏移
 ' ============================================================================
 Private Function OpenVolumeInternal(ctx As NTFS_CONTEXT Ptr, _
                                     ByVal path As Wstring Ptr, _
@@ -552,15 +552,15 @@ Private Function OpenVolumeInternal(ctx As NTFS_CONTEXT Ptr, _
     
     Dim pBootBuf As UByte Ptr = Allocate(512)
     If Not ReadAtOffset(ctx, 0, pBootBuf, 512) Then 
-        Print "[OpenVolumeInternal] ReadAtOffset failed"
+        MyLog.PrintLog LOG_ERROR, "OpenVolumeInternal", "ReadAtOffset", "failed"
         Goto Cleanup
     End If
     If Not ParseBoot(ctx, pBootBuf) Then 
-        Print "[OpenVolumeInternal] ParseBoot failed"
+        MyLog.PrintLog LOG_ERROR, "OpenVolumeInternal", "ParseBoot", "failed"
         Goto Cleanup
     End If
     If Not ParseMFTDataAttribute(ctx) Then 
-        Print "[OpenVolumeInternal] ParseMFTDataAttribute failed"
+        MyLog.PrintLog LOG_ERROR, "OpenVolumeInternal", "ParseMFTDataAttribute", "failed"
         Goto Cleanup
     End If
     
@@ -602,7 +602,7 @@ Public Function OpenNTFSVolumeContext(ByVal path As String) As NTFS_CONTEXT Ptr
     ' 先转换为物理路径
     Dim physPath As String = ConvertToPhysicalPath(path)
     If physPath = "" Then
-        Print "[OpenNTFSVolumeContext] 无法将路径转换为物理路径: " & path
+        MyLog.PrintLog LOG_ERROR, "OpenNTFSVolumeContext",, "无法将路径转换为物理路径: " & path
         Return NULL
     End If
     
@@ -640,7 +640,7 @@ Public Function OpenNTFSVolumeContext(ByVal path As String) As NTFS_CONTEXT Ptr
     End If
     
     If startLBA = 0 Then
-        Print "[OpenNTFSVolumeContext] 未找到分区信息: " & physPath
+        MyLog.PrintLog LOG_ERROR, "OpenNTFSVolumeContext",, "未找到分区信息: " & physPath
         Return NULL
     End If
     
@@ -710,16 +710,16 @@ Private Function ReadExternalMFTRecord(ctx As NTFS_CONTEXT Ptr, ByVal recNo As U
     Return FixupMFTRecord(ctx, outBuf, ctx->mftRecordSize)
 End Function
 
-' 读取 MFT record（根据记录序号）。本函数为简化实现：假定 MFT 本身连续（未处理 MFT 的非驻列扩展）
+' 读取 MFT record（根据记录序号）。本函数为简化实现:假定 MFT 本身连续（未处理 MFT 的非驻列扩展）
 Function ReadMFTRecord(ctx As NTFS_CONTEXT Ptr, ByVal recNo As ULongLong, ByVal outBuf As UByte Ptr) As Boolean
-    ' 计算每个 MFT 记录在 MFT 区的偏移：mftStartLCN * clusterSize + recNo * mftRecordSize
+    ' 计算每个 MFT 记录在 MFT 区的偏移:mftStartLCN * clusterSize + recNo * mftRecordSize
     Dim recOffset As ULongLong = ctx->mftStartLCN * ctx->clusterSize + recNo * ctx->mftRecordSize
     ' 直接从磁盘读取整个记录
     Dim tmpBuf() As UByte
     ReDim tmpBuf(0 To ctx->mftRecordSize - 1) As UByte
-    If Not ReadAtOffset(ctx, recOffset, @tmpBuf(0), ctx->mftRecordSize) Then Print "[ReadMFTRecord]读取MFT记录" & recNo & "失败" & WinErrorMsg(GetLastError) & GetLastError: Return False
+    If Not ReadAtOffset(ctx, recOffset, @tmpBuf(0), ctx->mftRecordSize) Then MyLog.PrintLog LOG_ERROR, "ReadMFTRecord", "ReadAtOffset", "读取MFT记录" & recNo & "失败": Return False
     ' 执行 USN 修复
-    If Not FixupMFTRecord(ctx, @tmpBuf(0), ctx->mftRecordSize) Then  Print "[ReadMFTRecord]MFT记录" & recNo & "失败": Return False
+    If Not FixupMFTRecord(ctx, @tmpBuf(0), ctx->mftRecordSize) Then  MyLog.PrintLog LOG_ERROR, "ReadMFTRecord", "FixupMFTRecord", "读取MFT记录" & recNo & "失败": Return False
     ' 复制出去
     memcpy(outBuf, @tmpBuf(0), ctx->mftRecordSize)
     Return True
@@ -762,7 +762,7 @@ End Function
 ' UTF-16 (little-endian) -> ANSI 转换
 Function Utf16ToAnsi(ByVal utf16Ptr As UShort Ptr, ByVal charCount As Integer) As String
     If charCount <= 0 Or utf16Ptr = NULL Then Return ""
-    ' 注意：WideCharToMultiByte 的 cchWideChar 参数为字符数（可以为 -1 表示 null-terminated）
+    ' 注意:WideCharToMultiByte 的 cchWideChar 参数为字符数（可以为 -1 表示 null-terminated）
     Dim bufSize As Integer = WideCharToMultiByte(CP_ACP, 0, utf16Ptr, charCount, NULL, 0, NULL, NULL)
     If bufSize > 0 Then
         Dim s As String = Space(bufSize)
@@ -772,7 +772,7 @@ Function Utf16ToAnsi(ByVal utf16Ptr As UShort Ptr, ByVal charCount As Integer) A
             Return s
         End If
     End If
-    ' 回退（保守处理）：把能打印的字符保留，其他用 [U+xxxx]
+    ' 回退（保守处理）:把能打印的字符保留，其他用 [U+xxxx]
     Dim strOut As String = ""
     For i As Integer = 0 To charCount - 1
         Dim ch As UShort = utf16Ptr[i]
@@ -800,7 +800,7 @@ Function GetEncodingType(ByVal dataPtr As UByte Ptr, ByVal dataSize As ULong) As
         Return Utf16Encoding ' UTF-16 LE with BOM
     End If
     
-    ' 简单启发式：统计可打印ASCII字符比例
+    ' 简单启发式:统计可打印ASCII字符比例
     Dim asciiCount As Integer = 0
     For i As Integer = 0 To IIf(dataSize > 100, 99, dataSize - 1)
         Dim b As UByte = dataPtr[i]
@@ -922,7 +922,7 @@ Private Function ReadNonResidentAttributeData(ctx As NTFS_CONTEXT Ptr, _
         If bufOffset + bytesToProcess > bufferSize Then bytesToProcess = bufferSize - bufOffset
         
         If runOffsetBytes = 0 Then
-            ' === 稀疏运行：填充 0 ===
+            ' === 稀疏运行:填充 0 ===
             memset(buffer + bufOffset, 0, bytesToProcess)
         Else
             ' === 正常读取 ===
@@ -937,13 +937,13 @@ End Function
 
 ' ============================================================================
 ' LZNT1 解压单个块
-' 参数：
+' 参数:
 '   inBuf     - 输入缓冲区（已包含 2 字节头部）
 '   inSize    - 输入缓冲区有效大小
 '   outBuf    - 输出缓冲区
 '   outSize   - 输出缓冲区大小
 '   consumed  - 返回实际消耗了多少输入字节（含头部，已 2 字节对齐）
-' 返回：实际解压出的字节数
+' 返回:实际解压出的字节数
 ' ============================================================================
 Private Function LZNT1Decompress(ByVal inBuf As UByte Ptr, _
                                  ByVal inSize As ULong, _
@@ -959,7 +959,7 @@ Private Function LZNT1Decompress(ByVal inBuf As UByte Ptr, _
     consumed = 2
     
     If isCompressed = False Then
-        ' 未压缩块：头部后直接复制 chunkSize 字节
+        ' 未压缩块:头部后直接复制 chunkSize 字节
         Dim dataSize As ULong = chunkSize
         If consumed + dataSize > inSize Then dataSize = inSize - consumed
         If dataSize > outSize Then dataSize = outSize
@@ -969,7 +969,7 @@ Private Function LZNT1Decompress(ByVal inBuf As UByte Ptr, _
         Return dataSize
     End If
     
-    ' 压缩块：flag byte + token 组
+    ' 压缩块:flag byte + token 组
     Dim srcPos As ULong = 2
     Dim dstPos As ULong = 0
     
@@ -1015,7 +1015,7 @@ End Function
 
 ' ============================================================================
 ' 读取并解压 NTFS 压缩属性
-' 策略：先按 Run 读取全部原始压缩字节到临时缓冲区，再逐个压缩单元解压
+' 策略:先按 Run 读取全部原始压缩字节到临时缓冲区，再逐个压缩单元解压
 ' ============================================================================
 Private Function ReadCompressedAttributeData(ctx As NTFS_CONTEXT Ptr, _
                                              ByVal nonResAttr As ATTR_HEADER_NONRESIDENT Ptr, _
@@ -1417,7 +1417,7 @@ Function NTFS_GetDirList_Internal(ctx As NTFS_CONTEXT Ptr, lpDirPath As String, 
     vbSplit lpDirPath, "\", parts()
     
     If ctx = NULL Then Return -1
-    Print "[NTFS_GetDirList_Internal]lpDirPath:" & lpDirPath
+    'Print "[NTFS_GetDirList_Internal]lpDirPath:" & lpDirPath
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
     Dim recordNum As ULONGLONG = 5
@@ -1432,7 +1432,7 @@ Function NTFS_GetDirList_Internal(ctx As NTFS_CONTEXT Ptr, lpDirPath As String, 
         Dim cachedIndexAlloc As ATTR_HEADER_NONRESIDENT Ptr = NULL
         Dim cachedIndexRoot As ATTR_HEADER_RESIDENT Ptr = NULL
         
-        ' 第一次扫描：缓存关键属性
+        ' 第一次扫描:缓存关键属性
         Dim tempOff As ULong = attrOff
         While tempOff + SizeOf(ATTR_HEADER_GENERIC) <= ctx->mftRecordSize
             Dim tempAttr As ATTR_HEADER_GENERIC Ptr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + tempOff)
@@ -1447,7 +1447,7 @@ Function NTFS_GetDirList_Internal(ctx As NTFS_CONTEXT Ptr, lpDirPath As String, 
             tempOff += tempAttr->totalLen
         Wend
         
-        ' 第二次扫描：解析属性
+        ' 第二次扫描:解析属性
         Dim fileInfo() As WIN32_FILE_DATAEX2W
         Dim ListCount As Long = 0
         attrOff = mrh->attrOffset
@@ -1537,8 +1537,8 @@ ProcessResults:
     Return fileCount
 End Function
 
-' 辅助函数1：根据路径解析对应的MFT记录号（复用你现有GetDirList的路径遍历逻辑）
-' 参数：lpFilePath=文件路径，outMftNum=输出MFT记录号
+' 辅助函数1:根据路径解析对应的MFT记录号（复用你现有GetDirList的路径遍历逻辑）
+' 参数:lpFilePath=文件路径，outMftNum=输出MFT记录号
 Private Function GetMFTRecordByPath(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As String, ByRef outMftNum As ULongLong) As BOOL
     outMftNum = 0
     Dim dirPath As String, fileName As String
@@ -1576,28 +1576,28 @@ Private Function ReadFile2_Internal(ctx As NTFS_CONTEXT Ptr, ByVal lpFilePath As
     
     Dim result As Boolean = False
     
-    ' ========== 步骤1：验证路径并获取对应的MFT记录号 ==========
+    ' ========== 步骤1:验证路径并获取对应的MFT记录号 ==========
     Dim targetMftRecordNum As ULongLong = 0
     If GetMFTRecordByPath(ctx, lpFilePath, targetMftRecordNum) = 0 Then
-        Print "错误：路径不存在或无法解析MFT记录 → " & lpFilePath
+        MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal", "GetMFTRecordByPath", "路径不存在或无法解析MFT记录 → " & lpFilePath
         Return False
     End If
     
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
-    If Not ReadExternalMFTRecord(ctx, targetMftRecordNum, @recBuf(0)) Then ' ReadMFTRecord_Safe
-        Print "错误：读取MFT记录" & targetMftRecordNum & "失败（USA修复失败）"
+    If Not ReadExternalMFTRecord(ctx, targetMftRecordNum, @recBuf(0)) Then
+        MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal", "ReadExternalMFTRecord", "读取MFT记录" & targetMftRecordNum & "失败"
         Return False
     End If
     
     ' 检查是否为文件（非目录）
     Dim mrh As MFT_RECORD_HEADER Ptr = Cast(MFT_RECORD_HEADER Ptr, @recBuf(0))
     If (mrh->dwFlags And &H2) <> 0 Then ' DIRECTORY标志（0x2）
-        Print "错误：目标路径是目录，非文件 → " & lpFilePath
+        MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal",, "目标路径是目录，非文件 → " & lpFilePath
         Return False
     End If
     
-    ' ========== 步骤3：解析DATA属性（类型0x80） ==========
+    ' ========== 步骤3:解析DATA属性（类型0x80） ==========
     Dim dataAttr As ATTR_HEADER_NONRESIDENT Ptr = NULL
     Dim targetMftBuf() As UByte   ' 用于存储外部 MFT 记录（如果需要）
     Dim isExternalRecord As Boolean = False
@@ -1613,7 +1613,7 @@ FindDataAttr:
         'Print ">>> [调试] 检查属性偏移: " & attrOff
         gAttr = Cast(ATTR_HEADER_GENERIC Ptr, @recBuf(0) + attrOff)
         
-        ' 终止条件：属性类型ID为0xFFFFFFFF
+        ' 终止条件:属性类型ID为0xFFFFFFFF
         If gAttr->typeID = &HFFFFFFFF Then Exit Do
         
         ' 找到DATA属性（类型0x80）
@@ -1633,21 +1633,21 @@ FindDataAttr:
             Else
                 ' (可选) 处理非常驻的 Attribute List (通常很少见)
                 'Print "    [!] Attribute List 是非常驻的，代码暂不支持"
-                ' ============== 新增：处理非常驻 Attribute List ==============
-                Print ">>> [调试] 处理非常驻 Attribute List"
+                ' ============== 新增:处理非常驻 Attribute List ==============
+                MyLog.PrintLog LOG_INFO, "ReadFile2_Internal",, "处理非常驻 Attribute List"
                 Dim nrAttr As ATTR_HEADER_NONRESIDENT Ptr = Cast(ATTR_HEADER_NONRESIDENT Ptr, gAttr)
                 listDataSize = nrAttr->dataSize
                 
-                ' 安全限制：防止超大列表占用内存
+                ' 安全限制:防止超大列表占用内存
                 If listDataSize = 0 Or listDataSize > 1024 * 1024 Then
-                    Print "    [!] 非常驻 Attribute List 大小异常"
+                    MyLog.PrintLog LOG_WARN, "ReadFile2_Internal",, "非常驻 Attribute List 大小异常"
                     Goto ContinueDo
                 End If
                 
                 ' 分配缓冲区，读取非常驻数据（复用你已有的函数）
                 ReDim tempListBuf(0 To listDataSize - 1)
                 If ReadNonResidentAttributeData(ctx, nrAttr, @tempListBuf(0), listDataSize) = False Then
-                    Print "    [!] 读取非常驻 Attribute List 失败"
+                    MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal", "ReadNonResidentAttributeData", "读取非常驻 Attribute List 失败"
                     Goto ContinueDo
                 End If
                 
@@ -1663,7 +1663,7 @@ FindDataAttr:
                 If entry->recordLen < SizeOf(ATTRIBUTE_LIST_ENTRY) Then Exit While
                 If offset + entry->recordLen > listDataSize Then Exit While
                 
-                ' 检查：这个条目是不是 DATA 属性 (0x80)？
+                ' 检查:这个条目是不是 DATA 属性 (0x80)？
                 If entry->typeID = ATTR_TYPE_DATA Then
                     Dim extMftRecNo As ULongLong = entry->mftRef And &HFFFFFFFFFFFFULL
                     'Print ">>> [调试] 找到外部 DATA，位于 MFT 记录: " & extMftRecNo
@@ -1671,7 +1671,7 @@ FindDataAttr:
                     ' 3. 读取外部 MFT 记录
                     ReDim targetMftBuf(0 To ctx->mftRecordSize - 1)
                     If ReadExternalMFTRecord(ctx, extMftRecNo, @targetMftBuf(0)) Then
-                        ' 4. 切换上下文：将 recBuf 指向外部记录，并重置 mrh 指针
+                        ' 4. 切换上下文:将 recBuf 指向外部记录，并重置 mrh 指针
                         memcpy(@recBuf(0), @targetMftBuf(0), ctx->mftRecordSize)
                         
                         ' 重新初始化 MFT 头指针
@@ -1691,7 +1691,7 @@ ContinueDo:
         attrOff += gAttr->totalLen ' 偏移到下一个属性
     Loop
     
-    Print "[!] 错误：未找到 $DATA 属性 (0x80)"
+    MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal",, "未找到 $DATA 属性 (0x80)"
     Return False
     
 ProcessFoundDataAttr:
@@ -1716,7 +1716,7 @@ ProcessFoundDataAttr:
     Loop
     
     If hasReparsePoint Then
-        Print "警告：目标文件是重解析点 (Tag=0x" & Hex(reparseTag, 8) & _
+        MyLog.PrintLog LOG_WARN, "ReadFile2_Internal",, "警告:目标文件是重解析点 (Tag=0x" & Hex(reparseTag, 8) & _
               ")，读取的是重解析原始数据而非文件内容"
         ' 继续执行，调用方可根据 bReparsePoint 判断
     End If
@@ -1728,15 +1728,15 @@ ProcessFoundDataAttr:
         ' === 声明 clusterBuffer（必须在非常驻分支的最开始）===
         Dim clusterBuffer As UByte Ptr = Allocate(ctx->clusterSize)
         If clusterBuffer = NULL Then
-            Print "    [!] 簇缓冲区分配失败"
+            MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal", "Allocate", "簇缓冲区分配失败"
             Return False
         End If
         
-        ' 防御：dataSize 改用 ULongLong，防止 >4GB 截断
+        ' 防御:dataSize 改用 ULongLong，防止 >4GB 截断
         Dim dataSize As ULongLong = nr->dataSize
         If dataSize = 0 Then Return True
         If dataSize > 256*1024*1024 Then
-            Print "    [!] 文件过大，限制读取 256MB"
+            MyLog.PrintLog LOG_WARN, "ReadFile2_Internal",, "文件过大，限制读取 256MB"
             dataSize = 256*1024*1024
         End If
         
@@ -1746,15 +1746,15 @@ ProcessFoundDataAttr:
         ReDim bytData(dataSize - 1) As UByte
         
         If isCompressed Then
-            ' === 压缩属性：使用新的解压读取 ===
+            ' === 压缩属性:使用新的解压读取 ===
             If Not ReadCompressedAttributeData(ctx, nr, @bytData(0), dataSize) Then
-                Print "    [!] 读取压缩数据失败"
+                MyLog.PrintLog LOG_ERROR, "ReadFile2_Internal", "ReadCompressedAttributeData", "读取压缩数据失败"
                 Return False
             End If
-            Print "    压缩文件读取并解压完成"
+            MyLog.PrintInfo "ReadFile2_Internal", "ReadCompressedAttributeData", "压缩文件读取并解压完成"
             result = True
         Else
-            ' === 非压缩：原有逻辑，但使用 isSparse 修复 ===
+            ' === 非压缩:原有逻辑，但使用 isSparse 修复 ===
             Dim pfileData As UByte Ptr = Allocate(dataSize)
             If pfileData = NULL Then Return False
             memset(pfileData, 0, dataSize)
@@ -1784,7 +1784,7 @@ ProcessFoundDataAttr:
                     If bytesToRead = 0 Then Exit For
                     
                     If isSparse Then
-                        ' 稀疏：已 memset 为 0，只需推进计数
+                        ' 稀疏:已 memset 为 0，只需推进计数
                         bytesWritten += bytesToRead
                     Else
                         Dim lcn As ULongLong = currentLCN + i
@@ -1819,7 +1819,7 @@ ProcessFoundDataAttr:
     
     ' ========== 最终结果返回 ==========
     If result = True Then
-        Print "成功读取文件内容，大小：" & UBound(bytData) + 1 & " 字节"
+        MyLog.PrintInfo "ReadFile2_Internal",, "成功读取文件内容，大小:" & UBound(bytData) + 1 & " 字节"
     End If
     Return result
 End Function
@@ -1827,17 +1827,17 @@ End Function
 Private Function MyCopyFile_Internal(ctx As NTFS_CONTEXT Ptr, lpSourceFile As StringW, lpTargetFile As StringW) As Boolean
     Dim bytData() As UByte
     If Not ReadFile2_Internal(ctx, lpSourceFile, bytData()) Then
-        Print "ReadFile2失败"
+        MyLog.PrintLog LOG_ERROR, "MyCopyFile_Internal", "ReadFile2", "lpSourceFile:" & lpSourceFile
         Return False
     End If
     Dim hFile As HANDLE = CreateFile(lpTargetFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
     If hFile = INVALID_HANDLE_VALUE Then
-        Print "CreateFile(" & lpTargetFile & ")失败:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "MyCopyFile_Internal", "CreateFile", "lpTargetFile:" & lpTargetFile
         Return False
     End If
     Dim bytWritten As DWORD, dwWritten As DWORD = (UBound(bytData) + 1) * SizeOf(UByte)
     If (WriteFile(hFile, @bytData(0), dwWritten, @bytWritten, NULL) = 0) OrElse (bytWritten < dwWritten) Then
-        Print "WriteFile失败(" & bytWritten & "/" & dwWritten & "):" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "MyCopyFile_Internal", "WriteFile", "Write(" & bytWritten & "/" & dwWritten & ")"
         CloseHandle hFile
         Return False
     End If
@@ -1863,7 +1863,7 @@ Type FILE_COPY_ENTRY
 End Type
 
 '======================================================================
-'  内部函数：创建目录（递归创建父目录）
+'  内部函数:创建目录（递归创建父目录）
 '======================================================================
 Private Function CreateDirectoryTree(ByVal dirPath As String) As Boolean
     If dirPath = "" Then Return False
@@ -1891,7 +1891,7 @@ Private Function CreateDirectoryTree(ByVal dirPath As String) As Boolean
 End Function
 
 '======================================================================
-'  内部函数：非递归拷贝单个文件（使用你的NTFS底层读取 + Win32写入）
+'  内部函数:非递归拷贝单个文件（使用你的NTFS底层读取 + Win32写入）
 '======================================================================
 Private Function CopySingleFile_Internal(ctx As NTFS_CONTEXT Ptr, _
                                          ByVal srcPath As String, _
@@ -1900,7 +1900,7 @@ Private Function CopySingleFile_Internal(ctx As NTFS_CONTEXT Ptr, _
     
     ' 使用底层NTFS读取（绕过Windows句柄限制，支持被锁定的系统文件）
     If Not ReadFile2_Internal(ctx, srcPath, bytData()) Then
-        ' 回退：使用普通Win32 API拷贝（对于非NTFS卷或普通文件）
+        ' 回退:使用普通Win32 API拷贝（对于非NTFS卷或普通文件）
         Return CopyFile(srcPath, dstPath, FALSE) <> 0
     End If
     
@@ -1929,17 +1929,17 @@ Private Function CopySingleFile_Internal(ctx As NTFS_CONTEXT Ptr, _
 End Function
 
 '======================================================================
-'  核心函数：非递归拷贝文件夹（包括子文件夹及所有文件）
+'  核心函数:非递归拷贝文件夹（包括子文件夹及所有文件）
 '  
-'  参数：
+'  参数:
 '    lpSourceDir  - 源目录路径，如 "C:\SourceFolder"
 '    lpTargetDir  - 目标目录路径，如 "D:\Backup\SourceFolder"
 '  
-'  返回值：
+'  返回值:
 '    True  - 成功
 '    False - 失败（部分文件可能已拷贝）
 '  
-'  特点：
+'  特点:
 '    1. 完全非递归，使用动态数组模拟栈，避免爆栈
 '    2. 支持NTFS底层读取（可拷贝被锁定的系统文件）
 '    3. 自动创建目标目录结构
@@ -1954,7 +1954,7 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
     ' 获取源卷上下文
     Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpSourceDir)
     If ctx = NULL Then
-        Print "[CopyFolder] 无法打开源卷: " & lpSourceDir
+        MyLog.PrintLog LOG_ERROR, "CopyFolder_NonRecursive", "CopyFolder", "无法打开源卷: " & lpSourceDir
         Return False
     End If
     
@@ -1980,11 +1980,11 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
     Dim filesFailed As Long = 0
     Dim totalBytes As ULongLong = 0
     
-    Print "[CopyFolder] 开始非递归拷贝..."
-    Print "  源: " & lpSourceDir
-    Print "  目标: " & lpTargetDir
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "开始非递归拷贝..."
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "  源: " & lpSourceDir
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "  目标: " & lpTargetDir
     
-    ' ---------- 主循环：DFS遍历目录树 ----------
+    ' ---------- 主循环:DFS遍历目录树 ----------
     Do While dirStackTop >= 0
         
         ' 查看栈顶（不弹出）
@@ -1992,11 +1992,11 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
         Dim current As DIR_STACK_ENTRY Ptr = @dirStack(currentIdx)
         
         If current->isProcessed = False Then
-            ' ====== 第一次访问：创建目录，枚举子项 ======
+            ' ====== 第一次访问:创建目录，枚举子项 ======
             
             ' 创建目标目录
             If Not CreateDirectoryTree(current->targetPath) Then
-                Print "[警告] 无法创建目录: " & current->targetPath
+                MyLog.PrintLog LOG_WARN, "CopyFolder_NonRecursive", "CreateDirectoryTree", "无法创建目录: " & current->targetPath
                 ' 标记为已处理并弹出（跳过此目录）
                 current->isProcessed = True
                 dirStackTop -= 1
@@ -2031,13 +2031,13 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
                     Dim dstFullPath As String = current->targetPath & itemName
                     
                     If fileInfoList(i).bDirectory Then
-                        ' === 子目录：压入目录栈（DFS，后进先出）===
+                        ' === 子目录:压入目录栈（DFS，后进先出）===
                         dirStackTop += 1
                         dirStack(dirStackTop).sourcePath = srcFullPath & "\"
                         dirStack(dirStackTop).targetPath = dstFullPath & "\"
                         dirStack(dirStackTop).isProcessed = False
                     Else
-                        ' === 文件：加入文件队列 ===
+                        ' === 文件:加入文件队列 ===
                         fileQueue(fileQueueCount).sourceFile = srcFullPath
                         fileQueue(fileQueueCount).targetFile = dstFullPath
                         fileQueueCount += 1
@@ -2049,14 +2049,14 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
             current->isProcessed = True
             
         Else
-            ' ====== 第二次访问：目录处理完毕，弹出栈 ======
+            ' ====== 第二次访问:目录处理完毕，弹出栈 ======
             dirStackTop -= 1
         End If
         
         ' 定期处理文件队列（防止内存占用过大）
-        ' 策略：当队列满80%时，批量处理
+        ' 策略:当队列满80%时，批量处理
         If fileQueueCount > 0 And (fileQueueCount >= UBound(fileQueue) * 0.8 Or dirStackTop < 0) Then
-            Print "  [批量拷贝] 处理 " & fileQueueCount & " 个文件..."
+            MyLog.PrintInfo "CopyFolder_NonRecursive",, "  [批量拷贝] 处理 " & fileQueueCount & " 个文件..."
             
             For i As Long = 0 To fileQueueCount - 1
                 If CopySingleFile_Internal(ctx, _
@@ -2065,7 +2065,7 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
                     filesCopied += 1
                 Else
                     filesFailed += 1
-                    Print "[失败] " & fileQueue(i).sourceFile
+                    MyLog.PrintLog LOG_WARN, "CopyFolder_NonRecursive", "CopySingleFile_Internal", "[失败]" & fileQueue(i).SOURCEFILE
                 End If
                 FF_DoEvents  ' 防止UI卡死
             Next
@@ -2078,23 +2078,23 @@ Public Function CopyFolder_NonRecursive(ByVal lpSourceDir As String, _
     Loop
     
     ' ---------- 最终统计 ----------
-    Print !"\n[CopyFolder] 拷贝完成:"
-    Print "  目录创建: " & dirsCreated
-    Print "  文件成功: " & filesCopied
-    Print "  文件失败: " & filesFailed
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, !"\n[CopyFolder] 拷贝完成:"
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "  目录创建: " & dirsCreated
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "  文件成功: " & filesCopied
+    MyLog.PrintInfo "CopyFolder_NonRecursive",, "  文件失败: " & filesFailed
     
     Return filesFailed = 0
 End Function
 
 '======================================================================
-'  简化包装函数：直接调用
+'  简化包装函数:直接调用
 '======================================================================
 Function CopyFolder(ByVal lpSourceDir As String, _
                          ByVal lpTargetDir As String) As Boolean
     Return CopyFolder_NonRecursive(lpSourceDir, lpTargetDir)
 End Function
 
-' 同理，ReadFile2 和 MyCopyFile 的包装实现：
+' 同理，ReadFile2 和 MyCopyFile 的包装实现:
 Function ReadFile2(ByVal lpFilePath As String, bytData() As UByte) As Boolean
     Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpFilePath)
     If ctx = NULL Then Return False
@@ -2116,14 +2116,14 @@ Function MyCopyFile(lpSourceFile As StringW, lpTargetFile As StringW) As Boolean
 End Function
 
 '======================================================================
-' 内部辅助：从单条 MFT 记录中收集所有 $DATA 流
-' 参数：
+' 内部辅助:从单条 MFT 记录中收集所有 $DATA 流
+' 参数:
 '   ctx          - 卷上下文
 '   recBuf       - 已修复的 MFT 记录缓冲区
 '   streamNames()- 输出流名数组
 '   streamSizes()- 输出流大小数组
-'   streamCount  - 输入/输出：当前已收集的流个数
-' 返回值：成功返回 True，否则 False
+'   streamCount  - 输入/输出:当前已收集的流个数
+' 返回值:成功返回 True，否则 False
 '======================================================================
 Private Function CollectDataStreamsFromRecord(ctx As NTFS_CONTEXT Ptr, _
                                               recBuf() As UByte, _
@@ -2169,12 +2169,12 @@ Private Function CollectDataStreamsFromRecord(ctx As NTFS_CONTEXT Ptr, _
 End Function
 
 '======================================================================
-' 对外接口：枚举指定文件的所有数据流（未命名 + 命名流）
-' 参数：
+' 对外接口:枚举指定文件的所有数据流（未命名 + 命名流）
+' 参数:
 '   lpFilePath    - 完整文件路径，如 "C:\test.txt"
-'   streamNames() - 输出：流名称数组，未命名流为 ""，命名流如 "Zone.Identifier"
-'   streamSizes() - 输出：对应流的数据大小（字节）
-' 返回值：
+'   streamNames() - 输出:流名称数组，未命名流为 ""，命名流如 "Zone.Identifier"
+'   streamSizes() - 输出:对应流的数据大小（字节）
+' 返回值:
 '   >0   - 流的总个数（至少为1，即未命名流）
 '   -1   - 失败（路径无效、读取错误等）
 '======================================================================
@@ -2182,14 +2182,14 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext(lpFilePath)
     If ctx = NULL Then Return -1
 
-    ' 步骤1：根据路径获取文件 MFT 记录号
+    ' 步骤1:根据路径获取文件 MFT 记录号
     Dim targetRecNo As ULongLong
     If GetMFTRecordByPath(ctx, lpFilePath, targetRecNo) = 0 Then
         CloseNTFSVolumeContext(ctx)
         Return -1
     End If
 
-    ' 步骤2：读取主 MFT 记录
+    ' 步骤2:读取主 MFT 记录
     Dim recBuf() As UByte
     ReDim recBuf(0 To ctx->mftRecordSize - 1)
     If Not ReadExternalMFTRecord(ctx, targetRecNo, @recBuf(0)) Then
@@ -2205,7 +2205,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     
     InitListViewData lvwFileStream
     
-    ' 步骤3：收集当前记录中的 $DATA 流
+    ' 步骤3:收集当前记录中的 $DATA 流
     Dim totalStreams As Long = 0
     Dim streamNames() As String
     Dim streamSizes() As ULongLong
@@ -2217,7 +2217,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
         Return -1
     End If
 
-    ' 步骤4：检查是否存在属性列表（$ATTRIBUTE_LIST），若有则处理外部记录
+    ' 步骤4:检查是否存在属性列表（$ATTRIBUTE_LIST），若有则处理外部记录
     Dim hasAttrList As Boolean = False
     Dim attrListAttr As ATTR_HEADER_GENERIC Ptr = NULL
     Dim attrOff As ULong = mrh->attrOffset
@@ -2295,7 +2295,7 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
                         If Not CollectDataStreamsFromRecord(ctx, extBuf(), streamNames(), streamSizes(), totalStreams) Then
                             ' 收集失败，忽略此记录
                         End If
-                        Print "streamSizes:" & streamSizes(0) & " streamSizes:" & streamSizes(0)
+                        'Print "streamSizes:" & streamSizes(0) & " streamSizes:" & streamSizes(0)
                     End If
 
                     ' 标记为已处理
@@ -2311,14 +2311,14 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
         Loop
     End If
 
-' ====================== 核心修改：参照GetWfpFilterList填充ListView ======================
+' ====================== 核心修改:参照GetWfpFilterList填充ListView ======================
     ' 遍历所有流，填充列表（对齐WFP函数的写法）
     For i As Long = 0 To totalStreams - 1
         Dim sName As String = streamNames(i)
         ' 无名主流显示为默认名称，有名ADS显示原名
         If sName = "" Then sName = "(默认主数据流)"
         
-        ' 格式化大小：千分位+字节单位
+        ' 格式化大小:千分位+字节单位
         Dim sSize As String = Format(streamSizes(i), "#,##0") & " 字节"
         
         ' 完全参照GetWfpFilterList的AddItemColListEx调用格式
@@ -2332,64 +2332,64 @@ Public Function EnumerateFileStreams(lvwFileStream As Class_ListView, lpFilePath
     Return totalStreams
 End Function
 
-Sub TestWriteSector()
-    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext("C:\")
-    If ctx = NULL Then Exit Sub
-    ' 读取测试
-    Print !"\n=== 读取测试 ==="
-    Dim buffer(511) As UByte
-    
-    If ReadAtOffset(ctx, 0, @buffer(0), 512) Then
-        Print "MBR读取成功！"
-        Print "签名: " & Hex(buffer(510), 2) & Hex(buffer(511), 2)
-        
-        ' 显示分区表
-        Print !"\n分区表信息:"
-        For i As Integer = 0 To 3
-            Dim offset As Integer = 446 + i * 16
-            Dim partType As Byte = buffer(offset + 4)
-            If partType <> 0 Then
-                Print "  分区" & i + 1 & ": 类型=" & Hex(partType, 2)
-            End If
-        Next
-    Else
-        Print "读取失败,错误码: " & GetLastError
-    End If
-    
-    ' 写入测试：仅测试前16扇区（存在PartMgr防护）
-    Print !"\n=== 写入测试（仅前16扇区）==="
-    Print "警告: 直接写入磁盘扇区具有风险！"
-    Print "Windows限制: RING3只能写入前16扇区(0-15)"
-    Print "目标扇区: 15 (相对安全的保留扇区)"
-    
-    Dim confirm As String
-    Input "输入 'YES' 确认写入测试: ", confirm
-    
-    If confirm = "YES" Then
-        ' 修改数据（仅修改前8字节）
-        Dim buffer(511) As UByte
-        For i As Integer = 0 To 7
-            buffer(i) = &H42  ' 写入测试标记 'B'
-        Next
-        
-        ' 写入到扇区1（MBR备份位置，相对安全）
-        If WriteAtOffset(ctx, 1 * 512, @buffer(0), 512) Then
-            Print "写入成功！"
-            
-            ' 验证写入
-            Dim verifyBuffer(511) As UByte
-            ReadAtOffset(ctx, 1 * 512, @verifyBuffer(0), 512)
-            
-            If verifyBuffer(0) = &H42 Then
-                Print "数据验证通过！"
-            Else
-                Print "警告: 数据验证失败"
-            End If
-        Else
-            Print "写入失败，错误码: " & GetLastError
-        End If
-    Else
-        Print "已取消写入测试"
-    End If
-    CloseNTFSVolumeContext ctx
-End Sub
+'Sub TestWriteSector()
+'    Dim ctx As NTFS_CONTEXT Ptr = OpenNTFSVolumeContext("C:\")
+'    If ctx = NULL Then Exit Sub
+'    ' 读取测试
+'    MyLog.PrintInfo "TestWriteSector" !"\n=== 读取测试 ==="
+'    Dim buffer(511) As UByte
+'    
+'    If ReadAtOffset(ctx, 0, @buffer(0), 512) Then
+'        Print "MBR读取成功！"
+'        Print "签名: " & Hex(buffer(510), 2) & Hex(buffer(511), 2)
+'        
+'        ' 显示分区表
+'        Print !"\n分区表信息:"
+'        For i As Integer = 0 To 3
+'            Dim offset As Integer = 446 + i * 16
+'            Dim partType As Byte = buffer(offset + 4)
+'            If partType <> 0 Then
+'                Print "  分区" & i + 1 & ": 类型=" & Hex(partType, 2)
+'            End If
+'        Next
+'    Else
+'        Print "读取失败,错误码: " & GetLastError
+'    End If
+'    
+'    ' 写入测试:仅测试前16扇区（存在PartMgr防护）
+'    Print !"\n=== 写入测试（仅前16扇区）==="
+'    Print "警告: 直接写入磁盘扇区具有风险！"
+'    Print "Windows限制: RING3只能写入前16扇区(0-15)"
+'    Print "目标扇区: 15 (相对安全的保留扇区)"
+'    
+'    Dim confirm As String
+'    Input "输入 'YES' 确认写入测试: ", confirm
+'    
+'    If confirm = "YES" Then
+'        ' 修改数据（仅修改前8字节）
+'        Dim buffer(511) As UByte
+'        For i As Integer = 0 To 7
+'            buffer(i) = &H42  ' 写入测试标记 'B'
+'        Next
+'        
+'        ' 写入到扇区1（MBR备份位置，相对安全）
+'        If WriteAtOffset(ctx, 1 * 512, @buffer(0), 512) Then
+'            Print "写入成功！"
+'            
+'            ' 验证写入
+'            Dim verifyBuffer(511) As UByte
+'            ReadAtOffset(ctx, 1 * 512, @verifyBuffer(0), 512)
+'            
+'            If verifyBuffer(0) = &H42 Then
+'                Print "数据验证通过！"
+'            Else
+'                Print "警告: 数据验证失败"
+'            End If
+'        Else
+'            Print "写入失败，错误码: " & GetLastError
+'        End If
+'    Else
+'        Print "已取消写入测试"
+'    End If
+'    CloseNTFSVolumeContext ctx
+'End Sub

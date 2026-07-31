@@ -443,7 +443,10 @@ Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath A
     InitListViewData lvwIOFunction
     
     SetLastError 0
-    If IoControl(hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)) = 0 Then Print "IOCTL_GetDriverInfo失败," & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)) = 0 Then
+        MyLog.PrintWin32Error "GetDriverIOFunctionList", "IOCTL_GetDriverInfo"
+        Return
+    End If
     GetOriginalDispatchFunctionAddr(DriverPath, OriginalDriverInfo)
     AddItemColListEx lvwIOFunction, 5,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr)), _
     WStr("-"), WStr("无")
@@ -453,7 +456,7 @@ Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath A
     WStr("-"), WStr("无")
     For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
         'If i = &H20 Then Continue For ' 这里有什么用?
-        Print "0x" & WHex(DriverInfo.MajorFunctionAddr(i))
+        'Print "0x" & WHex(DriverInfo.MajorFunctionAddr(i))
         Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))), _
         IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.MajorFunctionAddr(i))), _
         IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.MajorFunctionAddr(i)))))
@@ -532,7 +535,7 @@ Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
         End If
     Next
     
-    Print "扫描起始地址0x" & WHex(p->StartAddr) & "的线程退出"
+    MyLog.PrintInfo "KernelMemoryScanThread",, "扫描起始地址0x" & WHex(p->StartAddr) & "的线程退出"
     p->bFinish = True
 End Sub
 
@@ -570,7 +573,7 @@ Function GetKernelModuleList1(modules() As KernelModuleInfo) As Integer
     ' 创建互斥锁
     hMutex = MutexCreate()
     If hMutex = 0 Then
-        AfxMsg "无法创建互斥锁"
+        MyLog.PrintWin32Error "GetKernelModuleList1", "MutexCreate"
         Return 0
     End If
     
@@ -595,9 +598,9 @@ Function GetKernelModuleList1(modules() As KernelModuleInfo) As Integer
         pParam[i].scannedPages = @scannedPages
         pParam[i].bFinish = False
         
-        threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
+        Threads(i) = ThreadCreate(@KernelMemoryScanThread, @pParam[i])
         If threads(i) = 0 Then
-            Print "线程 " & i & " 创建失败"
+            MyLog.PrintLog LOG_WARN, "ThreadCreate",, "线程 " & i & " 创建失败"
         End If
     Next
     
@@ -649,7 +652,7 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     Dim buffer As PVOID = Allocate(bufferSize)
     
     If buffer = NULL Then
-        Print "Failed to allocate memory."
+        MyLog.PrintLog LOG_ERROR, "GetKernelModuleList", "Allocate", "bufferSize=" & bufferSize
         Exit Sub
     End If
     
@@ -669,7 +672,7 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     If st = STATUS_INFO_LENGTH_MISMATCH Then
         buffer = Reallocate(buffer, bufferSize)
         If buffer = NULL Then
-            Print "Failed to allocate memory."
+            MyLog.PrintLog LOG_ERROR, "GetKernelModuleList", "Reallocate", "bufferSize=" & bufferSize
             Exit Sub
         End If
     End If
@@ -677,7 +680,7 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     ' 第二次调用获取实际数据
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
     If st < 0 Then
-        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
+        MyLog.PrintNtError "GetKernelModuleList", "ZwQuerySystemInformation(SystemModuleInformation)", st
         Deallocate buffer
         Exit Sub
     End If
@@ -792,8 +795,9 @@ Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPa
     Dim st As NTSTATUS
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
+    
     If (buffer = NULL) Then
-        Print "Failed to allocate memory."
+        MyLog.PrintLog LOG_ERROR, "GetKernelModulePath", "Allocate", "bufferSize=" & bufferSize
         Return False
     End If
 
@@ -802,7 +806,7 @@ Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPa
     If (st = STATUS_INFO_LENGTH_MISMATCH) Then
         buffer = Reallocate(buffer, bufferSize)
         If (buffer = NULL) Then
-            Print "Failed to allocate memory."
+            MyLog.PrintLog LOG_ERROR, "GetKernelModulePath", "Reallocate", "bufferSize=" & bufferSize
             Return False
         End If
     End If
@@ -810,7 +814,7 @@ Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPa
     ' Second call to get actual data
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
     If (st < 0) Then
-        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
+        MyLog.PrintNtError "GetKernelModulePath", "ZwQuerySystemInformation(SystemModuleInformation)", st
         Deallocate buffer
         Return False
     End If
@@ -824,15 +828,10 @@ Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPa
     Dim found As Boolean = False
 
     For i As Integer = 0 To smi->Count - 1
-        ' 只打印调试信息（可选）
-        ' Print "Module "; i; ": "; smi->Modules(i).ImageName
-
         ' 前缀匹配，大小写不敏感
         If InStr(UCase(smi->Modules(i).ImageName), UCase(wStrToStr(target))) > 0 Then
             ' 找到模块，将 ANSI ImageName 转成 Unicode
-            Print "smi->Modules(i).ImageName:" & smi->Modules(i).ImageName
             *OutPath = smi->Modules(i).ImageName
-            Print "OutPath:" & *OutPath
             found = True
             Exit For
         End If
@@ -846,7 +845,7 @@ Function GetKernelProcAddress(ModuleName As StringW, FunctionName As StringW) As
     ' 1. 这里替换为你通过R3获取的 ntoskrnl.exe 内核基址
     Dim As ULONG_PTR ModuleBase = Cast(ULONG_PTR, GetKernelModuleBase(ModuleName.WstrPtr, NULL))
     If ModuleBase = NULL Then Return 0
-    Print "ModuleBase:0x" & WHex(ModuleBase)
+    'Print "ModuleBase:0x" & WHex(ModuleBase)
     ' 2. 获取函数VA
     Return GetProcVA(ModuleName, FunctionName, ModuleBase)
 End Function
@@ -862,8 +861,8 @@ Function GetDriverPathByAddr(ByVal Addr As Integer) As String
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
     If (buffer = NULL) Then
-        Print "Failed to allocate memory."
-        'Path = "无法获取所在模块"
+        MyLog.PrintLog LOG_ERROR, "GetDriverPathByAddr", "Allocate", "bufferSize=" & bufferSize
+        Return "-"
     End If
 
     'First Call To Get the required buffer SIZE
@@ -871,21 +870,20 @@ Function GetDriverPathByAddr(ByVal Addr As Integer) As String
     If (st = STATUS_INFO_LENGTH_MISMATCH) Then
         buffer = Reallocate(buffer, bufferSize)
         If (buffer = NULL) Then
-            Print "Failed to allocate memory."
-            'Path = "无法获取所在模块"
+            MyLog.PrintLog LOG_ERROR, "GetDriverPathByAddr", "Reallocate", "bufferSize=" & bufferSize
+            Return "-"
         End If
     End If
 
     'Second call to get the actual data
     st = ZwQuerySystemInformation(SystemModuleInformation, buffer, bufferSize, NULL)
     If (st < 0) Then
-        Print "NtQuerySystemInformation failed with st: 0x" & Hex(st)
+        MyLog.PrintNtError "GetDriverPathByAddr", "ZwQuerySystemInformation(SystemModuleInformation)", st
         Deallocate buffer
-        'Path = "无法获取所在模块"
+        Return "-"
     End If
 
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
-    'Print "Enumerated Drivers:"
     For i As Integer = 0 To smi->Count - 1
         If (Cast(Integer, smi->Modules(i).dwBase) <= Addr And Cast(Integer, smi->Modules(i).dwBase + smi->Modules(i).dwSize) >= Addr) Then
             Dim ImageName As String = ""
@@ -895,7 +893,7 @@ Function GetDriverPathByAddr(ByVal Addr As Integer) As String
         End If
     Next
     Deallocate buffer
-    Return "未知模块"
+    Return "-"
 End Function
 
 Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
@@ -907,9 +905,8 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
         Exit Sub
     End If '/
     SetLastError 0
-    IoControl hDrv, IOCTL_GetGDT, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetGDT]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If IoControl(hDrv, IOCTL_GetGDT, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "GetGDT", "IOCTL_GetGDT", "第一次调用"
         Return 0
     End If
     
@@ -1034,7 +1031,6 @@ Function GetGDT(lvwGDT As Class_mCtrlTreeList) As ULong
         Next
         FF_DoEvents
     Next
-    'CommitListViewView lvwGDT
     Return 0
 End Function
 
@@ -1090,9 +1086,8 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
         Exit Sub
     End If '/
     SetLastError 0
-    IoControl hDrv, IOCTL_GetIDT, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetIDT]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If IoControl(hDrv, IOCTL_GetIDT, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "GetIDT", "IOCTL_GetIDT", "第一次调用"
         Return 0
     End If
     
@@ -1159,7 +1154,6 @@ Function GetIDT(lvwIDT As Class_mCtrlTreeList) As ULong
         Next
         FF_DoEvents
     Next
-    'CommitListViewView lvwIDT
     Return 0
 End Function
 
@@ -1255,7 +1249,7 @@ Function GetHalDispatchTable(lvwHalDistapch As Class_ListView) As ULong
             End If
             Count += 1
         Else
-            Print "[GetHalDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError
+            MyLog.PrintLog LOG_WARN, "GetHalDispatchTable", "IOCTL_GetHalDispatchByIndex", "Index=" & Index
         End If
         FF_DoEvents
     Next
@@ -1435,7 +1429,7 @@ Function GetHalPrivateDispatchTable(lvwHalPrivateDistapch As Class_ListView) As 
             End If
             Count += 1
         Else
-            Print "[GetHalPrivateDispatchTable]IoControl" & Index & ":" & WinErrorMsg(GetLastError) & GetLastError
+            MyLog.PrintLog LOG_WARN, "GetHalPrivateDispatchTable", "IOCTL_GetHalDispatchByIndex", "Index=" & Index
         End If
         FF_DoEvents
     Next
@@ -1473,17 +1467,14 @@ End Type
     
     GetPathByNodeW CurrentNode, treObjectDirectory, szPath
     ' 对象目录路径格式如 "\" 或 "\Devices\"，需要去掉末尾的\
-    'Print "szPath:" & szPath
     szPath = RightW(szPath, LenW(szPath) - 1)
     If RightW(szPath, 1) = "\" Then szPath = LeftW(szPath, LenW(szPath) - 1)
-    'Print "szPath:" & szPath
     If szPath = "" Then szPath = "\"  ' 根目录
-    'Print szPath
     
     ' 加载ntdll
     hNtDll = GetModuleHandleW("ntdll.dll")
     If hNtDll = NULL Then
-        Print "[GetObjectList]无法加载ntdll.dll"
+        MyLog.PrintLog LOG_ERROR, "GetModuleHandleW", "无法加载ntdll.dll"
         Exit Sub
     End If
     
@@ -1495,7 +1486,7 @@ End Type
     pNtClose =  Cast(PVOID, GetProcAddress(hNtDll, "NtClose"))
     
     If pNtOpenDirectoryObject = NULL OrElse pNtQueryDirectoryObject = NULL OrElse pRtlInitUnicodeString = NULL Then
-        Print "[GetObjectList]无法获取必要的Native API函数地址"
+        MyLog.PrintLog LOG_ERROR, "GetObjectList", "GetProcAddress"
         Exit Sub
     End If
     
@@ -1507,9 +1498,9 @@ End Type
     pRtlInitUnicodeString(objName, szPath)
     InitializeObjectAttributes(@oa, @objName, 0)
     
-    NTSTATUS = pNtOpenDirectoryObject(hDir, DIRECTORY_QUERY Or DIRECTORY_TRAVERSE, oa)
+    ntStatus = pNtOpenDirectoryObject(hDir, DIRECTORY_QUERY Or DIRECTORY_TRAVERSE, oa)
     If ntStatus <> STATUS_SUCCESS Then
-        Print "[GetObjectList]NtOpenDirectoryObject失败，路径:" & szPath & " 状态码:0x" & Hex(ntStatus)
+        MyLog.PrintNtError "GetObjectList", "NtOpenDirectoryObject", ntStatus, "路径:" & szPath
         Exit Sub
     End If
     
@@ -1548,15 +1539,13 @@ End Type
                 ' 从UNICODE_STRING提取名称和类型
                 Dim nameStr As WString * MAX_PATH = ""
                 Dim typeStr As WString * MAX_PATH = ""
-                'Print "0"
+                
                 If pInfo[i].Name.Length > 0 AndAlso pInfo[i].Name.Buffer <> NULL Then
                     nameStr = *Cast(Wstring Ptr, pInfo[i].Name.Buffer)
                 End If
-                'Print "nameStr:" & nameStr
                 If pInfo[i].TypeName.Length > 0 AndAlso pInfo[i].TypeName.Buffer <> NULL Then
                     typeStr = *Cast(Wstring Ptr, pInfo[i].TypeName.Buffer)
                 End If
-                'Print "typeStr:" & typeStr
                 ' 跳过空项（最后一个NULL结构）
                 If nameStr = "" Then Continue For
                 
@@ -1596,7 +1585,6 @@ End Type
                             If pNtQuerySymbolicLinkObject(hLink, targetStr, retLen) = STATUS_SUCCESS Then
                                 If targetStr.Buffer <> NULL AndAlso targetStr.Length > 0 Then
                                     lstrcpyW(objLinkTargets(totalObjs), targetStr.Buffer)
-                                    'Print "1"
                                 End If
                             End If
                             Deallocate(targetStr.Buffer)

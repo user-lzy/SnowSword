@@ -352,7 +352,7 @@ Sub FrmListView_UpdateLayout()
 
     ' 底部栏高度
     Const BOTTOM_BAR_HEIGHT As Long = 35
-    Const FILTER_WIDTH As Long = 200
+    Const NUM_WIDTH As Long = 400
 
     ' ListView 占满上部空间
     ListView.Left = 0
@@ -363,13 +363,13 @@ Sub FrmListView_UpdateLayout()
     ' 底部筛选框
     TxtFilter1.Left = 0
     TxtFilter1.Top = ch - BOTTOM_BAR_HEIGHT
-    TxtFilter1.Width = cw - FILTER_WIDTH
+    TxtFilter1.Width = cw - NUM_WIDTH
     TxtFilter1.Height = BOTTOM_BAR_HEIGHT
 
     ' 底部状态栏
-    lblNum.Left = cw - FILTER_WIDTH
+    lblNum.Left = cw - NUM_WIDTH
     lblNum.Top = ch - BOTTOM_BAR_HEIGHT
-    lblNum.Width = FILTER_WIDTH
+    lblNum.Width = NUM_WIDTH
     lblNum.Height = BOTTOM_BAR_HEIGHT
 
     EndControlUpdate

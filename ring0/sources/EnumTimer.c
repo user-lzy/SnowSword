@@ -208,6 +208,25 @@ BOOLEAN FindKiWaitXXX(
     if (!KiSetTimerEx || !KiWaitNever || !KiWaitAlways)
         return FALSE;
 
+    ULONG64 addr1 = 0;
+    NTSTATUS status = GetNtSymbolAddress(L"KiWaitNever", &addr1);
+    if (status == STATUS_SUCCESS && addr1)
+    {
+        DbgPrint("Symbol: KiWaitNever=%p\n", (PVOID)addr1);
+        *KiWaitNever = (PVOID)addr1;
+
+        status = GetNtSymbolAddress(L"KiWaitAlways", &addr1);
+        if (status == STATUS_SUCCESS && addr1)
+        {
+            DbgPrint("Symbol: KiWaitAlways=%p\n", (PVOID)addr1);
+            *KiWaitAlways = (PVOID)addr1;
+            return TRUE;
+        }
+
+    }
+    DbgPrint("Symbol failed, fallback to pattern scan\n");
+    // -------------------------------------------
+
     PUCHAR code = (PUCHAR)KiSetTimerEx;
 
     DbgPrint(

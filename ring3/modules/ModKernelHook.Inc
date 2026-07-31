@@ -172,8 +172,8 @@ Function RecoverDispatchFromDump( _
     Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
     If entryFoa = 0 Then Return False
 
-    Print "DriverEntry RVA: 0x" & Hex(entryRva)
-    Print "DriverEntry FOA: 0x" & Hex(entryFoa)
+    'Print "DriverEntry RVA: 0x" & Hex(entryRva)
+    'Print "DriverEntry FOA: 0x" & Hex(entryFoa)
 
     Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
     Dim scanEnd As ULong = entryFoa + SCAN_RANGE
@@ -202,7 +202,7 @@ Function RecoverDispatchFromDump( _
                 CopyMemory(@imm32, pDump + pc + 3, 4)
                 currentFuncRva = CULng(CLng(nextRva) + imm32)
                 inProlog = True ' 进入待命状态
-                Print "[LEA] 函数 RVA: 0x" & Hex(currentFuncRva)
+                'Print "[LEA] 函数 RVA: 0x" & Hex(currentFuncRva)
             End If
             pc += 7 ' 跳过 LEA 指令（固定 7 字节）
             Continue While
@@ -249,7 +249,7 @@ Function RecoverDispatchFromDump( _
                                 ' 有效的派遣槽位，记录
                                 outResult->MajorFunction(irpIndex) = Cast(Any Ptr, Cast(ULONG_PTR, currentFuncRva))
                                 hitCount += 1
-                                Print "[命中] IRP_MJ_" & irpIndex & " (0x" & Hex(disp) & ") → RVA: 0x" & Hex(currentFuncRva)
+                                'Print "[命中] IRP_MJ_" & irpIndex & " (0x" & Hex(disp) & ") → RVA: 0x" & Hex(currentFuncRva)
                                 pc += instrLen
                                 Continue While
                             End If
@@ -268,7 +268,7 @@ Function RecoverDispatchFromDump( _
     outResult->HitCount = hitCount
     outResult->Confidence = IIf(hitCount >= 20, 100, hitCount * 5)
 
-    Print "成功恢复派遣函数数: " & hitCount
+    'Print "成功恢复派遣函数数: " & hitCount
     Return hitCount > 0
 End Function
 
@@ -295,7 +295,7 @@ Function RecoverFastIoFromDump( _
     Dim entryFoa As ULong = RvaToFoa(pDump, entryRva)
     If entryFoa = 0 Then Return False
 
-    Print "==================== RecoverFastIoFromDump 开始 ===================="
+    'Print "==================== RecoverFastIoFromDump 开始 ===================="
 
     Dim scanStart As ULong = IIf(entryFoa > SCAN_RANGE, entryFoa - SCAN_RANGE, 0)
     Dim scanEnd As ULong = entryFoa + SCAN_RANGE
@@ -356,7 +356,7 @@ Function RecoverFastIoFromDump( _
                                 FastIoDispatchBaseRva = CULng(CLng(nextRva) + imm32)
                                 foundBaseAddr = True
                                 pc = pc + instrLen
-                                Print "[基址] FastIoDispatch Size 字段 RVA: 0x" & Hex(FastIoDispatchBaseRva)
+                                'Print "[基址] FastIoDispatch Size 字段 RVA: 0x" & Hex(FastIoDispatchBaseRva)
                                 Exit While
                             End If
                         End If
@@ -370,12 +370,12 @@ Function RecoverFastIoFromDump( _
     Wend
 
     If foundBaseAddr = False Then
-        Print "[错误] 无法定位 FastIoDispatch 基址"
+        'Print "[错误] 无法定位 FastIoDispatch 基址"
         Return False
     End If
 
     FastIoDispatchBaseRva += FAST_IO_HEADER_SIZE
-    Print "[修正] 第一个函数指针基址 RVA: 0x" & Hex(FastIoDispatchBaseRva)
+    'Print "[修正] 第一个函数指针基址 RVA: 0x" & Hex(FastIoDispatchBaseRva)
 
     ' 第二阶段：扫描所有 FastIo 槽位，自动解析 IAT
     Dim hitCount As ULong = 0
@@ -433,16 +433,16 @@ Function RecoverFastIoFromDump( _
                             ' 导入函数：从 IAT 解引用
                             Dim iatAddr As ULONG_PTR = ImageBase + srcRva
                             If (Not ReadKernelMemory(iatAddr, 8, @finalAddr)) OrElse finalAddr = 0 Then
-                                Print "[警告] IAT 条目为空，使用 RVA"
+                                'Print "[警告] IAT 条目为空，使用 RVA"
                                 finalAddr = ImageBase + srcRva
                             End If
-                            Print "[导入函数] 索引 " & index & " " & FastIoIndexToName(index) & _
-                                  " -> VA: 0x" & Hex(finalAddr)
+                            'Print "[导入函数] 索引 " & index & " " & FastIoIndexToName(index) & _
+                            '      " -> VA: 0x" & Hex(finalAddr)
                         Else
                             ' 内部函数：直接计算 VA
                             finalAddr = ImageBase + srcRva
-                            Print "[内部函数] 索引 " & index & " " & FastIoIndexToName(index) & _
-                                  " -> VA: 0x" & Hex(finalAddr)
+                            'Print "[内部函数] 索引 " & index & " " & FastIoIndexToName(index) & _
+                            '      " -> VA: 0x" & Hex(finalAddr)
                         End If
 
                         outFastIo->Functions(index) = Cast(Any Ptr, finalAddr)
@@ -460,10 +460,10 @@ Function RecoverFastIoFromDump( _
     outFastIo->HitCount = hitCount
     outFastIo->Confidence = IIf(hitCount >= 20, 100, hitCount * 5)
 
-    Print "==================== FastIO 扫描统计 ===================="
-    Print "成功恢复 FastIO 函数数: " & hitCount
-    Print "置信度: " & outFastIo->Confidence & "%"
-    Print
+    'Print "==================== FastIO 扫描统计 ===================="
+    'Print "成功恢复 FastIO 函数数: " & hitCount
+    'Print "置信度: " & outFastIo->Confidence & "%"
+    'Print
 
     Return hitCount > 0
 End Function
@@ -472,9 +472,9 @@ End Function
 Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverInfo As DRIVER_INFO) As Boolean
     Dim bytDump() As Byte
     Dim filePath As String = DriverPath
-    Dim fileName As String = GetNameByPath(filePath)
+    Dim fileName As String = GetNameByPath(DriverPath)
     Dim imageSize As ULong
-    Print "fileName:" & fileName
+    
     Dim imageBase As ULONG_PTR = Cast(ULONG_PTR, GetKernelModuleBase(fileName, imageSize)) ' &HFFFFF8035C6F0000 ' 从你的截图中获取的 ntfs.sys 加载基址
 
     ' 读取驱动文件
@@ -491,40 +491,40 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
     Dim rd As RECOVERED_DISPATCH
     Dim fastIo As FAST_IO_DISPATCH_ORIGINAL ' 新增
     If RecoverDispatchFromDump(pDump, fileSize, @rd) Then
-        Print "==================== 最终恢复结果 ===================="
-        Print "IRP_MJ 序号 | 函数 RVA | 虚拟地址(VA)"
-        Print "-----------------------------------------"
+        'Print "==================== 最终恢复结果 ===================="
+        'Print "IRP_MJ 序号 | 函数 RVA | 虚拟地址(VA)"
+        'Print "-----------------------------------------"
         For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
             If rd.MajorFunction(i) <> 0 Then
                 Dim va As ULONG_PTR = imageBase + CUInt(rd.MajorFunction(i))
-                Print IRP_MJ_ToString(i)  & " | 0x" & Hex(rd.MajorFunction(i))  & " | 0x" & Hex(va)
+                'Print IRP_MJ_ToString(i)  & " | 0x" & Hex(rd.MajorFunction(i))  & " | 0x" & Hex(va)
                 OriginalDriverInfo.MajorFunctionAddr(i) = va
             Else
                 Dim IopInvalidDeviceRequestAddr As UInteger = NULL
                 SetLastError 0
                 If IoControl(hDrv, IOCTL_GetIopInvalidDeviceRequest, NULL, 0, @IopInvalidDeviceRequestAddr, SizeOf(IopInvalidDeviceRequestAddr)) = 0 Then
-                    Print "[GetNtfsOriginalDispatchFunctionAddr]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
+                    'Print "[GetNtfsOriginalDispatchFunctionAddr]IoControl:" & WinErrorMsg(GetLastError) & GetLastError
                     OriginalDriverInfo.MajorFunctionAddr(i) = NULL
                 Else
                     OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
                 End If
-                Print IRP_MJ_ToString(i) & " | 未恢复（" & IopInvalidDeviceRequestAddr & "）"
+                'Print IRP_MJ_ToString(i) & " | 未恢复（" & IopInvalidDeviceRequestAddr & "）"
             End If
         Next
     Else
-        Print "恢复Dispatch失败，请检查文件权限和PE格式"
+        'Print "恢复Dispatch失败，请检查文件权限和PE格式"
         Return False
     End If
     
     If RecoverFastIoFromDump(pDump, fileSize, imageBase, @fastIo) Then ' 新增
         ' MyLog.PrintLog LOG_INFO,,, 
-        Print "==================== 最终恢复结果 ===================="
-        Print "FastIO | 函数 RVA | 虚拟地址(VA)"
-        Print "-----------------------------------------"
+        'Print "==================== 最终恢复结果 ===================="
+        'Print "FastIO | 函数 RVA | 虚拟地址(VA)"
+        'Print "-----------------------------------------"
         For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
             If fastIo.Functions(i) <> 0 Then
                 Dim va As ULONG_PTR = CUInt(fastIo.Functions(i)) ' imageBase + CUInt(fastIo.Functions(i))
-                Print FastIoIndexToName(i)  & " | 0x" & Hex(fastIo.Functions(i))  & " | 0x" & Hex(va)
+                'Print FastIoIndexToName(i)  & " | 0x" & Hex(fastIo.Functions(i))  & " | 0x" & Hex(va)
                 OriginalDriverInfo.FastIOFunctionAddr(i) = va
             Else
                 /'Dim IopInvalidDeviceRequestAddr As UInteger = NULL
@@ -535,17 +535,17 @@ Function GetOriginalDispatchFunctionAddr(DriverPath As StringW, OriginalDriverIn
                 Else
                     OriginalDriverInfo.MajorFunctionAddr(i) = IopInvalidDeviceRequestAddr
                 End If'/
-                Print FastIoIndexToName(i) & " | 未恢复（0）"
+                'Print FastIoIndexToName(i) & " | 未恢复（0）"
             End If
         Next
     Else
-        Print "恢复FastIO失败，请检查文件权限和PE格式"
+        'Print "恢复FastIO失败，请检查文件权限和PE格式"
         Return False
     End If
     Return True
 
 FileError:
-    Print "文件读取失败！请以管理员权限运行，或检查文件路径是否正确"
+    'Print "文件读取失败！请以管理员权限运行，或检查文件路径是否正确"
     Return True
 End Function
 

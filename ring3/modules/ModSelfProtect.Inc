@@ -122,7 +122,7 @@ Function FakeLoadLibraryExW(ByVal lpLibFileName As LPCWSTR, ByVal hFile As HANDL
             filePath = GetRealDllPath(*lpLibFileName)
             'Print fullPath
         End If
-        Print "FilePath:" & filePath
+        'Print "FilePath:" & filePath
         If InStr(UCase(filePath), UCase(Environ("SystemRoot"))) > 0 Then Return OldLoadLibraryExW(lpLibFileName, hFile, dwFlags)
         If AfxMsg("检测到dll:" & filePath & "正在加载,是否拦截?",, MB_YESNO) = IDYES Then
             Return NULL
@@ -162,7 +162,7 @@ End Sub
 Sub Cleaner(TkHandle As HANDLE, ProcACL As PACL, UserTk As PTOKEN_USER)
     If TkHandle <> 0 Then
         CloseHandle(TkHandle)
-    END IF
+    End If
     If ProcACL <> 0 Then
         free(ProcACL)
     End If
@@ -180,7 +180,7 @@ Function SetSecurityControls() As Boolean
 
     If OpenProcessToken(GetCurrentProcess, TOKEN_QUERY, @TkHandle) = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "OpenProcessToken:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetSecurityControls", "OpenProcessToken"
         Return False
     End If
 
@@ -188,19 +188,19 @@ Function SetSecurityControls() As Boolean
     UserTk = CAllocate(CbBuffer)
     If UserTk = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "分配内存失败"
+        MyLog.PrintLog LOG_ERROR, "SetSecurityControls", "CAllocate", "CbBuffer=" & CbBuffer
         Return False
     End If
 
     If GetTokenInformation(TkHandle, TokenUser, UserTk, CbBuffer, @CbBuffer) = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "GetTokenInformation:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetSecurityControls", "GetTokenInformation(TokenUser)"
         Return False
     End If
 
     If IsValidSid(UserTk->User.SID) = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "用户SID无效"
+        MyLog.PrintLog LOG_ERROR, "SetSecurityControls", "IsValidSid", "用户SID无效"
         Return False
     End If
 
@@ -208,26 +208,26 @@ Function SetSecurityControls() As Boolean
     ProcACL = CAllocate(CbACL)
     If ProcACL = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "分配内存失败"
+        MyLog.PrintLog LOG_ERROR, "SetSecurityControls", "CAllocate", "CbACL=" & CbACL
         Return False
     End If
 
     If InitializeAcl(ProcACL, CbACL, ACL_REVISION) = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "InitializeAcl:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetSecurityControls", "InitializeAcl"
         Return False
     End If
 
     If AddAccessDeniedAce(ProcACL, ACL_REVISION, PROCESS_ALL_ACCESS, UserTk->User.SID) = 0 Then
         Cleaner TkHandle, ProcACL, UserTk
-        Print "AddAccessDeniedAce:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetSecurityControls", "AddAccessDeniedAce"
         Return False
     End If
 
     If SetSecurityInfo(GetCurrentProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, 0, 0, ProcACL, 0) = ERROR_SUCCESS Then
-        Print "Successfully set security controls."
+        MyLog.PrintInfo "SetSecurityControls",, "Successfully set security controls."
     Else
-        Print "SetSecurityInfo:" & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "SetSecurityControls", "AddAccessDeniedAce"
     End If
 
     Cleaner TkHandle, 0, UserTk

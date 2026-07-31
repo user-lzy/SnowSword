@@ -88,7 +88,7 @@
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
     </DriverSign>
     <ClCompile>
-      <DisableSpecificWarnings>4201;4218;4131;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4201;4218;4131;4701;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <TreatWarningAsError>false</TreatWarningAsError>
       <PreprocessorDefinitions>_AMD64_;ZYDIS_STATIC_BUILD</PreprocessorDefinitions>
     </ClCompile>

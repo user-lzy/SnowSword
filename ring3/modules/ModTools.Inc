@@ -58,7 +58,7 @@ Sub ForceReboot()
         AfxMsg "强制重启成功!", "提示"
     Else
         AfxMsg "强制重启失败!", "提示"
-        Print "[ForceReboot]ZwShutdownSystem" & Hex(st)
+        MyLog.PrintNtError "ForceReboot", "ZwShutdownSystem", st
     End If
 End Sub
 

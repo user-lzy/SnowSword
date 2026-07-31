@@ -252,7 +252,6 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
                 Dim pProviderName As WString Ptr = Cast(WString Ptr, Cast(UByte Ptr, pTdhBuf) + pProv->ProviderNameOffset)
                 ProviderMap(ProviderCount).GuidStr = GUIDToWString(pProv->ProviderGuid)
                 ProviderMap(ProviderCount).Name = *pProviderName
-                'If ProviderCount < 50 Then Print *pProviderName & " " & ProviderMap(ProviderCount).GuidStr
                 ProviderCount += 1
             Next
         End If
@@ -351,7 +350,6 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
 
                 For k = 0 To pInstance->EnableCount - 1
                     Dim sid As UShort = pEnable->LoggerId
-                    'If curGuidStr = "{9E814AAD-3204-11D2-9A82-006008A86939}" Then Print "找到!"
                     If sid <= 65535 Then
                         Dim sIdx As Long = loggerIdToIndex(sid)
 
@@ -540,11 +538,6 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
         If hr = 0 And (countVar.vt = VT_I4 Or countVar.vt = VT_I2) Then
             Dim taskCount As Long = countVar.lVal
             If taskCount > 0 Then
-                /'Print "=================================================="
-                Print "【文件夹】"; currentPath
-                Print "【任务数】"; taskCount
-                Print "--------------------------------------------------"'/
-                
                 For i As Long = 1 To taskCount
                     Dim taskVar As VARIANT : VariantInit(@taskVar)
                     Dim idxArg(0) As VARIANT : idxArg(0).vt = VT_I4 : idxArg(0).lVal = i
@@ -674,21 +667,10 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                         ' 打印任务完整信息
                         Dim ItemIndex As Long = AddItemColListEx(lvwTaskScheduler, 12,,, WStr(TaskIndex), taskPath, WStr(isEnabled), _
                         WStr(taskState), lastRunTime, nextRunTime, lastResult, execPath, description, WStr(""), WStr(""), WStr(""))
-                        'VerifyFileSignAsync FrmMain.hWnd, FrmMain.ListView1.hWnd, "ListView", ItemIndex, strPath
-                        /'Print "  索引:            "; index
-                        Print "  任务名称："; taskName
-                        Print "  启用状态："; isEnabled
-                        Print "  当前状态："; taskState
-                        Print "  上次运行："; lastRunTime
-                        Print "  下次运行："; nextRunTime
-                        Print "  运行结果："; lastResult
-                        Print "--------------------------------------------------"'/
                         TaskIndex += 1
-                        
                     Else
                         ' 调试打印：任务获取失败的错误码
-                        Print "⚠️  第"; i; "个任务获取失败, hr=0x"; Hex(hr); ", vt="; taskVar.vt
-                        'Print "--------------------------------------------------"
+                        MyLog.PrintLog LOG_WARN, "EnumTasksInFolder",, "第" & i & "个任务获取失败, hr=0x" & Hex(hr) & ", vt=" & taskVar.vt
                     End If
                     VariantClear(@taskVar)
                     FF_DoEvents
@@ -745,13 +727,13 @@ Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
 
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
     If hr <> 0 And hr <> 1 Then
-        Print "COM初始化失败, hr=0x"; Hex(hr)
+        MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "CoInitializeEx", "COM初始化失败, hr=0x" & Hex(hr)
         Exit Sub
     End If
 
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pTaskService)
     If hr <> 0 Or pTaskService = NULL Then
-        Print "创建TaskScheduler对象失败, hr=0x"; Hex(hr)
+        MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "CoCreateInstance", "创建TaskScheduler对象失败, hr=0x" & Hex(hr)
         CoUninitialize()
         Exit Sub
     End If
@@ -759,7 +741,7 @@ Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
     Dim connectVar As VARIANT : VariantInit(@connectVar)
     hr = DispatchInvokeMethod(pTaskService, "Connect", NULL, 0, connectVar)
     If hr <> 0 Then
-        Print "连接服务失败, hr=0x"; Hex(hr)
+        MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "DispatchInvokeMethod(Connect)", "hr=0x" & Hex(hr)
         pTaskService->lpVtbl->Release(pTaskService)
         CoUninitialize()
         Exit Sub
@@ -777,7 +759,7 @@ Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
         TaskIndex = 0
         EnumTasksInFolder(rootFolderVar.pdispVal, "\", lvwTaskScheduler)
     Else
-        Print "无法获取根文件夹, hr=0x"; Hex(hr)
+        MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "DispatchInvokeMethod(GetFolder)", "hr=0x" & Hex(hr)
     End If
     
     CommitListViewView lvwTaskScheduler

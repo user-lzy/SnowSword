@@ -160,17 +160,13 @@ Sub InsertDwordToSortedArray(arr() As DWORD, ByVal newValue As DWORD)
         If arr(i) <> 0 Then
             actualSize = actualSize + 1
         Else
-            Exit For  ' 遇到第一个空位，停止计数
+            Exit For ' 遇到第一个空位，停止计数
         End If
     Next i
     
     ' 检查重复元素（仅在已使用的部分检查）
     For i = 0 To actualSize - 1
-        If arr(i) = newValue Then
-            ' 发现重复元素，直接返回，不插入
-            Print "重复元素 "; newValue; " 不插入"
-            Exit Sub
-        End If
+        If arr(i) = newValue Then Exit Sub
     Next i
     
     ' 查找插入位置（保持升序排序，只在已使用部分查找）
@@ -192,11 +188,11 @@ Sub InsertDwordToSortedArray(arr() As DWORD, ByVal newValue As DWORD)
         ' 数组已满，需要扩展
         ' 避免频繁ReDim的策略：按一定策略增加容量
         If ub < 50 Then
-            capacity = ub + 10  ' 小数组，增加10个位置
+            capacity = ub + 10 ' 小数组，增加10个位置
         ElseIf ub < 500 Then
-            capacity = ub + 50  ' 中等数组，增加50个位置
+            capacity = ub + 50 ' 中等数组，增加50个位置
         Else
-            capacity = ub * 3 \ 2  ' 大数组，增加50%容量
+            capacity = ub * 3 \ 2 ' 大数组，增加50%容量
         End If
         
         ReDim Preserve arr(capacity) As DWORD

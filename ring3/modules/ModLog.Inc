@@ -74,6 +74,7 @@ Public:
     
     Declare Sub PrintWin32Error(funcName As StringW, apiName As StringW, MSG As StringW = "")
     Declare Sub PrintNtError(funcName As StringW, apiName As StringW, ByVal Status As NTSTATUS, MSG As StringW = "")
+    Declare Sub PrintInfo(funcName As StringW, apiName As StringW = "", MSG As StringW = "")
 
 Private:
     ' 工具方法
@@ -358,7 +359,6 @@ End Sub
 '-------------------------------------------------------------------------------
 ' 日志打印（对外核心接口，0耗时）
 '-------------------------------------------------------------------------------
-'Sub Logger.PrintLog(level As LogLevel, module As StringW = "", func As StringW = "", apiName As StringW = "", MSG As StringW = "")
 Sub Logger.PrintLog(level As LogLevel, func As StringW = "", apiName As StringW = "", MSG As StringW = "")
     If Not m_enable Or level < m_filterLevel Then Exit Sub
     
@@ -393,6 +393,19 @@ Sub Logger.PrintNtError(funcName As StringW, apiName As StringW, ByVal status As
     logStr = logStr & " [函数:" & funcName & "]"
     If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & "调用失败,错误码:0x" & WHex(status)
+    logStr = logStr & " " & msg
+    
+    ' 仅入内存队列，立即返回
+    EnqueueLog(logStr)
+End Sub
+
+Sub Logger.PrintInfo(funcName As StringW, apiName As StringW, msg As StringW)
+    If Not m_enable Then Exit Sub
+    
+    Dim nError As DWORD = GetLastError
+    Dim As StringW logStr = "[" & GetTimeStamp() & "] [" & LevelToStr(LOG_INFO) & "]"
+    logStr = logStr & " [函数:" & funcName & "]"
+    If apiName <> "" Then logStr = logStr & " [API:" & apiName & "]"
     logStr = logStr & " " & msg
     
     ' 仅入内存队列，立即返回

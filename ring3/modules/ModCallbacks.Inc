@@ -202,9 +202,8 @@ Public Sub GetCallbackList(lvwCallbacks As Class_ListView)
     End If '/
     InitListViewData lvwCallbacks
     
-    IoControl hDrv, IOCTL_EnumCallbacks, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetCallbackList]第一次IOCTL失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If IoControl(hDrv, IOCTL_EnumCallbacks, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "GetCallbackList", "IOCTL_EnumCallbacks"
         Exit Sub
     End If
     ReDim CallbackArray(lpRet / SizeOf(CallbackInfo) - 1) As CallbackInfo
@@ -307,18 +306,18 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
     
     ' 只要拿到长度 > 0，就继续，无视这个错误
     If lpRet = 0 Then
-        Print "未发现任何 Callout 或获取长度失败"
+        MyLog.PrintWin32Error "GetWfpCalloutList", "IOCTL_EnumWfpCallouts", "第一次调用"
         Exit Sub
     End If
 
     dataSize = lpRet
-    Print "需要缓冲区大小: " & dataSize & "  单个结构体大小: " & SizeOf(WFP_CALLOUT_INFO)
+    'Print "需要缓冲区大小: " & dataSize & "  单个结构体大小: " & SizeOf(WFP_CALLOUT_INFO)
 
     ' 分配内存 + 清零（必加，防止垃圾数据）
     pData = Allocate(dataSize)
     RtlZeroMemory(pData, dataSize)
     If pData = NULL Then
-        Print "内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "GetWfpCalloutList", "Allocate", "dataSize=" & dataSize
         Exit Sub
     End If
 
@@ -326,7 +325,7 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
     ' 🔥 第二次调用：正式读取数据（一定成功）
     ' ########################################################################
     If IoControl(hDrv, IOCTL_EnumWfpCallouts, NULL, 0, pData, dataSize, @lpRet) = 0 Then
-        Print "[GetWfpCalloutList] 读取数据失败: " & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "GetWfpCalloutList", "IOCTL_EnumWfpCallouts", "第二次调用"
         Deallocate pData
         Exit Sub
     End If
@@ -351,7 +350,7 @@ Public Sub GetWfpCalloutList(lvwCallouts As Class_ListView)
 
     CommitListViewView lvwCallouts
     Deallocate pData
-    Print "成功加载 " & count & " 个 WFP Callout"
+    MyLog.PrintInfo "GetWfpCalloutList",, "成功加载 " & count & " 个 WFP Callout"
 End Sub
 
 Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
@@ -360,28 +359,27 @@ Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
     Dim dataSize As DWORD = 0
 
     ' 第一次调用：获取所需缓冲区大小
-    IoControl hDrv, IOCTL_EnumWfpFilters, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[GetWfpFilterList] 第一次IOCTL失败: " & WinErrorMsg(GetLastError)
+    If IoControl(hDrv, IOCTL_EnumWfpFilters, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "GetWfpFilterList", "IOCTL_EnumWfpFilters", "第一次调用"
         Exit Sub
     End If
 
     dataSize = lpRet
-    If dataSize = 0 Then
-        Print "未发现任何 Filter（Callout类型）"
+    /'If dataSize = 0 Then
+        MyLog.PrintWin32Error "GetWfpFilterList", "IOCTL_EnumWfpFilters", "第一次调用"
         Exit Sub
-    End If
+    End If'/
 
     ' 分配缓冲区并获取数据
     pData = Allocate(dataSize)
     If pData = NULL Then
-        Print "内存分配失败"
+        MyLog.PrintLog LOG_ERROR, "GetWfpFilterList", "Allocate", "dataSize=" & dataSize
         Exit Sub
     End If
 
     IoControl hDrv, IOCTL_EnumWfpFilters, NULL, 0, pData, dataSize, @lpRet
     If GetLastError <> 0 Then
-        Print "[GetWfpFilterList] 第二次IOCTL失败: " & WinErrorMsg(GetLastError)
+        MyLog.PrintWin32Error "GetWfpFilterList", "IOCTL_EnumWfpFilters", "第二次调用"
         Deallocate pData
         Exit Sub
     End If
@@ -400,6 +398,7 @@ Public Sub GetWfpFilterList(lvwFilters As Class_ListView)
 
     CommitListViewView lvwFilters
     Deallocate pData
+    MyLog.PrintInfo "GetWfpFilterList",, "成功加载 " & count & " 个 WFP Filter"
 End Sub
 
 Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
@@ -415,9 +414,8 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
     ' 修复：第一次 IOCTL → 标准查询大小（传NULL+0长度）
     ' ----------------------------------
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumMiniFilter, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[EnumMinifilter] 第一次 IOCTL 失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If IoControl(hDrv, IOCTL_EnumMiniFilter, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "EnumMinifilter", "IOCTL_EnumMiniFilter", "第一次调用"
         Return 0
     End If
 
@@ -433,9 +431,8 @@ Function EnumMinifilter(lvwMinifilter As Class_mCtrlTreeList) As ULong
 
     ' 第二次 IOCTL 获取完整数据
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumMiniFilter, NULL, 0, @MinifilterArray(0), filterCount * SizeOf(MINIFILTER_OBJECT), @lpRet
-    If GetLastError <> 0 Then
-        Print "[EnumMinifilter] 第二次 IOCTL 失败:" & WinErrorMsg(GetLastError) & GetLastError
+    If IoControl(hDrv, IOCTL_EnumMiniFilter, NULL, 0, @MinifilterArray(0), filterCount * SizeOf(MINIFILTER_OBJECT), @lpRet) = 0 Then
+        MyLog.PrintWin32Error "EnumMinifilter", "IOCTL_EnumMiniFilter", "第二次调用"
         Return 0
     End If
     ' ====== CLI 旁路输出 ======
@@ -594,7 +591,7 @@ Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName
     '' 加载fltlib.dll（系统筛选器库）
     hFltdll = DyLibLoad("FltLib.dll")
     If hFltdll = 0 Then
-        Print "加载 FltLib.dll 失败"
+        MyLog.PrintLog LOG_ERROR, "EnumMinifilterInstances", "DyLibLoad", "加载FltLib"
         Return -1
     End If
 
@@ -621,7 +618,7 @@ Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName
     FilterInstanceFindClose = DyLibSymbol(hFltdll, "FilterInstanceFindClose")
 
     If FilterInstanceFindFirst = NULL Or FilterInstanceFindNext=NULL Or FilterInstanceFindClose=NULL Then
-        Print "获取API地址失败"
+        MyLog.PrintLog LOG_ERROR, "EnumMinifilterInstances", "DyLibSymbol"
         DyLibFree hFltdll
         Return -1
     End If
@@ -641,12 +638,12 @@ Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName
 
     '' 无实例/枚举结束（0x80070103 = ERROR_NO_MORE_ITEMS）
     If hr = &H80070103 Then
-        Print "无筛选器实例"
+        MyLog.PrintInfo "EnumMinifilterInstances", "FilterInstanceFindFirst", "无筛选器实例"
         Goto CLEANUP
     End If
     '' 其他错误
     If hr <> 0 Then
-        Print "FilterInstanceFindFirst 失败，错误码：0x"; Hex(hr)
+        MyLog.PrintNtError "EnumMinifilterInstances", "FilterInstanceFindFirst", hr
         Goto CLEANUP
     End If
 
@@ -674,12 +671,6 @@ Function EnumMinifilterInstances(lvwInstance As Class_ListView, ByVal FilterName
         Dim strFeatures As StringW = "0x" & WHex(pInfo->MinifilterType.SupportedFeatures) '' SprtFtrs
         Dim strStatus   As StringW = "0x" & WHex(pInfo->MiniFilterType.dwFlags)
         '' ====================================================================
-
-        '' 控制台输出（和fltmc完全一致）
-        Print "筛选器："; strFilter; _
-              "  卷："; strVolume; _
-              "  高度："; strAltitude; _
-              "  实例："; strInstance
 
         '' 添加到列表视图（匹配fltmc所有列）
         AddItemColListEx lvwInstance, 7,,, _
@@ -721,7 +712,8 @@ Function DetachFilterInstance(ByVal pFilterName As WString Ptr, ByVal pVolumeNam
 
     If FilterDetach Then
         hr = FilterDetach(pFilterName, pVolumeName, pInstanceName)
-        Print "删除指定实例：" & IIf(hr=0,"成功","失败") & " 错误码: 0x" & Hex(hr)
+        If hr <> 0 Then MyLog.PrintNtError "DetachFilterInstance", "FilterDetach", hr, _
+        "pFilterName=" & *pFilterName & ",pVolumeName=" & *pVolumeName & ",pInstanceName=" & pInstanceName
     End If
 
     DyLibFree hFltLib
@@ -766,7 +758,7 @@ Function DetachAllFilterInstances(ByVal pFilterName As WString Ptr) As Integer
         If result = S_OK Then
             count += 1
         Else
-            Print "分离实例失败,strInst=" & strInst & " strVol=" & strVol & " ,Error=" & WinErrorMsg(result) & " result=0x" & WHex(result)
+            MyLog.PrintLog LOG_WARN, "DetachAllFilterInstances", "FilterDetach", "strInst=" & strInst & ",strVol=" & strVol & ",result=0x" & WHex(result)
         End If
 
         ZeroMemory(@buffer(0), 4096)
@@ -776,7 +768,7 @@ Function DetachAllFilterInstances(ByVal pFilterName As WString Ptr) As Integer
 CLEANUP:
     If hFind Then FilterInstanceFindClose(hFind)
     DyLibFree hFltLib
-    Print "总计删除实例数量：" & count
+    MyLog.PrintInfo "DetachAllFilterInstances",, "总计删除实例数量:" & count
     Return count
 End Function
 
@@ -794,7 +786,8 @@ Function UnloadFilter(ByVal pFilterName As WString Ptr) As Boolean
 
     If pUnload Then
         hr = pUnload(pFilterName)
-        Print "卸载筛选器：" & IIf(hr=0,"成功","失败") & " 错误码: 0x" & Hex(hr)
+        If hr <> 0 Then MyLog.PrintNtError "UnloadFilter", "FilterUnload", hr, _
+        "pFilterName=" & *pFilterName
     End If
 
     DyLibFree hFltLib
@@ -810,16 +803,13 @@ Function EnumNdisMiniport(lvwNdisMiniport As Class_mCtrlTreeList) As ULong
     ' 第一次 IOCTL → 获取所需缓冲区大小
     ' ----------------------------------
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumNdisMiniport, NULL, 0, NULL, 0, @lpRet
-    If GetLastError <> 0 Then
-        Print "[EnumNdisMiniport] 第一次 IOCTL 失败: " & WinErrorMsg(GetLastError) & " (" & GetLastError & ")"
+    If IoControl(hDrv, IOCTL_EnumNdisMiniport, NULL, 0, NULL, 0, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "EnumNdisMiniport", "IOCTL_EnumNdisMiniport", "第一次调用"
         Return 0
     End If
     
-    Print "lpRet:" & lpRet
     Dim entryCount As Long
     entryCount = lpRet \ SizeOf(NDIS_MINIPORT_ENUM_ENTRY)
-    Print "entryCount:" & entryCount
     If entryCount <= 0 Then Return 0
 
     ' ----------------------------------
@@ -828,9 +818,8 @@ Function EnumNdisMiniport(lvwNdisMiniport As Class_mCtrlTreeList) As ULong
     ReDim MiniportArray(entryCount - 1) As NDIS_MINIPORT_ENUM_ENTRY
 
     SetLastError 0
-    IoControl hDrv, IOCTL_EnumNdisMiniport, NULL, 0, @MiniportArray(0), lpRet, @lpRet
-    If GetLastError <> 0 Then
-        Print "[EnumNdisMiniport] 第二次 IOCTL 失败: " & WinErrorMsg(GetLastError) & " (" & GetLastError & ")"
+    If IoControl(hDrv, IOCTL_EnumNdisMiniport, NULL, 0, @MiniportArray(0), lpRet, @lpRet) = 0 Then
+        MyLog.PrintWin32Error "EnumNdisMiniport", "IOCTL_EnumNdisMiniport", "第二次调用"
         Return 0
     End If
 
@@ -1177,24 +1166,23 @@ End Sub
 ' 重写：主函数 EnumAttachDevices
 ' ============================================================================
 Function EnumAttachDevices(ByVal lvwAttachDevice As Class_mCtrlTreeList, _
-                           ByVal ShowAllDevices As Boolean = False, _
-                           ByVal ShowBusDevices As Boolean = False) As ULong
-    If hDrv = INVALID_HANDLE_VALUE Then
-        Print "EnumAttachDevices: Driver handle invalid"
-        Return 0
-    End If
-    
-    lvwAttachDevice.DeleteItem MC_TLI_ROOT
+ByVal ShowAllDevices As Boolean = False, _
+ByVal ShowBusDevices As Boolean = False) As ULong
+   lvwAttachDevice.DeleteItem MC_TLI_ROOT
     
     ' 1. 获取数据
     Dim cbRet As ULong
-    If IoControl(hDrv, IOCTL_EnumAttachDevices, NULL, 0, NULL, 0, @cbRet) = 0 Then Return 0
+    If IoControl(hDrv, IOCTL_EnumAttachDevices, NULL, 0, NULL, 0, @cbRet) = 0 Then
+        MyLog.PrintWin32Error "EnumAttachDevices", "IOCTL_EnumAttachDevices", "第一次调用"
+        Return 0
+    End If
     Dim requiredSize As ULong = cbRet
     If requiredSize = 0 Then Return 0
     
     Dim pBuffer As Byte Ptr = Allocate(requiredSize)
     If pBuffer = NULL Then Return 0
     If IoControl(hDrv, IOCTL_EnumAttachDevices, NULL, 0, pBuffer, requiredSize, @cbRet) = 0 Then
+        MyLog.PrintWin32Error "EnumAttachDevices", "IOCTL_EnumAttachDevices", "第二次调用"
         Deallocate pBuffer
         Return 0
     End If
@@ -1319,7 +1307,7 @@ Function EnumAttachDevices(ByVal lvwAttachDevice As Class_mCtrlTreeList, _
     
     ' 5. 清理
     Deallocate pBuffer
-    Print "EnumAttachDevices: Completed, total valid devices = " & totalAdded
+    MyLog.PrintInfo "EnumAttachDevices",, "total valid devices = " & totalAdded
     Return totalAdded
 End Function
 

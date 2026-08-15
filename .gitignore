@@ -61,5 +61,3 @@ Thumbs.db
 # 7. 仓库指南文件（面向AI Agent，不上传）
 AGENTS.md
 
-# 8. 你的同步脚本（可选：不想上传就取消注释）
-SyncAndCommit.ps1

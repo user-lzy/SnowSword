@@ -268,7 +268,7 @@ Sub FrmPowerManager_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         Case 0
             Reboot
         Case 1
-            ForceReboot
+            'ForceReboot
     End Select
 End Sub
 

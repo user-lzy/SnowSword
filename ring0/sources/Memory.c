@@ -306,9 +306,13 @@ NTSTATUS ReadProcessMemory(
         *pBytesTransferred = 0;
     }
 
-    if (!dwProcessId || !pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
+    if (!pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
         DbgPrint("ReadProcessMemory 失败: 无效参数\n");
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (dwProcessId == 0) {
+        return VxkCopyMemory(pDestinationBuffer, pSourceAddress, SizeOfCopy, pBytesTransferred);
     }
 
     if (KeGetCurrentIrql() > APC_LEVEL) {
@@ -434,9 +438,13 @@ NTSTATUS WriteProcessMemory(
         *pBytesTransferred = 0;
     }
 
-    if (!dwProcessId || !pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
+    if (!pSourceAddress || !pDestinationBuffer || SizeOfCopy == 0) {
         DbgPrint("WriteProcessMemory 失败: 无效参数\n");
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (dwProcessId == 0) {
+        return VxkCopyMemory(pSourceAddress, pDestinationBuffer, SizeOfCopy, pBytesTransferred);
     }
 
     if (KeGetCurrentIrql() > APC_LEVEL) {
@@ -950,13 +958,11 @@ MEMORY_SCAN_RESULT OptimizedScanKernelMemory(PVOID pMem, ULONG PageSize)
         SIZE_T bytRead = 0;
         if (!NT_SUCCESS(VxkCopyMemory(&dosHeader, pageBuffer, sizeof(IMAGE_DOS_HEADER), &bytRead))) return Normal;
         DbgPrint("读取0x%p成功", pMem);
-        if (dosHeader.e_magic == IMAGE_DOS_SIGNATURE) {
+        if (dosHeader.e_magic == IMAGE_DOS_SIGNATURE && dosHeader.e_lfanew > sizeof(IMAGE_DOS_HEADER)) {
             if (!NT_SUCCESS(VxkCopyMemory(&ntHeader, pageBuffer + dosHeader.e_lfanew, sizeof(IMAGE_NT_HEADERS64), &bytRead))) return Normal;
             if (ntHeader.Signature == IMAGE_NT_SIGNATURE) {
-                //if (!inModule) {
                 DbgPrint("[UMH] Hidden Driver: %p\n", pMem);
                 return HideDriver;
-                //}
             }
         }
 

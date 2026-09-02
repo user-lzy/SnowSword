@@ -1,5 +1,7 @@
 #pragma once
 #include "Process.h"
+#include "Symbol.h"
+
 PVOID ObHandle1 = NULL;
 
 VOID SuspendProcess(HANDLE PID)
@@ -87,86 +89,6 @@ BOOLEAN IsProcessAlive(HANDLE ProcessId) {
     }
     return FALSE;
 }
-
-//NTHALAPI KIRQL KeGetCurrentIRQL();
-
-//NTSTATUS GetProcessChangedPath(HANDLE PID, PWCHAR* FilePath)
-//{
-//#define EPROCESS_IMAGEFILEOBJECT_OFFSET 0x330
-//    NTSTATUS status = STATUS_SUCCESS;
-//    PFILE_OBJECT pFileObject = NULL;
-//    POBJECT_NAME_INFORMATION pNameInfo = NULL;
-//	PEPROCESS Process = NULL;
-//    ULONG returnLength = 0;
-//
-//	// 查找进程
-//	status = PsLookupProcessByProcessId(PID, &Process);
-//    if (!NT_SUCCESS(status)) {
-//        DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)PID, status);
-//        return status;
-//    }
-//
-//    if (!FilePath) return STATUS_INVALID_PARAMETER;
-//
-//    // 从EPROCESS获取ImageFileObject
-//    pFileObject = *(PFILE_OBJECT*)((PUCHAR)Process + EPROCESS_IMAGEFILEOBJECT_OFFSET);
-//
-//    if (!pFileObject)
-//    {
-//        DbgPrint("Failed to get FileObject from EPROCESS\n");
-//        return STATUS_NOT_FOUND;
-//    }
-//
-//    // 增加引用计数防止对象被释放
-//    ObReferenceObject(pFileObject);
-//
-//    __try
-//    {
-//        // 获取文件路径信息
-//        status = ObQueryNameString(pFileObject, NULL, 0, &returnLength);
-//        if (status != STATUS_INFO_LENGTH_MISMATCH)
-//        {
-//            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
-//            __leave;
-//        }
-//
-//        // 分配缓冲区
-//        pNameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, returnLength, 'Path');
-//        if (!pNameInfo) {
-//            status = STATUS_INSUFFICIENT_RESOURCES;
-//            DbgPrint("Memory allocation failed\n");
-//            __leave;
-//        }
-//        // 获取完整路径
-//        status = ObQueryNameString(pFileObject, pNameInfo, returnLength, &returnLength);
-//        if (!NT_SUCCESS(status))
-//        {
-//            DbgPrint("ObQueryNameString failed: 0x%X\n", status);
-//            __leave;
-//        }
-//        // 分配输出缓冲区
-//        *FilePath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pNameInfo->Name.Length + sizeof(WCHAR), 'Path');
-//        if (!*FilePath)
-//        {
-//            status = STATUS_INSUFFICIENT_RESOURCES;
-//            DbgPrint("Output buffer allocation failed\n");
-//            __leave;
-//        }
-//
-//        // 复制路径
-//        memcpy(*FilePath, pNameInfo->Name.Buffer, pNameInfo->Name.Length);
-//        (*FilePath)[pNameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
-//
-//        DbgPrint("Process path: %wZ\n", &pNameInfo->Name);
-//    }
-//    __finally
-//    {
-//        if (pNameInfo) ExFreePoolWithTag(pNameInfo, 'Path');
-//        ObDereferenceObject(pFileObject);
-//    }
-//
-//    return status;
-//}
 
 VOID RemoveProcessHandleAccess(PACCESS_MASK pDesiredAccess) {
 	if (*pDesiredAccess & PROCESS_TERMINATE) *pDesiredAccess &= ~PROCESS_TERMINATE;
@@ -494,7 +416,7 @@ NTSTATUS OpenProcess(HANDLE ProcessId, PHANDLE hTargetProcess)
     // 查找进程
     status = PsLookupProcessByProcessId(ProcessId, &hProcess);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)ProcessId, status);
+        //DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)ProcessId, status);
         return status;
     }
 
@@ -533,15 +455,24 @@ NTSTATUS GetProcessHandleCount(HANDLE ProcessId, PULONG pHandleCount) {
 
 NTSTATUS GetEProcess(HANDLE ProcessId, PEPROCESS* pEProcess)
 {
+	static PEPROCESS PsIdleProcess = NULL;
+    if (PsIdleProcess == NULL)
+        GetNtSymbolAddress(L"PsIdleProcess",(PULONG64)&PsIdleProcess);
+
+    if (ProcessId == 0) {
+        *pEProcess = PsIdleProcess;
+        return STATUS_SUCCESS;
+    }
+
     NTSTATUS status = PsLookupProcessByProcessId(ProcessId, pEProcess);
 	if (status != STATUS_SUCCESS || *pEProcess == NULL)
     {
-		DbgPrint("PsLookupProcessByProcessId ProcessId:%Iu Error:0x%X", (ULONG_PTR)ProcessId, status);
+		//DbgPrint("PsLookupProcessByProcessId ProcessId:%Iu Error:0x%X", (ULONG_PTR)ProcessId, status);
         return status;
     }
     if (PsGetProcessExitStatus(*pEProcess) != STATUS_PENDING)
     {
-		DbgPrint("Process %Iu is terminating, cannot get EPROCESS.", (ULONG_PTR)ProcessId);
+		//DbgPrint("Process %Iu is terminating, cannot get EPROCESS.", (ULONG_PTR)ProcessId);
         ObDereferenceObject(*pEProcess);
         return STATUS_PROCESS_IS_TERMINATING;
     }
@@ -556,7 +487,7 @@ NTSTATUS GetProcessImageName(
 )
 {
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
-    NTSTATUS status;
+    NTSTATUS status = STATUS_SUCCESS;
     PEPROCESS Process = NULL;
     HANDLE hProcess = NULL;
     ULONG ReturnLength = 0;
@@ -578,6 +509,27 @@ NTSTATUS GetProcessImageName(
     status = PsLookupProcessByProcessId(ProcessId, &Process);
     if (!NT_SUCCESS(status))
         return status;
+
+    // 判断进程是否已经进入退出阶段
+    if (PsGetProcessExitStatus(Process) != STATUS_PENDING) {
+        // 已退出或者正在退出
+        PUCHAR Image = PsGetProcessImageFileName(Process);
+		DbgPrint("PID=%Iu, Process is terminating or has exited. ImageFileName: %s", (ULONG_PTR)ProcessId, Image);
+        if (Image)
+        {
+            ANSI_STRING ansi;
+            RtlInitAnsiString(&ansi, (PCSZ)Image);
+
+            status = RtlAnsiStringToUnicodeString(
+                ImageName,
+                &ansi,
+                FALSE
+            );
+        }
+
+        ObDereferenceObject(Process);
+        return status;
+    }
 
     //
     // EPROCESS -> HANDLE

@@ -142,7 +142,7 @@ Function GetVkKeyStr(ByVal vkCode As DWORD) As StringW
 End Function
 
 ' 消息钩子枚举 - 改造版（PID列动态显示/隐藏）
-Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHook As Class_ListView) As Boolean
+Public Function GetMsgHookList(ByVal bAll As Boolean, ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwMsgHook As Class_ListView) As Boolean
     Dim ret As Long, lpRet As DWORD
     Dim pData As Any Ptr = NULL
     Dim dataSize As DWORD = 0
@@ -234,15 +234,34 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
     Dim pHook As WIN32K_MSG_HOOK_INFO Ptr = pData
 
     InitListViewData lvwMsgHook
-    ' ====================== 消息钩子 PID列处理 ======================
-    Const MSGHOOK_PID_COL_INDEX = 5
-    If Not bGlobal Then
+    
+    ' ====================== 列动态调整 ======================
+    Const MSGHOOK_PID_COL_INDEX = 5      ' PID列索引
+    Const MSGHOOK_SCOPE_COL_INDEX = 2    ' 作用域列索引
+    
+    ' bAll 控制是否显示PID列
+    If Not bAll Then
+        ' 不显示所有进程 → 隐藏PID列
         If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) = "PID" Then
             lvwMsgHook.DeleteColumn(MSGHOOK_PID_COL_INDEX)
         End If
     Else
+        ' 显示所有进程 → 确保PID列存在
         If lvwMsgHook.ColumnText(MSGHOOK_PID_COL_INDEX) <> "PID" Then
             lvwMsgHook.InsertColumn(MSGHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
+        End If
+    End If
+    
+    ' bGlobal 控制是否仅显示全局钩子，同时控制作用域列的显示
+    If bGlobal Then
+        ' 仅显示全局钩子 → 隐藏作用域列（因为都是全局，无需显示）
+        If lvwMsgHook.ColumnText(MSGHOOK_SCOPE_COL_INDEX) = "作用域" Then
+            lvwMsgHook.DeleteColumn(MSGHOOK_SCOPE_COL_INDEX)
+        End If
+    Else
+        ' 显示所有类型 → 确保作用域列存在
+        If lvwMsgHook.ColumnText(MSGHOOK_SCOPE_COL_INDEX) <> "作用域" Then
+            lvwMsgHook.InsertColumn(MSGHOOK_SCOPE_COL_INDEX, "作用域", LVCFMT_LEFT, 200)
         End If
     End If
 
@@ -254,16 +273,23 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
         Dim hookTypeStr As StringW = GetHookTypeName(info.HookType)
         Dim scopeStr As StringW = IIf(info.IsGlobal, "全局钩子", "线程钩子")
         
-        If (Not bGlobal) AndAlso (PID <> info.ProcessId) Then Continue For ' 过滤
+        ' ====================== 过滤逻辑 ======================
+        ' bGlobal = True:  仅显示全局钩子（过滤掉非全局的）
+        ' bGlobal = False: 显示所有类型（不过滤类型）
+        If bGlobal AndAlso (Not info.IsGlobal) Then Continue For
+        
+        ' bAll = True:  显示所有进程的钩子（不过滤PID）
+        ' bAll = False: 仅显示指定PID的钩子
+        If (Not bAll) AndAlso (PID <> info.ProcessId) Then Continue For
         
         If IsDriverLoaded Then
             hProcess = SnowSword_OpenProcess(info.ProcessId)
         Else
             hProcess = OpenProcess(PROCESS_QUERY_INFORMATION Or PROCESS_VM_READ, False, info.ProcessId)
         End If
+        
         ' ====================== 核心：地址解析逻辑 ======================
         If LenW(info.ModulePath) = 0 Then
-            'Print "LenW(info.ModulePath) = 0," & "realVA=0x" & WHex(realVA)
             realVA = info.pfn
             finalModulePath = GetModuleOfAddress(hProcess, Cast(PVOID, realVA)) 
         ElseIf LenW(info.ModulePath) > 0 Then
@@ -271,24 +297,33 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
             realVA = baseAddr + info.pfn
             finalModulePath = info.ModulePath
         Else
-            'Print "LenW(info.ModulePath) ? 0," & "realVA=0x" & WHex(realVA)
             realVA = info.pfn
             finalModulePath = info.ModulePath
         End If
-
-        ' 填充ListView
-        AddItemColListEx lvwMsgHook, 7,,, _
-            "0x" & WHex(info.HookHandle), _
-            WStr(hookTypeStr), _
-            WStr(scopeStr), _
-            "0x" & WHex(realVA), _
-            finalModulePath, _
-            WStr(info.ProcessId), _
-            WStr(info.ThreadId)
-
-        ' 调试打印
-        MyLog.PrintLog LOG_INFO, "GetMsgHook",, "[" & i & "] " & hookTypeStr & " | " & WHex(info.HookHandle) & " | PID:" & info.ProcessId & _
-        " | 模块:" & finalModulePath
+        
+        ' 填充ListView（根据bGlobal决定列数）
+        Dim ItemIndex As Integer = 0
+        If bGlobal Then
+            ' 仅显示全局钩子：没有作用域列，共6列
+            ItemIndex = AddItemColListEx(lvwMsgHook, 6,,, _
+                "0x" & WHex(info.HookHandle), _
+                WStr(hookTypeStr), _
+                "0x" & WHex(realVA), _
+                finalModulePath, _
+                WStr(info.ProcessId), _
+                WStr(info.ThreadId))
+        Else
+            ' 显示所有类型：有作用域列，共7列
+            ItemIndex = AddItemColListEx(lvwMsgHook, 7,,, _
+                "0x" & WHex(info.HookHandle), _
+                WStr(hookTypeStr), _
+                WStr(scopeStr), _
+                "0x" & WHex(realVA), _
+                finalModulePath, _
+                WStr(info.ProcessId), _
+                WStr(info.ThreadId))
+        End If
+        VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, finalModulePath
         CloseHandle hProcess
         FF_DoEvents
     Next
@@ -296,6 +331,28 @@ Public Function GetMsgHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvw
     CommitListViewView lvwMsgHook
     Deallocate pData
     Return True
+End Function
+
+Private Function GetEventHookFlagStr(ByVal dwFlags As Long) As String
+    Dim strResult As String
+
+    ' 1. 确定上下文类型
+    If (dwFlags And WINEVENT_INCONTEXT) = WINEVENT_INCONTEXT Then
+        strResult = "WINEVENT_INCONTEXT"
+    Else
+        strResult = "WINEVENT_OUTOFCONTEXT"
+    End If
+
+    ' 2. 附加跳过标志
+    If (dwFlags And WINEVENT_SKIPOWNTHREAD) = WINEVENT_SKIPOWNTHREAD Then
+        strResult = strResult & " | WINEVENT_SKIPOWNTHREAD"
+    End If
+
+    If (dwFlags And WINEVENT_SKIPOWNPROCESS) = WINEVENT_SKIPOWNPROCESS Then
+        strResult = strResult & " | WINEVENT_SKIPOWNPROCESS"
+    End If
+
+    GetEventHookFlagStr = strResult
 End Function
 
 ' 事件钩子枚举 - 改造版（PID列动态显示/隐藏）
@@ -321,7 +378,7 @@ Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, l
         End If
     Else
         If lvwEventHook.ColumnText(EVENTHOOK_PID_COL_INDEX) <> "PID" Then
-            lvwEventHook.InsertColumn(EVENTHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 80)
+            lvwEventHook.InsertColumn(EVENTHOOK_PID_COL_INDEX, "PID", LVCFMT_LEFT, 100)
         End If
     End If
     ' =================================================================
@@ -375,32 +432,34 @@ Public Function GetEventHookList(ByVal bGlobal As Boolean, ByVal PID As DWORD, l
         End If
 
         ' 填充ListView
+        Dim ItemIndex As Integer
         If Not bGlobal Then
-            AddItemColListEx lvwEventHook, 8,,, _
+            ItemIndex = AddItemColListEx(lvwEventHook, 8,,, _
                 "0x" & WHex(info.HookHandle), _
                 "0x" & WHex(info.EventMin) & "~0x" & WHex(info.EventMax), _
-                WStr(info.dwFlags), _
+                WStr(GetEventHookFlagStr(info.dwFlags)), _
                 "0x" & WHex(realVA), _
                 WStr(finalModulePath), _
                 WStr(info.ThreadId), _
                 WStr(info.TargetProcessId), _
-                WStr(info.TargetThreadId)
+                WStr(info.TargetThreadId))
         Else
-            AddItemColListEx lvwEventHook, 9,,, _
+            ItemIndex = AddItemColListEx(lvwEventHook, 9,,, _
                 "0x" & WHex(info.HookHandle), _
                 "0x" & WHex(info.EventMin) & "~0x" & WHex(info.EventMax), _
-                WStr(info.dwFlags), _
+                WStr(GetEventHookFlagStr(info.dwFlags)), _
                 "0x" & WHex(realVA), _
                 WStr(finalModulePath), _
                 WStr(info.ProcessId), _
                 WStr(info.ThreadId), _
                 WStr(info.TargetProcessId), _
-                WStr(info.TargetThreadId)
+                WStr(info.TargetThreadId))
         End If
+        VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, finalModulePath
 
         ' 调试打印
-        MyLog.PrintLog LOG_INFO, "GetEventHookList",, "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
-        " | PID:" & info.ProcessId & " | 模块:" & finalModulePath & " | VA:0x" & Hex(realVA)
+        /'MyLog.PrintLog LOG_INFO, "GetEventHookList",, "[" & i & "] 事件范围:0x" & Hex(info.EventMin) & "~0x" & Hex(info.EventMax) & _
+        " | PID:" & info.ProcessId & " | 模块:" & finalModulePath & " | VA:0x" & Hex(realVA)'/
         CloseHandle hProcess
         FF_DoEvents
     Next
@@ -506,10 +565,7 @@ Public Function GetHotkeyList(ByVal bGlobal As Boolean, ByVal PID As DWORD, lvwH
             WStr(info.ThreadId), _
             WStr(Note)
         End If
-        ' 调试打印
-        /'Print "[" & i & "] 热键: " & sHotkey & " | 句柄:0x" & WHex(info.HotkeyHandle) & _
-              " | PID:" & info.ProcessId & " | TID:" & info.ThreadId & _
-              " | hWnd:0x" & WHex(info.hWnd) '/
+        
         FF_DoEvents
     Next
 

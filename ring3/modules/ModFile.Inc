@@ -36,6 +36,59 @@ Type COPY_PATH
     IsDirectory As Boolean
 End Type
 
+' IO_STATUS_BLOCK
+Union IOSB_Union
+    Status As NTSTATUS
+    Pointer As PVOID
+End Union
+
+Type IO_STATUS_BLOCK
+    Status As IOSB_Union
+    Information As ULONG_PTR
+End Type
+
+' FILE_BASIC_INFORMATION
+Type FILE_BASIC_INFORMATION
+    CreationTime As LARGE_INTEGER
+    LastAccessTime As LARGE_INTEGER
+    LastWriteTime As LARGE_INTEGER
+    ChangeTime As LARGE_INTEGER
+    FileAttributes As ULONG
+End Type
+
+' FILE_DISPOSITION_INFORMATION
+Type FILE_DISPOSITION_INFORMATION
+    DeleteFile As UByte  ' BOOLEAN
+End Type
+
+' 文件信息类
+Enum FILE_INFORMATION_CLASS
+    FileBasicInformation = 4
+    FileDispositionInformation = 13
+End Enum
+
+Const FILE_DELETE = &H00010000
+Const FILE_SYNCHRONIZE_IO_NONALERT = &H00000020
+
+' 创建/打开文件
+Declare Function ZwCreateFile Lib "ntdll" Alias "ZwCreateFile"(ByVal FileHandle As HANDLE Ptr, _
+    ByVal DesiredAccess As ACCESS_MASK, _
+    ByVal ObjectAttributes As OBJECT_ATTRIBUTES Ptr, _
+    ByVal IoStatusBlock As IO_STATUS_BLOCK Ptr, _
+    ByVal AllocationSize As LARGE_INTEGER Ptr, _
+    ByVal FileAttributes As ULONG, _
+    ByVal ShareAccess As ULONG, _
+    ByVal CreateDisposition As ULONG, _
+    ByVal CreateOptions As ULONG, _
+    ByVal EaBuffer As PVOID, _
+    ByVal EaLength As ULONG) As NTSTATUS
+
+' 设置文件信息
+Declare Function ZwSetInformationFile Lib "ntdll" Alias "ZwSetInformationFile"(ByVal FileHandle As HANDLE, _
+    ByVal IoStatusBlock As IO_STATUS_BLOCK Ptr, _
+    ByVal FileInformation As PVOID, _
+    ByVal Length As ULONG, _
+    ByVal FileInformationClass As FILE_INFORMATION_CLASS) As NTSTATUS
 Declare Function ZwDeleteFile Lib "ntdll.dll" Alias "ZwDeleteFile"(ByVal ObjectAttributes As OBJECT_ATTRIBUTES Ptr) As NTSTATUS
 'Declare Function WinVerifyTrust Lib "wintrust.dll" Alias "WinVerifyTrust"(ByVal hWnd As hWnd, ByVal pgActionID As GUID Ptr, ByVal pWVTData As LPVOID) As Long
 
@@ -759,10 +812,94 @@ Public Function GetNodeByFolderPathW(sPath As StringW, treFolder As Class_TreeVi
 End Function
 
 Function MyDeleteFile(ByVal lpFilePath As LPCWSTR) As NTSTATUS
-    Dim ObjectAttributes As OBJECT_ATTRIBUTES, unicodeFilePath As UNICODE_STRING, st As NTSTATUS
-    RtlInitUnicodeString @unicodeFilePath, lpFilePath
-    InitializeObjectAttributes @ObjectAttributes, @unicodeFilePath, OBJ_CASE_INSENSITIVE
-    Return ZwDeleteFile(@ObjectAttributes)
+    Dim ObjectAttributes As OBJECT_ATTRIBUTES
+    Dim unicodeFilePath As UNICODE_STRING
+    Dim hFile As HANDLE
+    Dim ioStatus As IO_STATUS_BLOCK
+    Dim fileBasicInfo As FILE_BASIC_INFORMATION
+    Dim fileDispInfo As FILE_DISPOSITION_INFORMATION
+    Dim status As NTSTATUS
+    
+    ' 初始化路径为 UNICODE_STRING
+    RtlInitUnicodeString(@unicodeFilePath, lpFilePath)
+    
+    ' 初始化对象属性
+    InitializeObjectAttributes(@ObjectAttributes, @unicodeFilePath, OBJ_CASE_INSENSITIVE)
+    
+    ' ============================================================
+    ' 第一步：打开文件（获取修改属性和删除的权限）
+    ' ============================================================
+    status = ZwCreateFile(@hFile, _
+        SYNCHRONIZE Or FILE_READ_ATTRIBUTES Or FILE_WRITE_ATTRIBUTES Or FILE_DELETE, _
+        @ObjectAttributes, _
+        @ioStatus, _
+        NULL, _
+        0, _
+        FILE_SHARE_READ Or FILE_SHARE_WRITE Or FILE_SHARE_DELETE, _
+        FILE_OPEN, _
+        FILE_NON_DIRECTORY_FILE Or FILE_SYNCHRONIZE_IO_NONALERT, _
+        NULL, 0)
+    
+    If Not NT_SUCCESS(status) Then
+        MyLog.PrintNtError "MyDeleteFile", "ZwCreateFile", status, "FilePath=" & *lpFilePath
+        Return status
+    End If
+    
+    ' ============================================================
+    ' 第二步：清除系统/隐藏/只读属性，设置为普通文件
+    ' ============================================================
+    RtlZeroMemory(@fileBasicInfo, SizeOf(FILE_BASIC_INFORMATION))
+    fileBasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL
+    
+    status = ZwSetInformationFile(hFile, _
+        @ioStatus, _
+        @fileBasicInfo, _
+        SizeOf(FILE_BASIC_INFORMATION), _
+        FileBasicInformation)
+    
+    If Not NT_SUCCESS(status) Then
+        MyLog.PrintNtError "MyDeleteFile", "ZwSetInformationFile(FileBasicInformation)", status, "FilePath=" & *lpFilePath
+        ' 清除属性失败，尝试直接删除
+        ZwClose(hFile)
+        
+        ' 重新打开，尝试 FILE_DELETE_ON_CLOSE
+        status = ZwCreateFile(@hFile, _
+            SYNCHRONIZE Or FILE_DELETE, _
+            @ObjectAttributes, _
+            @ioStatus, _
+            NULL, _
+            FILE_ATTRIBUTE_NORMAL, _
+            FILE_SHARE_READ Or FILE_SHARE_WRITE Or FILE_SHARE_DELETE, _
+            FILE_OPEN, _
+            FILE_NON_DIRECTORY_FILE Or FILE_SYNCHRONIZE_IO_NONALERT Or FILE_DELETE_ON_CLOSE, _
+            NULL, 0)
+        
+        If NT_SUCCESS(status) Then
+            ZwClose(hFile)
+        Else
+            MyLog.PrintNtError "MyDeleteFile", "ZwCreateFile(FILE_DELETE_ON_CLOSE)", status, "FilePath=" & *lpFilePath
+        End If
+        
+        Return status
+    End If
+    
+    ' ============================================================
+    ' 第三步：设置删除标记（FileDispositionInformation）
+    ' ============================================================
+    fileDispInfo.DeleteFile = 1  ' TRUE = 标记为删除
+    
+    status = ZwSetInformationFile(hFile, _
+        @ioStatus, _
+        @fileDispInfo, _
+        SizeOf(FILE_DISPOSITION_INFORMATION), _
+        FileDispositionInformation)
+    
+    If Not NT_SUCCESS(status) Then MyLog.PrintNtError "MyDeleteFile", "ZwSetInformationFile(FileDispositionInformation)", status, "FilePath=" & *lpFilePath
+    
+    ' 关闭句柄（此时文件被删除）
+    ZwClose(hFile)
+    
+    Return status
 End Function
 
 Function ForceDeleteFile(ByVal lpFilePath As LPCWSTR) As Boolean
@@ -879,6 +1016,7 @@ Function DeleteDirectoryIterative(ByVal lpPath As StringW) As Boolean
         
         ' 如果没有子文件夹，直接删除当前文件夹
         If dirCount = 0 Then
+            SetFileAttributesW(wszCurrent, FILE_ATTRIBUTE_NORMAL)
             RemoveDirectory(wszCurrent)
         Else
             ' 有子文件夹：先把自己重新压栈（等子文件夹处理完后再删）
@@ -1439,13 +1577,17 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
             ' 重置事件（自动重置或手动 ResetEvent，取决于 CreateEvent 参数）
             Continue Do
         End If
-
+        
         ' 执行签名验证
         ' 初始化：默认前景色=黑色（所有状态统一）
-        Dim ForeColor As COLORREF = FB_Black
+        Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(task->hWndControl, GWLP_USERDATA))
+        If ctx = NULL OrElse ctx->Snap = NULL OrElse ctx->Snap->Rows = NULL Then Continue Do
+        Dim r As LVRow Ptr = ctx->Snap->Rows[task->rowIndex]  ' 🔥 修复
+        Dim ForeColor As COLORREF = r->Fore
         Dim BackColor As COLORREF = FB_White ' 默认正常色
         
         ' 执行签名验证
+        'MyLog.PrintInfo "WorkerThread",, "task->filePath=" & task->filePath & ",task->rowIndex=" & task->rowIndex
         If task->filePath <> "" AndAlso FileExists(Str(task->filePath)) <> 0 Then
             Dim verifyResult As Long, IsMicrosoftSign As Boolean
             'Print task->filePath
@@ -1494,12 +1636,9 @@ Sub WorkerThread(ByVal lpParam As LPVOID)
                 msg->ForeColor = ForeColor
                 msg->BackColor = BackColor
                 
-                Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(task->hWndControl, GWLP_USERDATA))
-                If ctx <> NULL Then
-                    msg->hListView = task->hWndControl
-                    msg->InstanceId = ctx->InstanceId
-                    PostMessage task->hWndForm, WM_SignVerify, 0, Cast(lParam, msg)
-                End If
+                msg->hListView = task->hWndControl
+                msg->InstanceId = ctx->InstanceId
+                PostMessage task->hWndForm, WM_SignVerify, 0, Cast(lParam, msg)
             End If
         End If
 

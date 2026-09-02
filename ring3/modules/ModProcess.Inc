@@ -665,7 +665,7 @@ Private Function GetPIDList3(PIDInfo() As PIDInfo) As Integer
             ReDim Preserve PIDInfo(k) As PIDInfo
         End If
         PIDInfo(j).PID = i
-        If EProcessInfo.bExited Then MyLog.PrintInfo "GetPIDList3", "PID:" & i & " Exited!"
+        'If EProcessInfo.bExited Then MyLog.PrintInfo "GetPIDList3", "PID:" & i & " Exited!"
         PIDInfo(j).bExited = EProcessInfo.bExited
         j += 1
         FF_DoEvents
@@ -711,7 +711,12 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
             Dim ntPath As WString * MAX_PATH = "", dosPath As WString * MAX_PATH = ""
             Dim dwProcessId As DWORD = ProcessId
             If IoControl(hDrv, IOCTL_GetProcessPath, @dwProcessId, SizeOf(HANDLE), @ntPath, MAX_PATH * 2) <> 0 Then
-                NtPathToDosPathWFast @ntPath, @dosPath
+                If InStrW(ntPath, ":") > 0 Then
+                    NtPathToDosPathWFast @ntPath, @dosPath
+                Else
+                    dosPath = ntPath
+                    'Return ntPath
+                End If
                 Return dosPath
             Else
                 Return "-"
@@ -743,6 +748,7 @@ Public Function GetProcessPath(ByVal ProcessId As DWORD) As StringW
             Return ""
         End If
         Dim ProcessPath As WString * MAX_PATH
+        'MyLog.PrintInfo "GetProcessPath", "GetProcessImageFileNameW", "pathBuffer=" & pathBuffer
         NtPathToDosPathW @pathBuffer, @ProcessPath
         Return ProcessPath
     End If
@@ -1377,7 +1383,7 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
             strCommandLine = GetProcessCommandLine(dwPID)
             
             Dim ItemIndex As Long = AddItemColListEx(lvwProcess, 8,,, WStr(dwPID), WStr(strParentPID), WStr(strEProcess), WStr(strName), WStr(strPath), WStr(strSessionId & "-" & strUserName), WStr(strCommandLine), WStr(strCompany))
-            Dim Index2 As DWORD = GetDWORDInArray(dwPID, PID2())
+            Dim Index2 As Long = GetDWORDInArray(dwPID, PID2())
             'Print dwPID & " " & Index2 & " " & PID2(Index2).bExited
             If Index2 >= 0 AndAlso PID2(Index2).bExited Then SetItemColor lvwProcess, ItemIndex, FB_LightPinkRed, FB_White
             SetItemIconEx lvwProcess, ItemIndex, GetFileIconIndexCached(strPath, False)
@@ -1401,8 +1407,10 @@ Public Function GetProcessList(lvwProcess As Class_ListView, ByVal IsCheckHidePr
                 strEProcess = "0x" & WHex(EProcessInfo.EProcess)
             End If
             strPath = GetProcessPath(dwPID)
+            MyLog.PrintInfo "GetProcessList", "GetProcessPath", "dwPID=" & dwPID & ",strPath=" & strPath
             If InStr(strPath, ":") = 0 Then
-                strName = "-"
+                If LenW(strPath) = 0 Then strName = "-" Else strName = strPath
+                strPath = "-"
             Else
                 strName = GetNameByPath(strPath)
                 strCompany = GetFileCompanyCached(strPath)
@@ -1620,25 +1628,27 @@ Sub GetProcessTimerList(ByVal bGlobal As Boolean, ByVal dwProcessId As DWORD, lv
         
         Dim wszModulePath As WString * MAX_PATH = ""
         GetModuleByAddress ProcessTimer(i).ProcessId, Cast(PVOID, ProcessTimer(i).pfn), @wszModulePath
+        Dim ItemIndex As Integer = 0
         If bGlobal Then
-            AddItemColListEx lvwWindowTimer, 7,,, _
+            ItemIndex = AddItemColListEx(lvwWindowTimer, 7,,, _
             WStr(ProcessTimer(i).nIDEvent), _ ' 定时器ID
             WStr(ProcessTimer(i).nTimeout), _ ' 超时时间
             "0x" & WHex(ProcessTimer(i).pfn), _ ' 回调函数地址
             wszModulePath, _ ' 所属模块
             "0x" & WHex(ProcessTimer(i).hWnd), _ ' 所属窗口
             WStr(ProcessTimer(i).ThreadId), _ ' 线程ID
-            WStr(ProcessTimer(i).ProcessId) ' 进程ID
+            WStr(ProcessTimer(i).ProcessId)) ' 进程ID
         Else
-            If ProcessTimer(i).ProcessId <> dwProcessId AndAlso dwProcessId <> Cast(DWORD, -1) Then Continue For
-            AddItemColListEx lvwWindowTimer, 6,,, _
+            If ProcessTimer(i).ProcessId <> dwProcessId Then Continue For
+            ItemIndex = AddItemColListEx(lvwWindowTimer, 6,,, _
             WStr(ProcessTimer(i).nIDEvent), _ ' 定时器ID
             WStr(ProcessTimer(i).nTimeout), _ ' 超时时间
             "0x" & WHex(ProcessTimer(i).pfn), _ ' 回调函数地址
             wszModulePath, _ ' 所属模块
             "0x" & WHex(ProcessTimer(i).hWnd), _ ' 所属窗口
-            WStr(ProcessTimer(i).ThreadId) ' 线程ID
+            WStr(ProcessTimer(i).ThreadId)) ' 线程ID
         End If
+        VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, wszModulePath
         FF_DoEvents
     Next
 

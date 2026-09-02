@@ -117,8 +117,8 @@ Function IsDWORDInArray Overload(ByVal Element As DWORD, Array() As DWORD) As Bo
     Return False
 End Function
 
-Function GetDWORDInArray Overload(ByVal Element As DWORD, Array() As DWORD) As DWORD
-    Dim i As Integer
+Function GetDWORDInArray Overload(ByVal Element As DWORD, Array() As DWORD) As Long
+    Dim i As Long
     For i = LBound(array) To UBound(array)
         If (array(i) = Element) Then Return i
     Next

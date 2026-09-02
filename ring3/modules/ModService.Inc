@@ -325,3 +325,30 @@ Function MyStopService(ByVal ServiceName As StringW) As Boolean
     CloseServiceHandle hService
     CloseServiceHandle hSCM
 End Function
+
+Function MyDeleteService(ByVal ServiceName As StringW) As Boolean
+    Dim hSCM As SC_HANDLE, hService As SC_HANDLE, ServiceStatus As SERVICE_STATUS
+    
+    Function = True
+
+    hSCM = OpenSCManager("", SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS)
+    If hSCM = NULL Then
+        MyLog.PrintWin32Error "MyDeleteService", "OpenSCManager", "ServiceName=" & ServiceName
+        Return False
+    End If
+    
+    hService = OpenService(hSCM, ServiceName, SERVICE_ALL_ACCESS)
+    If hService = NULL Then
+        MyLog.PrintWin32Error "MyDeleteService", "OpenService", "ServiceName=" & ServiceName
+        CloseServiceHandle hSCM
+        Return False
+    End If
+    
+    If DeleteService(hService) = 0 Then
+        MyLog.PrintWin32Error "MyDeleteService", "DeleteService", "ServiceName=" & ServiceName
+        Function = False
+    End If
+    
+    CloseServiceHandle hService
+    CloseServiceHandle hSCM
+End Function

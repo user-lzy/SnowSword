@@ -1,0 +1,31 @@
+# Visual Studio build output
+x64/
+[Dd]ebug/
+[Rr]elease/
+out/
+build/
+
+# Compiled binaries
+*.sys
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib
+*.exp
+*.res
+*.ilk
+*.map
+
+# Visual Studio IDE state
+.vs/
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# Local AI config
+AGENTS.md

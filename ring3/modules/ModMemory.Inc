@@ -9,7 +9,7 @@ Private Function GetStateString(ByVal State As Long) As String
         Case MEM_FREE
             GetStateString = "MEM_FREE"
         Case Else
-            GetStateString = "UNKNOWN"
+            GetStateString = "UNKNOWN(0x" & WHex(State) & ")"
     End Select
 End Function
 
@@ -22,7 +22,7 @@ Private Function GetTypeString(ByVal MemoryType As Long) As String
         Case MEM_IMAGE
             GetTypeString = "MEM_IMAGE"
         Case Else
-            GetTypeString = "UNKNOWN"
+            GetTypeString = ""
     End Select
 End Function
 
@@ -161,12 +161,13 @@ Private Sub AddMemoryBlockDirectly(ByRef lvwMemory As Class_ListView, ByVal dwPr
     'Dim ItemCount As Long = AddItemEx(lvwMemory, "0x" & WHex(mbi.BaseAddress)) ' lvwMemory.ItemCount
     Dim szModuleName As WString * MAX_PATH = ""
     If mbi.Type = MEM_IMAGE Then GetModuleByAddress dwProcessId, mbi.BaseAddress, @szModuleName
+    Dim strType As StringW = GetTypeString(mbi.Type)
     
     Dim ItemIndex As Long = AddItemColListEx(lvwMemory, 7,,, "0x" & WHex(mbi.BaseAddress), "0x" & WHex(mbi.RegionSize), WStr(GetProtectString(actualProtect)), _
-    WStr(GetStateString(mbi.State)), WStr(GetTypeString(mbi.Type)), "0x" & WHex(mbi.AllocationBase), szModuleName)
+    WStr(GetStateString(mbi.State)), WStr(strType), IIf(mbi.AllocationBase <> NULL, "0x" & WHex(mbi.AllocationBase), WStr("-")), szModuleName)
     If mbi.State <> MEM_COMMIT Then ' 未提交内存
         SetItemColor lvwMemory, ItemIndex, FB_Black, FB_Grey
-    ElseIf mbi.State = MEM_IMAGE Then ' 映像内存
+    ElseIf mbi.Type = MEM_IMAGE Then ' 映像内存
         SetItemColor lvwMemory, ItemIndex, FB_Black, FB_GoldenYellow
     ElseIf mbi.Protect = PAGE_EXECUTE OrElse mbi.Protect = PAGE_EXECUTE_READ OrElse mbi.Protect = PAGE_EXECUTE_WRITECOPY OrElse mbi.Protect = PAGE_EXECUTE_READWRITE Then ' 可执行内存
         SetItemColor lvwMemory, ItemIndex, FB_Black, FB_BoheGreen

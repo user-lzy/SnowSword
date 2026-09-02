@@ -833,7 +833,7 @@ Function CreateHighPrivProcess( _
     ZeroMemory(@si, SizeOf(STARTUPINFOW))
     ZeroMemory(@pi, SizeOf(PROCESS_INFORMATION))
     si.cb = SizeOf(STARTUPINFOW)
-    'si.lpDesktop = StrPtrW("winsta0\default")
+    si.lpDesktop = StrPtrW("winsta0\default")
     
     ' ========================================================
     ' 1. 处理命令行参数（关键修改点）
@@ -960,7 +960,7 @@ Function CreateSYSTEMPriviegeProcess( _
         Function = False
         Goto Cleanup
     End If
-    /'If Not CollectProcessToken(hOriginalToken, "winlogon.exe") Then
+    /'/If Not CollectProcessToken(hOriginalToken, "winlogon.exe") Then
         Print "采集高权限令牌失败！"
         Function = False
         GoTo Cleanup

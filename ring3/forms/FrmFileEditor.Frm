@@ -1,23 +1,23 @@
-﻿#VisualFreeBasic_Form#  Version=5.9.5
+﻿#VisualFreeBasic_Form#  Version=5.9.7
 Locked=0
 
 [Form]
-Name=FrmFireWall_Options
+Name=FrmFileEditor
 Help=False
 ClassStyle=CS_VREDRAW,CS_HREDRAW,CS_DBLCLKS
 ClassName=
 WinStyle=WS_THICKFRAME,WS_CAPTION,WS_SYSMENU,WS_MINIMIZEBOX,WS_MAXIMIZEBOX,WS_CLIPSIBLINGS,WS_CLIPCHILDREN,WS_VISIBLE,WS_EX_WINDOWEDGE,WS_EX_CONTROLPARENT,WS_EX_LEFT,WS_EX_LTRREADING,WS_EX_RIGHTSCROLLBAR,WS_POPUP,WS_SIZEBOX
 Style=3 - 常规窗口
 Icon=
-Caption=防火墙设置
+Caption=Form1
 StartPosition=1 - 屏幕中心
 WindowState=0 - 正常
 Enabled=True
 Repeat=False
 Left=0
 Top=0
-Width=420
-Height=300
+Width=632
+Height=460
 TopMost=False
 Child=False
 MdiChild=False

@@ -478,8 +478,8 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             dwProcessId = *(PHANDLE)pInputData;
             HANDLE hProcess = NULL;
             status = OpenProcess(dwProcessId, &hProcess);
-            if (!NT_SUCCESS(status))
-                DbgPrint("OpenProcess Failed!");
+            //if (!NT_SUCCESS(status))
+            //    DbgPrint("OpenProcess Failed!");
             memcpy(pOutputData, &hProcess, sizeof(HANDLE));
             Information = sizeof(HANDLE);
         }

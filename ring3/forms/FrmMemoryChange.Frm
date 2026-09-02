@@ -283,7 +283,7 @@ Sub FrmMemoryChange_Shown(hWndForm As hWnd, UserData As Integer)
     Me.hWndForm = hWndForm
     Dim mc As MEMORY_CHANGE Ptr = Cast(MEMORY_CHANGE Ptr, UserData)
     'Print "Addr:0x" & WHex(mc->Addr) & " dwSize:0x" & WHex(mc->dwSize) & " OldProtect:0x" & mc->OldProtect
-    txtOld.Text = "0x" & mc->OldProtect
+    txtOld.Text = "0x" & WHex(mc->OldProtect)
     Me.UserData(0) = Cast(Integer, mc)
     FrmMemoryChange_nWidth = Me.Width
     FrmMemoryChange_nHeight = Me.Height

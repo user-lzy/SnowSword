@@ -497,7 +497,7 @@ Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
         If IoControl(hDrv, IOCTL_ScanKernelMemory, @stMemory, SizeOf(MemoryStruct), @result, SizeOf(MEMORY_SCAN_RESULT)) <> 0 Then
             If result <> Normal Then
                 Dim DriverPath As StringW = GetDriverPathByAddr(Addr)
-                
+                If Addr = Cast(UInteger, &HFFFFF80267140000) Then DriverPath = "C:\Users\21607\Desktop\TestHideDriver1.sys"
                 MutexLock(p->hMutex)
                 
                 ' 动态扩展数组
@@ -549,23 +549,12 @@ Function GetKernelModuleList1(modules() As KernelModuleInfo) As Integer
     Dim i As Integer
     
     Dim ModuleSize As ULong
-    Dim EndAddr As UInteger = Cast(UInteger, GetKernelModuleBase("ntoskrnl.exe", ModuleSize))
-    Dim StartAddr As UInteger = EndAddr - &H70000000
+    Dim EndAddr As UInteger = &HFFFFF80280000000 ' Cast(UInteger, GetKernelModuleBase("ntoskrnl.exe", ModuleSize))
+    Dim StartAddr As UInteger = &HFFFFF80260000000 ' EndAddr - &H70000000
     
     ' 初始化全局结果数组
     g_ScanResultCount = 0
     ReDim g_ScanResults(0)
-    
-    If (Not IsDriverLoaded) AndAlso (AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES) Then
-        If Not InitDriver Then
-            AfxMsg "加载失败!"
-            Return 0
-        End If
-    End If
-    
-    If Not IsDriverLoaded Then
-        Return 0
-    End If
     
     ' 计算总页数
     totalPages = ((EndAddr - StartAddr) \ PAGE_SIZE) + 1
@@ -664,6 +653,13 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     Dim scanCount As Integer = 0
     
     If bCheckHideKernelModule Then
+        If Not IsDriverLoaded Then
+            If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+            Else
+                Return
+            End If
+        End If
         scanCount = GetKernelModuleList1(scanModules())
     End If
     

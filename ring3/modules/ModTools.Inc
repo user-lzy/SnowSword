@@ -2,7 +2,7 @@
     ShutdownNoReboot '关闭系统
     ShutdownReboot '重启
     ShutdownPowerOff '关闭系统并关闭电源
-    ShutdownForceReboot '强制重启
+    ShutdownRebootForRecovery '重启并进入恢复模式
 End Enum
 
 Private Enum SystemPowerState
@@ -28,12 +28,12 @@ Private Enum PowerAction
 End Enum
 
 Declare Function ZwShutdownSystem Lib "ntdll.dll" Alias "ZwShutdownSystem"(ByVal SystemAction As SHUTDOWN_ACTION) As NTSTATUS
-Declare Function ZwInitiatePowerAction Lib "ntdll.dll" Alias "ZwInitiatePowerAction"(ByVal SystemAction As PowerAction, ByVal MinSystemState As SystemPowerState, ByVal FLAGS As Long, ByVal bFlag As BOOLEAN) As Long
+Declare Function ZwInitiatePowerAction Lib "ntdll.dll" Alias "ZwInitiatePowerAction"(ByVal SystemAction As PowerAction, ByVal MinSystemState As SystemPowerState, ByVal FLAGS As Long, ByVal bFlag As Boolean) As Long
 Declare Function ZwSetSystemPowerState Lib "ntdll.dll" Alias "ZwSetSystemPowerState"(ByVal SystemAction As PowerAction, ByVal MinSystemState As SystemPowerState, ByVal FLAGS As Long) As Long
 
 Sub MyShutdown()
-    Dim ret As BOOLEAN = NT_SUCCESS(ZwInitiatePowerAction(PowerActionShutdown, PowerSystemShutdown, 0, True)) Or _
-    NT_SUCCESS(ZwSetSystemPowerState(PowerActionShutdown, PowerSystemShutdown, 0)) Or _
+    Dim ret As Boolean = NT_SUCCESS(ZwInitiatePowerAction(PowerActionShutdown, PowerSystemShutdown, 0, True)) OrElse _
+    NT_SUCCESS(ZwSetSystemPowerState(PowerActionShutdown, PowerSystemShutdown, 0)) OrElse _
     NT_SUCCESS(ZwShutdownSystem(ShutdownNoReboot))
     If ret Then AfxMsg "普通关机成功!", "提示" Else AfxMsg "普通关机失败!", "提示"
 End Sub
@@ -52,7 +52,7 @@ Sub Reboot()
     If ret Then AfxMsg "普通重启成功!", "提示" Else AfxMsg "普通重启失败!", "提示"
 End Sub
 
-Sub ForceReboot()
+/'Sub ForceReboot()
     Dim st As NTSTATUS = ZwShutdownSystem(ShutdownForceReboot)
     If NT_SUCCESS(st) Then
         AfxMsg "强制重启成功!", "提示"
@@ -60,7 +60,7 @@ Sub ForceReboot()
         AfxMsg "强制重启失败!", "提示"
         MyLog.PrintNtError "ForceReboot", "ZwShutdownSystem", st
     End If
-End Sub
+End Sub'/
 
 Function AddUnlockFileMenu() As Boolean
     Dim hKey As HKEY

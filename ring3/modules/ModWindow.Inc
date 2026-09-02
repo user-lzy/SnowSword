@@ -115,7 +115,7 @@ Function GetProcessMemory(pid As DWORD) As SIZE_T
     Dim hProcess As HANDLE
     Dim pmc As PROCESS_MEMORY_COUNTERS
     
-    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)
+    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     If hProcess = NULL Then Return 0
     
     pmc.cb = SizeOf(PROCESS_MEMORY_COUNTERS)

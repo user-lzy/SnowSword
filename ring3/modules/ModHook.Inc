@@ -362,175 +362,596 @@ Function GetModuleByVA32(img As RemotePeImageEx, ByVal addr As ULong, _
                          ByRef modBase As ULong, _
                          ByRef modSize As ULong) As StringW
 
+    modBase = 0
+    modSize = 0
+
+    If addr = 0 Then Return ""
+
     Dim mbi As MEMORY_BASIC_INFORMATION
-    If VirtualQueryEx(img.hProc, Cast(LPCVOID, Cast(UInteger, addr)), @mbi, SizeOf(mbi)) = 0 Then Return ""
+    If VirtualQueryEx(img.hProc, Cast(LPCVOID, Cast(UInteger, addr)), @mbi, SizeOf(mbi)) = 0 Then
+        MyLog.PrintWin32Error "GetModuleByVA32", "VirtualQueryEx", "addr=" & WHex(addr)
+        Return ""
+    End If
+
+    ' 必须是映像区域
+    If mbi.Type <> MEM_IMAGE Then
+        MyLog.PrintWin32Error "GetModuleByVA32", "VirtualQueryEx", "mbi.Type <> MEM_IMAGE"
+        Return ""
+    End If
+
+    If mbi.AllocationBase = NULL Then Return ""
+
     modBase = Cast(ULong, Cast(ULONG_PTR, mbi.AllocationBase))
 
+    ' 获取模块名
     Dim path As WString * MAX_PATH
     If GetModuleFileNameExW(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
-        MyLog.PrintWin32Error "GetModuleByVA32", "GetModuleFileNameExW", "mbi.AllocationBase=" & mbi.AllocationBase
+        MyLog.PrintWin32Error "GetModuleByVA32", "GetModuleFileNameExW", _
+            "mbi.AllocationBase=" & WHex(modBase)
+        modBase = 0
         Return ""
     End If
 
     ' 读取 32 位 PE
     Dim dos As IMAGE_DOS_HEADER
-    Dim nt32 As IMAGE_NT_HEADERS32
+    If Not ReadMem(img.hProc, Cast(Any Ptr, Cast(ULONG_PTR, modBase)), @dos, SizeOf(dos)) Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "1,addr=0x" & WHex(modBase)
+        modBase = 0
+        Return ""
+    End If
 
-    If ReadMem(img.hProc, mbi.AllocationBase, @dos, SizeOf(dos)) = False Then MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", "1,addr=0x" & WHex(mbi.AllocationBase) : Return ""
-    If ReadMem(img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt32, SizeOf(nt32)) = False Then MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", "2, addr=0x" & WHex(mbi.AllocationBase + dos.e_lfanew) : Return ""
+    If dos.e_magic <> IMAGE_DOS_SIGNATURE Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "Invalid DOS signature,addr=0x" & WHex(modBase)
+        modBase = 0
+        Return ""
+    End If
+
+    If dos.e_lfanew < SizeOf(IMAGE_DOS_HEADER) OrElse dos.e_lfanew > &H100000 Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "Invalid e_lfanew=0x" & Hex(dos.e_lfanew)
+        modBase = 0
+        Return ""
+    End If
+
+    Dim nt32 As IMAGE_NT_HEADERS32
+    Dim ntAddr As ULong
+    ntAddr = modBase + Cast(ULong, dos.e_lfanew)
+
+    If ReadMem(img.hProc, Cast(Any Ptr, Cast(ULONG_PTR, ntAddr)), @nt32, SizeOf(nt32)) = False Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "2,addr=0x" & WHex(ntAddr)
+        modBase = 0
+        Return ""
+    End If
+
+    If nt32.Signature <> IMAGE_NT_SIGNATURE Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "Invalid PE signature,addr=0x" & WHex(ntAddr)
+        modBase = 0
+        Return ""
+    End If
+
+    If nt32.OptionalHeader.Magic <> IMAGE_NT_OPTIONAL_HDR32_MAGIC Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA32", "ReadMem", _
+            "Invalid PE32 magic=0x" & Hex(nt32.OptionalHeader.Magic)
+        modBase = 0
+        Return ""
+    End If
 
     modSize = nt32.OptionalHeader.SizeOfImage
+
+    If modSize = 0 Then
+        modBase = 0
+        Return ""
+    End If
+
+    ' 确认目标地址确实属于该 Image
+    If addr < modBase Then
+        modBase = 0
+        modSize = 0
+        Return ""
+    End If
+
+    If addr - modBase >= modSize Then
+        modBase = 0
+        modSize = 0
+        Return ""
+    End If
+
     Return path
 End Function
 
 Function GetModuleByVA64(img As RemotePeImageEx, ByVal addr As ULongInt, _
-                       ByRef modBase As ULongInt, _
-                       ByRef modSize As ULongInt) As StringW
-                       
+                         ByRef modBase As ULongInt, _
+                         ByRef modSize As ULongInt) As StringW
+
+    modBase = 0
+    modSize = 0
+
+    If addr = 0 Then Return ""
+
     Dim mbi As MEMORY_BASIC_INFORMATION
+
     If VirtualQueryEx(img.hProc, Cast(LPCVOID, addr), @mbi, SizeOf(MEMORY_BASIC_INFORMATION)) = 0 Then
-        MyLog.PrintWin32Error "GetModuleByVA64", "VirtualQueryEx", "addr=" & addr
+        MyLog.PrintWin32Error "GetModuleByVA64", "VirtualQueryEx", _
+            "addr=" & WHex(addr)
         Return ""
     End If
+
+    ' 必须是 MEM_IMAGE
+    If mbi.Type <> MEM_IMAGE Then
+        MyLog.PrintWin32Error "GetModuleByVA64", "VirtualQueryEx", "mbi.Type <> MEM_IMAGE"
+        Return ""
+    End If
+
+    If mbi.AllocationBase = NULL Then Return ""
 
     modBase = Cast(ULongInt, mbi.AllocationBase)
-    
+
     ' 获取模块名
     Dim path As WString * MAX_PATH
-    'Print img.hProc
+
     If GetModuleFileNameExW(img.hProc, mbi.AllocationBase, @path, MAX_PATH) = 0 Then
-        MyLog.PrintWin32Error "GetModuleByVA64", "GetModuleFileNameExA", "mbi.AllocationBase=" & mbi.AllocationBase
+        MyLog.PrintWin32Error "GetModuleByVA64", "GetModuleFileNameExW", _
+            "mbi.AllocationBase=" & WHex(modBase)
+        modBase = 0
         Return ""
     End If
 
-    ' PE 大小
-    Dim dos As IMAGE_DOS_HEADER
-    Dim nt  As IMAGE_NT_HEADERS
+    ' ------------------------------------------------------------
+    ' 读取 DOS Header
+    ' ------------------------------------------------------------
 
-    If Not ReadMem(img.hProc, mbi.AllocationBase, @dos, SizeOf(IMAGE_DOS_HEADER)) Then MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", "1,addr=0x" & WHex(mbi.AllocationBase) : Return ""
-    If Not ReadMem(img.hProc, mbi.AllocationBase + dos.e_lfanew, @nt, SizeOf(IMAGE_NT_HEADERS)) Then MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", "2,addr=0x" & WHex(mbi.AllocationBase + dos.e_lfanew) : Return ""
+    Dim dos As IMAGE_DOS_HEADER
+
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase), @dos, SizeOf(IMAGE_DOS_HEADER)) Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "1,addr=0x" & WHex(modBase)
+        modBase = 0
+        Return ""
+    End If
+
+    If dos.e_magic <> IMAGE_DOS_SIGNATURE Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "Invalid DOS signature,addr=0x" & WHex(modBase)
+        modBase = 0
+        Return ""
+    End If
+
+    ' 防止恶意/损坏 PE 导致越界地址
+    If dos.e_lfanew < SizeOf(IMAGE_DOS_HEADER) OrElse _
+       dos.e_lfanew > &H100000 Then
+
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "Invalid e_lfanew=0x" & Hex(dos.e_lfanew)
+        modBase = 0
+        Return ""
+    End If
+
+    ' ------------------------------------------------------------
+    ' 读取 NT Header
+    ' ------------------------------------------------------------
+
+    Dim nt As IMAGE_NT_HEADERS64
+    Dim ntAddr As ULongInt
+
+    ntAddr = modBase + Cast(ULongInt, dos.e_lfanew)
+
+    If Not ReadMem(img.hProc, Cast(Any Ptr, ntAddr), @nt, SizeOf(IMAGE_NT_HEADERS64)) Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "2,addr=0x" & WHex(ntAddr)
+        modBase = 0
+        Return ""
+    End If
+
+    If nt.Signature <> IMAGE_NT_SIGNATURE Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "Invalid PE signature,addr=0x" & WHex(ntAddr)
+        modBase = 0
+        Return ""
+    End If
+
+    If nt.OptionalHeader.Magic <> IMAGE_NT_OPTIONAL_HDR64_MAGIC Then
+        MyLog.PrintLog LOG_WARN, "GetModuleByVA64", "ReadMem", _
+            "Invalid PE32+ magic=0x" & Hex(nt.OptionalHeader.Magic)
+        modBase = 0
+        Return ""
+    End If
 
     modSize = nt.OptionalHeader.SizeOfImage
+
+    If modSize = 0 Then
+        modBase = 0
+        Return ""
+    End If
+
+    ' ------------------------------------------------------------
+    ' 确认目标地址属于当前 PE Image
+    ' ------------------------------------------------------------
+
+    If addr < modBase Then
+        modBase = 0
+        modSize = 0
+        Return ""
+    End If
+
+    If addr - modBase >= modSize Then
+        modBase = 0
+        modSize = 0
+        Return ""
+    End If
+
     Return path
 End Function
 
 Function ResolveFuncName(ByRef img As RemotePeImageEx, ByVal modBase As ULongInt, _
-                        ByVal rva As ULongInt, _
-                        ByRef bestName As String, _
-                        ByRef bestOffset As DWORD) As Boolean
+                         ByVal rva As ULongInt, _
+                         ByRef bestName As String, _
+                         ByRef bestOffset As DWORD) As Boolean
 
     bestName = ""
-    bestOffset = rva  ' 默认偏移
+    bestOffset = Cast(DWORD, rva)
+
+    If modBase = 0 Then Return False
+
+    If rva > &HFFFFFFFFULL Then Return False
 
     Dim dos As IMAGE_DOS_HEADER
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase), @dos, SizeOf(dos)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "1,addr=0x" & WHex(modBase) : Return False
+
+    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase), @dos, SizeOf(dos)) Then
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "1,addr=0x" & WHex(modBase)
+        Return False
+    End If
+
+    If dos.e_magic <> IMAGE_DOS_SIGNATURE Then Return False
+
+    If dos.e_lfanew < SizeOf(IMAGE_DOS_HEADER) OrElse _
+       dos.e_lfanew > &H100000 Then Return False
 
     Dim magic As WORD
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew + 24), @magic, 2) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "2,addr=0x" & WHex(modBase + dos.e_lfanew + 24) : Return False
+    Dim ntAddr As ULongInt
 
-    Dim expRVA As DWORD, dataDir As IMAGE_DATA_DIRECTORY
+    ntAddr = modBase + Cast(ULongInt, dos.e_lfanew)
 
-    If magic = &H10B Then
+    If Not ReadMem(img.hProc, Cast(Any Ptr, ntAddr + 24), @magic, 2) Then
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "2,addr=0x" & WHex(ntAddr + 24)
+        Return False
+    End If
+
+    Dim expRVA As DWORD
+    Dim dataDir As IMAGE_DATA_DIRECTORY
+
+    If magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC Then
+
         Dim nt32 As IMAGE_NT_HEADERS32
-        If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt32, SizeOf(nt32)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "3,addr=0x" & WHex(modBase + dos.e_lfanew) : Return False
+
+        If Not ReadMem(img.hProc, Cast(Any Ptr, ntAddr), @nt32, SizeOf(nt32)) Then
+            MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+                "3,addr=0x" & WHex(ntAddr)
+            Return False
+        End If
+
+        If nt32.Signature <> IMAGE_NT_SIGNATURE Then Return False
+
         expRVA = nt32.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
         dataDir = nt32.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT)
-    Else
+
+    ElseIf magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC Then
+
         Dim nt64 As IMAGE_NT_HEADERS64
-        If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dos.e_lfanew), @nt64, SizeOf(nt64)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "4,addr=0x" & WHex(modBase + dos.e_lfanew) : Return False
+
+        If Not ReadMem(img.hProc, Cast(Any Ptr, ntAddr), @nt64, SizeOf(nt64)) Then
+            MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+                "4,addr=0x" & WHex(ntAddr)
+            Return False
+        End If
+
+        If nt64.Signature <> IMAGE_NT_SIGNATURE Then Return False
+
         expRVA = nt64.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT).VirtualAddress
         dataDir = nt64.OptionalHeader.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT)
+
+    Else
+        Return False
     End If
 
     If dataDir.VirtualAddress = 0 Then Return False
+    If dataDir.SIZE < SizeOf(IMAGE_EXPORT_DIRECTORY) Then Return False
+
+    If expRVA = 0 Then Return False
 
     Dim expDir As IMAGE_EXPORT_DIRECTORY
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + dataDir.VirtualAddress), @expDir, SizeOf(IMAGE_EXPORT_DIRECTORY)) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "5,addr=0x" & WHex(modBase + dataDir.VirtualAddress) : Return False
 
-    Dim funcRVAs(expDir.NumberOfFunctions-1) As DWORD
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfFunctions), @funcRVAs(0), expDir.NumberOfFunctions * 4) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "6,addr=0x" & WHex(modBase + expDir.AddressOfFunctions) : Return False
+    If Not ReadMem( _
+        img.hProc, _
+        Cast(Any Ptr, modBase + Cast(ULongInt, expRVA)), _
+        @expDir, _
+        SizeOf(IMAGE_EXPORT_DIRECTORY)) Then
 
-    ' 遍历所有函数，找 offset<=rva 中最大的
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "5,addr=0x" & WHex(modBase + expRVA)
+        Return False
+    End If
+
+    ' 防止损坏 PE 导致巨量 Allocate
+    If expDir.NumberOfFunctions = 0 Then Return False
+    If expDir.NumberOfFunctions > &H100000 Then Return False
+
+    If expDir.NumberOfNames > &H100000 Then Return False
+
+    If expDir.AddressOfFunctions = 0 Then Return False
+
+    If expDir.NumberOfNames > 0 Then
+        If expDir.AddressOfNames = 0 OrElse _
+           expDir.AddressOfNameOrdinals = 0 Then Return False
+    End If
+
+    ' RVA 必须是 32 位范围
+    If rva > &HFFFFFFFFULL Then Return False
+
+    ' ------------------------------------------------------------
+    ' 读取函数 RVA 表
+    ' ------------------------------------------------------------
+
+    Dim funcSize As ULongInt
+    funcSize = Cast(ULongInt, expDir.NumberOfFunctions) * 4ULL
+
+    If funcSize > &H400000ULL Then Return False
+
+    Dim funcRVAs As DWORD Ptr
+
+    funcRVAs = Allocate(Cast(ULong, funcSize))
+
+    If funcRVAs = NULL Then Return False
+
+    If Not ReadMem( _
+        img.hProc, _
+        Cast(Any Ptr, modBase + expDir.AddressOfFunctions), _
+        funcRVAs, _
+        Cast(ULONG, funcSize)) Then
+
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "6,addr=0x" & WHex(modBase + expDir.AddressOfFunctions)
+
+        Deallocate(funcRVAs)
+        Return False
+    End If
+
+    ' ------------------------------------------------------------
+    ' 找到 RVA <= 目标 RVA 中最大的函数
+    ' ------------------------------------------------------------
+
     Dim bestIndex As Integer = -1
-    For i As Integer = 0 To expDir.NumberOfFunctions-1
-        If funcRVAs(i) <= rva Then
-            If bestIndex = -1 OrElse funcRVAs(i) > funcRVAs(bestIndex) Then
-                bestIndex = i
+
+    For i As Integer = 0 To expDir.NumberOfFunctions - 1
+
+        If funcRVAs[i] <> 0 Then
+
+            If funcRVAs[i] <= Cast(DWORD, rva) Then
+
+                If bestIndex = -1 OrElse _
+                   funcRVAs[i] > funcRVAs[bestIndex] Then
+
+                    bestIndex = i
+                End If
+
             End If
+
         End If
+
     Next
 
-    If bestIndex = -1 Then Return FALSE
+    If bestIndex = -1 Then
+        Deallocate(funcRVAs)
+        Return False
+    End If
+
+    ' ------------------------------------------------------------
+    ' 没有名称表
+    ' ------------------------------------------------------------
+
+    If expDir.NumberOfNames = 0 Then
+
+        bestOffset = Cast(DWORD, rva) - funcRVAs[bestIndex]
+
+        Deallocate(funcRVAs)
+
+        Return False
+    End If
+
+    ' ------------------------------------------------------------
+    ' 读取名称 RVA / Ordinal 表
+    ' ------------------------------------------------------------
+
+    Dim nameSize As ULongInt
+    Dim ordSize As ULongInt
+
+    nameSize = Cast(ULongInt, expDir.NumberOfNames) * 4ULL
+    ordSize = Cast(ULongInt, expDir.NumberOfNames) * 2ULL
+
+    If nameSize > &H400000ULL OrElse _
+       ordSize > &H200000ULL Then
+
+        Deallocate(funcRVAs)
+        Return False
+    End If
 
     Dim nameRVA As DWORD Ptr
-    Dim ordRVA  As WORD Ptr
+    Dim ordRVA As WORD Ptr
 
-    nameRVA = Allocate(expDir.NumberOfNames * 4)
-    ordRVA  = Allocate(expDir.NumberOfNames * 2)
+    nameRVA = Allocate(Cast(ULong, nameSize))
+    ordRVA = Allocate(Cast(ULong, ordSize))
 
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNames), nameRVA, expDir.NumberOfNames * 4) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "7,addr=0x" & WHex(modBase + expDir.AddressOfNames) : Return False
-    If Not ReadMem(img.hProc, Cast(Any Ptr, modBase + expDir.AddressOfNameOrdinals), ordRVA, expDir.NumberOfNames * 2) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "8,addr=0x" & WHex(modBase + expDir.AddressOfNameOrdinals) : Return False
+    If nameRVA = NULL OrElse ordRVA = NULL Then
 
-    ' 找到 bestIndex 对应的名称
-    For i As Integer = 0 To expDir.NumberOfNames-1
+        If nameRVA <> NULL Then Deallocate(nameRVA)
+        If ordRVA <> NULL Then Deallocate(ordRVA)
+
+        Deallocate(funcRVAs)
+
+        Return False
+    End If
+
+    If Not ReadMem( _
+        img.hProc, _
+        Cast(Any Ptr, modBase + expDir.AddressOfNames), _
+        nameRVA, _
+        Cast(ULONG, nameSize)) Then
+
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "7,addr=0x" & WHex(modBase + expDir.AddressOfNames)
+
+        Deallocate(nameRVA)
+        Deallocate(ordRVA)
+        Deallocate(funcRVAs)
+
+        Return False
+    End If
+
+    If Not ReadMem( _
+        img.hProc, _
+        Cast(Any Ptr, modBase + expDir.AddressOfNameOrdinals), _
+        ordRVA, _
+        Cast(ULONG, ordSize)) Then
+
+        MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+            "8,addr=0x" & WHex(modBase + expDir.AddressOfNameOrdinals)
+
+        Deallocate(nameRVA)
+        Deallocate(ordRVA)
+        Deallocate(funcRVAs)
+
+        Return False
+    End If
+
+    ' ------------------------------------------------------------
+    ' 找到 bestIndex 对应名称
+    ' ------------------------------------------------------------
+
+    For i As Integer = 0 To expDir.NumberOfNames - 1
+
         If ordRVA[i] = bestIndex Then
-            Dim namePtr As ULongInt = modBase + nameRVA[i]
+
+            Dim namePtr As ULongInt
+
+            namePtr = modBase + Cast(ULongInt, nameRVA[i])
+
+            If nameRVA[i] = 0 Then Exit For
+
             Dim buf As ZString * 256
-            If Not ReadMem(img.hProc, Cast(Any Ptr, namePtr), @buf, 256) Then MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", "9,addr=0x" & WHex(namePtr) : Return False
+
+            ' 只读 255 字节，保留 buf(255) 作为强制终止符，防止远程无 \0 字符串越界
+            If Not ReadMem( _
+                img.hProc, _
+                Cast(Any Ptr, namePtr), _
+                @buf, _
+                255) Then
+
+                MyLog.PrintLog LOG_WARN, "ResolveFuncName", "ReadMem", _
+                    "9,addr=0x" & WHex(namePtr)
+
+                Exit For
+            End If
+            buf[255] = 0
+
             bestName = buf
             Exit For
+
         End If
+
     Next
 
-    bestOffset = rva - funcRVAs(bestIndex)
+    bestOffset = Cast(DWORD, rva) - funcRVAs[bestIndex]
 
     Deallocate(nameRVA)
     Deallocate(ordRVA)
+    Deallocate(funcRVAs)
 
     Return bestName <> ""
 End Function
 
 Function GetProxyDescription32(img As RemotePeImageEx, ByVal proxyVA As ULong) As String
 
+    If proxyVA = 0 Then Return "0x0"
+    If proxyVA < &H10000 Then Return "0x" & Hex(proxyVA)
+
     Dim modBase As ULong
     Dim modSize As ULong
     Dim modPath As String
-    
+
     modPath = GetModuleByVA32(img, proxyVA, modBase, modSize)
+
     If modPath = "" Then
-        MyLog.PrintLog LOG_WARN, "GetProxyDescription32", "GetModuleByVA32", "失败"
+        MyLog.PrintLog LOG_WARN, "GetProxyDescription32", _
+            "GetModuleByVA32", "失败"
         Return "0x" & Hex(proxyVA)
     End If
 
-    Dim rva As ULong = proxyVA - modBase
-
-    Dim funcName As String
-    Dim offset As ULong
-
-    If ResolveFuncName(img, modBase, rva, funcName, offset) = False Then
-        Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "+0x" & Hex(rva)
+    If proxyVA < modBase Then
+        Return "0x" & Hex(proxyVA)
     End If
 
-    Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "!" & funcName & "+0x" & Hex(offset)
+    Dim rva As ULong
+    rva = proxyVA - modBase
+
+    If rva >= modSize Then
+        Return "0x" & Hex(proxyVA)
+    End If
+
+    Dim funcName As String
+    Dim offset As DWORD
+
+    If ResolveFuncName(img, modBase, rva, funcName, offset) = False Then
+        Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & _
+            "+0x" & Hex(rva)
+    End If
+
+    Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & _
+        "!" & funcName & "+0x" & Hex(offset)
 End Function
 
 Function GetProxyDescription64(img As RemotePeImageEx, ByVal proxyVA As ULongInt) As String
+
+    If proxyVA = 0 Then Return "0x0"
+    If proxyVA < &H10000ULL Then Return "0x" & Hex(proxyVA)
+
     Dim modBase As ULongInt
     Dim modSize As ULongInt
     Dim modPath As String
 
-    'If GetModuleByVA64(img, proxyVA, modBase, modSize, modPath) = False OrElse modPath = "" Then MyLog.PrintLog LOG_WARN, "GetProxyDescription64", "GetModuleByVA64", "失败" : Return "0x" & Hex(proxyVA)
     modPath = GetModuleByVA64(img, proxyVA, modBase, modSize)
-    If modPath = "" Then MyLog.PrintLog LOG_WARN, "GetProxyDescription64", "GetModuleByVA64", "失败" : Return "0x" & Hex(proxyVA)
-    Dim rva As ULongInt = proxyVA - modBase
+
+    If modPath = "" Then
+        MyLog.PrintLog LOG_WARN, "GetProxyDescription64", _
+            "GetModuleByVA64", "失败"
+        Return "0x" & Hex(proxyVA)
+    End If
+
+    If proxyVA < modBase Then
+        Return "0x" & Hex(proxyVA)
+    End If
+
+    Dim rva As ULongInt
+    rva = proxyVA - modBase
+
+    If rva >= modSize Then
+        Return "0x" & Hex(proxyVA)
+    End If
 
     Dim strName As String
-    Dim offset As ULong
+    Dim offset As DWORD
 
-    If ResolveFuncName(img, modBase, rva, strName, offset) = False Then Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) _ 
-    & "+0x" & Hex(rva)
+    If ResolveFuncName(img, modBase, rva, strName, offset) = False Then
+        Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & _
+            "+0x" & Hex(rva)
+    End If
 
-    Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & "!" & strName & "+0x" & Hex(offset)
+    Return Right(modPath, Len(modPath) - InStrRev(modPath, "\")) & _
+        "!" & strName & "+0x" & Hex(offset)
 End Function
 
 Function GetProxyDescription(img As RemotePeImageEx, ByVal proxyVA As ULongInt) As String

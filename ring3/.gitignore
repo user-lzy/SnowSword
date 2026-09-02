@@ -1,0 +1,37 @@
+# VisualFreeBasic and IDE state
+.vercel/
+.vs/
+*.fbp
+*.fbw
+*.prj
+*.lvw
+*.bak
+*.tmp
+*.log
+*.cache
+
+# Generated build output and debug artifacts
+release64/
+Release/
+[Rr]elease/
+[Dd]ebug/
+x64/
+*.exe
+*.dll
+*.sys
+*.pdb
+*.obj
+*.lib
+*.exp
+*.res
+*.cat
+
+# OS metadata
+Thumbs.db
+.DS_Store
+
+# Local-only files / directories
+AGENTS.md
+GIT_WORKFLOW.md
+SnowSword.txt
+TreeList/

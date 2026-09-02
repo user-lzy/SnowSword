@@ -2169,8 +2169,10 @@ NTSTATUS EnumHotkey(
                 PVOID pfnCallback = *(PVOID*)((PUCHAR)pNode + offsets.Hotkey_pfnCallback);
                 WORD vk = *(WORD*)((PUCHAR)pNode + offsets.Hotkey_vk);
                 //WORD mod = *(WORD*)((PUCHAR)pNode + offsets.Hotkey_fsModifiers);
-                WORD modLow = *(WORD*)((PUCHAR)pNode + 0x18) & 0xF;      // 低 4 位
-                WORD modHigh = *(WORD*)((PUCHAR)pNode + 0x1A) & 0x7800;   // 高位部分
+                //WORD modLow = *(WORD*)((PUCHAR)pNode + 0x18) & 0xF;      // 低 4 位
+                //WORD modHigh = *(WORD*)((PUCHAR)pNode + 0x1A) & 0x7800;   // 高位部分
+                WORD modLow = *(WORD*)((PUCHAR)pNode + offsets.Hotkey_fsModLow);
+                WORD modHigh = *(WORD*)((PUCHAR)pNode + offsets.Hotkey_fsModHigh);
                 DWORD mod = (DWORD)(modHigh | modLow);              // 组合成完整值
                 ULONG id = 0;
                 if (offsets.Hotkey_id) {

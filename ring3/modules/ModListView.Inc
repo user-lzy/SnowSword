@@ -4,6 +4,7 @@ Enum Interface
     ForegroundProcess = 0
     Process
     Module
+    GlobalModule
     Thread
     Windows
     Memory
@@ -117,22 +118,55 @@ End Type
 Type TLRow
     ColCount As Long
     Cols As Wstring Ptr Ptr
-    'Fore As COLORREF
-    'Back As COLORREF
-    'hParent As MC_HTREELISTITEM ' 无意义,切换出去后经过控件清空会变成野指针
-    'UserData As Integer
-    'iImage As Long
-    'iSelectedImage As Long
-    'iExpandedImage As Long
+
     cChildren As Long
-    Depth As Long ' 新增：节点在树中的层级（根为0）
-    Expanded As Long ' 🔥 新增：保存节点展开状态 (1=展开, 0=折叠)
+    Depth As Long
+    Expanded As Boolean
+
+    '========== 新增 ==========
+    ParentIndex As Long     '父节点索引，根节点=-1
+
+    Match As Boolean        '自身是否匹配筛选
+    Visible As Boolean      '最终是否显示
+
+    Fore As COLORREF
+    Back As COLORREF
+    HasCustomColor As Boolean
+
+    hItem As MC_HTREELISTITEM '当前UI节点句柄
 End Type
 
 ' 🔥 移除 (Any) → 纯指针
 Type TreeListSnapshot
     Rows As TLRow Ptr Ptr     ' 👈 替换 Rows(Any)
     RowCount As Long
+    
+    '========== 新增 ==========
+    VisibleIndex As Long Ptr
+    VisibleCount As Long
+End Type
+
+Type TreeListItemMap
+    Capacity As Long
+    Keys As ULONG_PTR Ptr
+    Values As Long Ptr
+End Type
+
+Type TreeListContext
+    hTreeList As hWnd
+    Snap As TreeListSnapshot Ptr
+
+    Filter As WString Ptr
+
+    ' 当前控件 hItem -> 快照行索引
+    ItemMap As TreeListItemMap Ptr
+
+    SelectedItem As MC_HTREELISTITEM
+    IsValid As Boolean
+    IsFiltering As Boolean
+    SavedSelectedIndex As Long
+    SavedTopVisibleIndex As Long
+    SavedVisibleCount As Long
 End Type
 
 ' 2. 模块缓存核心结构体：存储单个模块的所有状态
@@ -301,31 +335,38 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "路径",, 500
                 .AddColumn "会话-用户名",, 200
                 .AddColumn "命令行参数",, 500
-                .AddColumn "公司名",, 200
+                .AddColumn "公司名",, 300
             Case Module
                 .AddColumn "序号",, 50
                 .AddColumn "名称",, 200
                 .AddColumn "基址",, 230
                 .AddColumn "大小",, 150
                 .AddColumn "路径",, 500
-                .AddColumn "公司名",, 200
+                .AddColumn "公司名",, 300
+            Case GlobalModule
+                .AddColumn "进程ID",   , 80
+                .AddColumn "进程名",   , 200
+                .AddColumn "基址",     , 230
+                .AddColumn "大小",     , 150
+                .AddColumn "路径",     , 500
+                .AddColumn "公司名",   , 300
             Case Thread
                 '.AddColumn "序号",, 50
                 .AddColumn "TID",, 100
                 .AddColumn "优先级",, 120
-                .AddColumn "状态",, 100
+                .AddColumn "状态",, 200
                 .AddColumn "ETHREAD",, 270
-                .AddColumn "线程入口",, 150
-                .AddColumn "Teb",, 150
+                .AddColumn "线程入口",, 200
+                .AddColumn "Teb",, 200
                 '.AddColumn "大小",, 50
                 .AddColumn "所属模块",, 1000
-                .AddColumn "公司名",, 200
+                .AddColumn "公司名",, 300
             Case Memory
                 .AddColumn "地址",, 250
                 .AddColumn "大小",, 100
-                .AddColumn "属性",, 150
-                .AddColumn "状态",, 150
-                .AddColumn "类型",, 150
+                .AddColumn "属性",, 250
+                .AddColumn "状态",, 200
+                .AddColumn "类型",, 200
                 .AddColumn "基址",, 250
                 .AddColumn "对应模块",, 400
                 '.AddColumn "公司名",, 200
@@ -333,7 +374,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "句柄",, 150
                 .AddColumn "父窗口句柄",, 150
                 .AddColumn "名称",, 300
-                .AddColumn "当前WndProc",, 150
+                .AddColumn "当前WndProc",, 250
                 .AddColumn "类名",, 300
                 .AddColumn "TID",, 100
                 .AddColumn "所属模块",, 400
@@ -353,7 +394,7 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 '.AddColumn "属性",, 100
             Case ProcessTimer
                 .AddColumn "定时器ID",, 150
-                .AddColumn "超时时间",, 150
+                .AddColumn "超时时间",, 200
                 .AddColumn "回调地址",, 250
                 .AddColumn "所属模块",, 250
                 .AddColumn "所属窗口",, 150
@@ -375,25 +416,25 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "当前字节",, 300
                 .AddColumn "原始字节",, 300
             Case MsgHook
-                .AddColumn "hHook",, 100
-                .AddColumn "类型",, 150
+                .AddColumn "hHook",, 150
+                .AddColumn "类型",, 250
                 .AddColumn "作用域",, 200
                 .AddColumn "回调函数",, 300
-                .AddColumn "所属模块",, 350
+                .AddColumn "所属模块",, 500
                 .AddColumn "PID",, 100
                 .AddColumn "TID",, 100
             Case EventHook
-                .AddColumn "hHook",, 100
-                .AddColumn "作用域",, 200
-                .AddColumn "Flags",, 200
-                .AddColumn "回调函数",, 300
+                .AddColumn "hHook",, 150
+                .AddColumn "作用域",, 300
+                .AddColumn "Flags",, 300
+                .AddColumn "回调函数",, 250
                 .AddColumn "所属模块",, 350
                 .AddColumn "PID",, 100
                 .AddColumn "TID",, 100
                 .AddColumn "目标PID",, 100
                 .AddColumn "目标TID",, 100
             Case Hotkey
-                .AddColumn "hHotkey",, 100
+                .AddColumn "hHotkey",, 250
                 .AddColumn "热键id",, 200
                 .AddColumn "热键组合",, 300
                 .AddColumn "所属窗口",, 100
@@ -410,43 +451,43 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
             Case KernelModule
                 .AddColumn "序号",, 100
                 .AddColumn "名称",, 200
-                .AddColumn "映像基址",, 230
+                .AddColumn "映像基址",, 300
                 .AddColumn "映像大小",, 150
                 .AddColumn "路径",, 500
                 .AddColumn "驱动对象",, 230
             Case KernelThread
                 .AddColumn "TID",, 100
                 .AddColumn "优先级",, 120
-                .AddColumn "状态",, 100
+                .AddColumn "状态",, 250
                 .AddColumn "ETHREAD",, 270
-                .AddColumn "线程入口",, 150
+                .AddColumn "线程入口",, 270
                 .AddColumn "所属模块",, 500
             Case WorkItemThread
                 .AddColumn "TID",, 100
-                .AddColumn "ETHREAD",, 200
+                .AddColumn "ETHREAD",, 270
                 .AddColumn "优先级",, 100
-                .AddColumn "状态",, 100
-                .AddColumn "入口地址",, 200
-                .AddColumn "所属模块",, 250
+                .AddColumn "状态",, 250
+                .AddColumn "入口地址",, 250
+                .AddColumn "所属模块",, 500
             Case ObjectDirectory
                 .AddColumn "名称",, 300
-                .AddColumn "类型",, 150
-                .AddColumn "符号链接路径",, 300
+                .AddColumn "类型",, 200
+                .AddColumn "符号链接路径",, 500
             Case SSDT
                 .AddColumn "序号",, 100
                 .AddColumn "索引",, 100
-                .AddColumn "函数名",, 250
-                .AddColumn "当前地址",, 250
+                .AddColumn "函数名",, 350
+                .AddColumn "当前地址",, 300
                 .AddColumn "所属模块",, 500
             Case ShadowSSDT
-                .AddColumn "序号",, 100
+                .AddColumn "序号",, 150
                 .AddColumn "Hex索引",, 100
-                .AddColumn "函数名",, 250
-                .AddColumn "当前地址",, 250
+                .AddColumn "函数名",, 350
+                .AddColumn "当前地址",, 300
                 .AddColumn "所属模块",, 500
             Case Callbacks
                 .AddColumn "回调类型",, 250
-                .AddColumn "回调函数地址",, 280
+                .AddColumn "回调函数地址",, 300
                 .AddColumn "所属模块",, 500
                 .AddColumn "回调函数上下文",, 300
                 .AddColumn "备注",, 300
@@ -460,13 +501,13 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "Status",, 100
             Case WfpFilter
                 .AddColumn "FilterId",, 200
-                .AddColumn "CalloutId",, 80
+                .AddColumn "CalloutId",, 100
                 .AddColumn "名称",, 200
                 .AddColumn "Action",, 100
-                .AddColumn "Callout GUID",, 200
+                .AddColumn "Callout GUID",, 500
             Case WfpCallout
-                .AddColumn "GUID",, 200
-                .AddColumn "CalloutId",, 80
+                .AddColumn "GUID",, 500
+                .AddColumn "CalloutId",, 100
                 .AddColumn "Classify",, 300
                 .AddColumn "Notify",, 300
                 .AddColumn "FlowDelete",, 300
@@ -576,6 +617,7 @@ Sub InitializeTreeView(TreeView As Class_TreeView)
 End Sub
 
 Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeList)
+    UninitTreeListData(TreeList)
     TreeList.DeleteItem MC_TLI_ROOT
     For i As Integer = TreeList.GetColumnCount - 1 To 0 Step -1
         TreeList.DeleteColumn i
@@ -584,7 +626,7 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
     With TreeList
         Select Case FuncType
             Case GDT
-                .AddColumn "CPU", 100
+                .AddColumn "CPU", 150
                 .AddColumn "GDT Entry/Base", 250
                 .AddColumn "Limit", 100
                 .AddColumn "SEL", 100
@@ -595,7 +637,7 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
                 .AddColumn "Granularity", 100
                 .AddColumn "Description", 300
             Case IDT
-                .AddColumn "CPU", 100
+                .AddColumn "CPU", 150
                 .AddColumn "ID", 100
                 .AddColumn "函数名称", 250
                 .AddColumn "当前函数地址", 250
@@ -615,15 +657,15 @@ Sub InitializeTreeList(ByVal FuncType As Interface, TreeList As Class_mCtrlTreeL
                 .AddColumn "设备名称", 250
                 .AddColumn "设备对象地址", 250
             Case Ndis
-                .AddColumn "名称", 300
-                .AddColumn "类型", 80
-                .AddColumn "标识信息", 300
+                .AddColumn "名称", 400
+                .AddColumn "类型", 100
+                .AddColumn "标识信息", 500
                 .AddColumn "驱动 / 协议映像", 400
                 .AddColumn "地址", 200
             Case Etw
                 .AddColumn "Name", 300
                 .AddColumn "Type", 100
-                .AddColumn "ID / GUID", 300
+                .AddColumn "ID / GUID", 600
                 .AddColumn "Meta", 300
         End Select
     End With
@@ -885,6 +927,8 @@ Private Sub FreeTreeListSnapshot(ByVal snap As TreeListSnapshot Ptr)
         Next
         Deallocate snap->Rows
     End If
+
+    If snap->VisibleIndex <> 0 Then Deallocate snap->VisibleIndex
 
     Deallocate snap
     'Print "Exit FreeTreeListSnapshot"
@@ -1385,6 +1429,24 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
 End Sub
 
 Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)
+    Dim pCurrentCtx As TreeListContext Ptr = Cast(TreeListContext Ptr, _
+        GetWindowLongPtr(tls.hWnd, GWLP_USERDATA))
+    Dim pCurrentCache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+
+    ' 已绑定的快照是唯一数据源；切换模块时只同步 UI 状态，不能重新
+    ' 从筛选后的控件采集，否则会丢失隐藏节点和项颜色。
+    If pCurrentCtx <> 0 AndAlso pCurrentCtx->Snap <> 0 AndAlso _
+       pCurrentCache->pTreeListSnap = pCurrentCtx->Snap Then
+        TreeListCaptureViewState(tls, pCurrentCtx)
+        pCurrentCache->TreeList_SelectedIndex = pCurrentCtx->SavedSelectedIndex
+        pCurrentCache->TreeList_TopVisibleIndex = pCurrentCtx->SavedTopVisibleIndex
+        pCurrentCache->TreeList_SavedVisibleCount = pCurrentCtx->SavedVisibleCount
+        Exit Sub
+    End If
+
+    CaptureTreeListData(tls, moduleType)
+    Exit Sub
+
     'Print "=== [Save] Enter ==="
     
     If g_ViewCache(moduleType).pTreeListSnap <> 0 Then
@@ -1547,6 +1609,24 @@ Sub PrintExpandedItem(tls As Class_mCtrlTreeList)
     Wend
 End Sub
 Sub RestoreTreeListFromCache(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)
+    Dim pRestoreCache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If pRestoreCache = 0 OrElse pRestoreCache->IsCached = False OrElse _
+       pRestoreCache->pTreeListSnap = 0 Then
+        Exit Sub
+    End If
+
+    BindTreeListData(tls, pRestoreCache->pTreeListSnap)
+    Dim pRestoreCtx As TreeListContext Ptr = Cast(TreeListContext Ptr, _
+        GetWindowLongPtr(tls.hWnd, GWLP_USERDATA))
+    If pRestoreCtx = 0 Then Exit Sub
+
+    TreeListShowAllRows(pRestoreCtx)
+    TreeListRebuild(tls, pRestoreCtx, False, _
+        pRestoreCache->TreeList_SelectedIndex, _
+        pRestoreCache->TreeList_TopVisibleIndex, _
+        pRestoreCache->TreeList_SavedVisibleCount)
+    Exit Sub
+
     'Print "=== [Restore] Enter ==="
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
     If cache = 0 OrElse cache->IsCached = False OrElse cache->pTreeListSnap = 0 Then
@@ -2212,12 +2292,12 @@ Function AddItemColListEx CDecl ( _
     For i As Long = 0 To colCnt - 1
         Dim src As WCHAR Ptr = va_arg(ap, WCHAR Ptr)
         ap = va_next(ap, WCHAR Ptr)
-        ' 增加空指针保护
-        'If src = NULL OrElse IsBadReadPtr(src, 2) Then  ' 至少能读1个WCHAR
-        '    row->Cols[i] = CAllocate(1, SizeOf(WCHAR))  ' 分配真正的空字符串
-        'Else
+        ' 空指针/坏指针保护：至少能读 1 个 WCHAR，否则放空串，避免 lstrlenW 崩溃
+        If src = NULL OrElse IsBadReadPtr(src, 2) Then
+            row->Cols[i] = CAllocate(1, SizeOf(WCHAR))
+        Else
             row->Cols[i] = DupWStr(src)
-        'End If
+        End If
     Next
 
     Dim idx As Long = ctx->Snap->RowCount
@@ -2350,6 +2430,39 @@ Sub GetItemColor(ListView As Class_ListView, Row As Long, ByRef Fore As COLORREF
     Back = r->Back
 End Sub
 
+Function GetRawItemTextEx(ListView As Class_ListView, RealRow As Long, Col As Long) As String
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+
+    If ctx = NULL Then Return ""
+    If ctx->Snap = NULL Then Return ""
+
+    If RealRow < 0 Or RealRow >= ctx->Snap->RowCount Then Return ""
+
+    Dim r As LVRow Ptr = ctx->Snap->Rows[RealRow]
+    If r = NULL Then Return ""
+
+    If Col < 0 Or Col >= r->ColCount Then Return ""
+    If r->Cols = NULL Then Return ""
+    If r->Cols[Col] = NULL Then Return ""
+
+    Return *r->Cols[Col]
+End Function
+
+Function GetViewItemTextEx(ListView As Class_ListView, ViewRow As Long, Col As Long) As String
+    Dim ctx As ListViewContext Ptr = GetCtx(ListView)
+
+    If ctx = NULL Then Return ""
+    If ctx->Snap = NULL Then Return ""
+
+    If ViewRow < 0 Or ViewRow >= ctx->VisibleCount Then Return ""
+
+    If UBound(ctx->VisibleIndex) = -1 Then Return ""
+
+    Dim RealRow As Long = ctx->VisibleIndex(ViewRow)
+
+    Return GetRawItemTextEx(ListView, RealRow, Col)
+End Function
+
 Sub CommitListViewView(ListView As Class_ListView)
     Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
     
@@ -2377,7 +2490,7 @@ Sub CommitListViewView(ListView As Class_ListView)
 
         If Not hit Then
             For c As Long = 0 To r->ColCount - 1
-                If r->Cols[c] <> 0 Then
+                If r->Cols[c] <> 0 AndAlso IsBadReadPtr(r->Cols[c], 2) = 0 Then
                     If wcsstr(r->Cols[c], ctx->Filter) <> 0 Then
                         hit = TRUE
                         Exit For
@@ -2512,6 +2625,737 @@ Sub UninitListViewData(ListView As Class_ListView)
     'Deallocate(ctx)
     Delete ctx
 End Sub
+
+' TreeList
+
+Private Function TreeListGetContext(ByVal hTreeList As HWND) As TreeListContext Ptr
+    Return Cast(TreeListContext Ptr, GetWindowLongPtr(hTreeList, GWLP_USERDATA))
+End Function
+
+Private Sub TreeListFreeItemMap(ByVal ctx As TreeListContext Ptr)
+    If ctx = 0 OrElse ctx->ItemMap = 0 Then Exit Sub
+    If ctx->ItemMap->Keys <> 0 Then Deallocate ctx->ItemMap->Keys
+    If ctx->ItemMap->Values <> 0 Then Deallocate ctx->ItemMap->Values
+    Deallocate ctx->ItemMap
+    ctx->ItemMap = 0
+End Sub
+
+Private Function TreeListMapCapacity(ByVal count As Long) As Long
+    Dim capacity As Long = 16
+    While capacity < count * 2
+        capacity *= 2
+    Wend
+    Return capacity
+End Function
+
+Private Sub TreeListMapPut(ByVal ctx As TreeListContext Ptr, _
+    ByVal hItem As MC_HTREELISTITEM, ByVal rowIndex As Long)
+
+    If ctx = 0 OrElse ctx->ItemMap = 0 OrElse hItem = 0 Then Exit Sub
+
+    Dim key As ULONG_PTR = Cast(ULONG_PTR, hItem)
+    Dim slot As Long = Cast(Long, (key Shr 4) And (ctx->ItemMap->Capacity - 1))
+    While ctx->ItemMap->Keys[slot] <> 0 AndAlso ctx->ItemMap->Keys[slot] <> key
+        slot = (slot + 1) And (ctx->ItemMap->Capacity - 1)
+    Wend
+
+    ctx->ItemMap->Keys[slot] = key
+    ctx->ItemMap->Values[slot] = rowIndex
+End Sub
+
+Private Function TreeListMapFind(ByVal ctx As TreeListContext Ptr, _
+    ByVal hItem As MC_HTREELISTITEM) As Long
+
+    If ctx = 0 OrElse ctx->ItemMap = 0 OrElse hItem = 0 Then Return -1
+
+    Dim key As ULONG_PTR = Cast(ULONG_PTR, hItem)
+    Dim slot As Long = Cast(Long, (key Shr 4) And (ctx->ItemMap->Capacity - 1))
+    Dim firstSlot As Long = slot
+    While ctx->ItemMap->Keys[slot] <> 0
+        If ctx->ItemMap->Keys[slot] = key Then Return ctx->ItemMap->Values[slot]
+        slot = (slot + 1) And (ctx->ItemMap->Capacity - 1)
+        If slot = firstSlot Then Exit While
+    Wend
+
+    Return -1
+End Function
+
+Private Sub TreeListRebuildItemMap(ByVal ctx As TreeListContext Ptr)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    TreeListFreeItemMap(ctx)
+
+    Dim itemCount As Long = 0
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        If ctx->Snap->Rows[i] <> 0 AndAlso ctx->Snap->Rows[i]->hItem <> 0 Then
+            itemCount += 1
+        End If
+    Next
+    If itemCount = 0 Then Exit Sub
+
+    ctx->ItemMap = Callocate(1, SizeOf(TreeListItemMap))
+    If ctx->ItemMap = 0 Then Exit Sub
+
+    ctx->ItemMap->Capacity = TreeListMapCapacity(itemCount)
+    ctx->ItemMap->Keys = Callocate(ctx->ItemMap->Capacity, SizeOf(ULONG_PTR))
+    ctx->ItemMap->Values = Callocate(ctx->ItemMap->Capacity, SizeOf(Long))
+    If ctx->ItemMap->Keys = 0 OrElse ctx->ItemMap->Values = 0 Then
+        TreeListFreeItemMap(ctx)
+        Exit Sub
+    End If
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row <> 0 AndAlso row->hItem <> 0 Then TreeListMapPut(ctx, row->hItem, i)
+    Next
+End Sub
+
+Private Function TreeListContainsIgnoreCase(ByVal source As WCHAR Ptr, _
+    ByVal text As WCHAR Ptr) As Boolean
+
+    If text = 0 OrElse *text = 0 Then Return True
+    If source = 0 Then Return False
+
+    Dim sourceLength As Long = lstrlenW(source)
+    Dim textLength As Long = lstrlenW(text)
+    If sourceLength < textLength Then Return False
+
+    For i As Long = 0 To sourceLength - textLength
+        Dim pCurrent As WCHAR Ptr = Cast(WCHAR Ptr, _
+            Cast(ULONG_PTR, source) + i * SizeOf(WCHAR))
+        If CompareStringW(LOCALE_INVARIANT, NORM_IGNORECASE, _
+            pCurrent, textLength, text, textLength) = 2 Then
+            Return True
+        End If
+    Next
+
+    Return False
+End Function
+
+Private Sub TreeListUpdateMatchesAndVisibility(ByVal ctx As TreeListContext Ptr)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    ctx->Snap->VisibleCount = 0
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row = 0 Then Continue For
+
+        row->Match = (ctx->Filter = 0)
+        If Not row->Match Then
+            For columnIndex As Long = 0 To row->ColCount - 1
+                If row->Cols[columnIndex] <> 0 AndAlso _
+                   TreeListContainsIgnoreCase(row->Cols[columnIndex], ctx->Filter) Then
+                    row->Match = True
+                    Exit For
+                End If
+            Next
+        End If
+        row->Visible = row->Match
+    Next
+
+    ' DFS 快照是父节点在子节点之前。倒序传播一次即可把可见状态传到祖先，
+    ' 不需要旧实现的 N^2 子节点扫描。
+    For i As Long = ctx->Snap->RowCount - 1 To 0 Step -1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row = 0 OrElse Not row->Visible Then Continue For
+        If row->ParentIndex >= 0 AndAlso row->ParentIndex < ctx->Snap->RowCount Then
+            Dim parentRow As TLRow Ptr = ctx->Snap->Rows[row->ParentIndex]
+            If parentRow <> 0 Then parentRow->Visible = True
+        End If
+    Next
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        If ctx->Snap->Rows[i] <> 0 AndAlso ctx->Snap->Rows[i]->Visible Then
+            ctx->Snap->VisibleCount += 1
+        End If
+    Next
+End Sub
+
+Sub TreeListShowAllRows(ByVal ctx As TreeListContext Ptr)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+    ctx->Snap->VisibleCount = 0
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row <> 0 Then
+            row->Match = True
+            row->Visible = True
+            ctx->Snap->VisibleCount += 1
+        End If
+    Next
+End Sub
+
+Sub TreeListCaptureViewState(ByVal tl As Class_mCtrlTreeList, _
+    ByVal ctx As TreeListContext Ptr)
+
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    If Not ctx->IsFiltering Then
+        For i As Long = 0 To ctx->Snap->RowCount - 1
+            Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+            If row <> 0 AndAlso row->hItem <> 0 Then
+                row->Expanded = IsItemExpanded(tl, row->hItem)
+            End If
+        Next
+
+        ctx->SavedSelectedIndex = TreeListMapFind(ctx, tl.Selection)
+        Dim hTop As MC_HTREELISTITEM = tl.GetNextItem(NULL, MC_TLGN_FIRSTVISIBLE)
+        ctx->SavedTopVisibleIndex = TreeListMapFind(ctx, hTop)
+        ctx->SavedVisibleCount = tl.GetVisibleCount()
+    End If
+End Sub
+
+Private Sub TreeListRestorePosition(ByVal tl As Class_mCtrlTreeList, _
+    ByVal ctx As TreeListContext Ptr, ByVal selectedIndex As Long, _
+    ByVal topIndex As Long, ByVal visibleRows As Long)
+
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    If topIndex >= 0 AndAlso topIndex < ctx->Snap->RowCount Then
+        Dim topRow As TLRow Ptr = ctx->Snap->Rows[topIndex]
+        If topRow <> 0 AndAlso topRow->hItem <> 0 Then
+            Dim scrollItem As MC_HTREELISTITEM = topRow->hItem
+            Dim remainingRows As Long = visibleRows - 1
+            While remainingRows > 0 AndAlso scrollItem <> 0
+                Dim nextVisible As MC_HTREELISTITEM = _
+                    tl.GetNextItem(scrollItem, MC_TLGN_NEXTVISIBLE)
+                If nextVisible = 0 Then Exit While
+                scrollItem = nextVisible
+                remainingRows -= 1
+            Wend
+            If scrollItem <> 0 Then tl.EnsureVisible(scrollItem)
+        End If
+    End If
+
+    If selectedIndex >= 0 AndAlso selectedIndex < ctx->Snap->RowCount Then
+        Dim selectedRow As TLRow Ptr = ctx->Snap->Rows[selectedIndex]
+        If selectedRow <> 0 AndAlso selectedRow->hItem <> 0 Then
+            tl.Selection = selectedRow->hItem
+            tl.EnsureVisible(selectedRow->hItem)
+        End If
+    End If
+End Sub
+
+Sub TreeListRebuild(ByVal tl As Class_mCtrlTreeList, _
+    ByVal ctx As TreeListContext Ptr, ByVal expandAll As Boolean, _
+    ByVal selectedIndex As Long, ByVal topIndex As Long, ByVal visibleRows As Long)
+
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    tl.ReDraw = False
+    tl.DeleteItem(MC_TLI_ROOT)
+    TreeListFreeItemMap(ctx)
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        If ctx->Snap->Rows[i] <> 0 Then ctx->Snap->Rows[i]->hItem = 0
+    Next
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row = 0 OrElse Not row->Visible Then Continue For
+
+        Dim hParent As MC_HTREELISTITEM = MC_TLI_ROOT
+        If row->ParentIndex >= 0 AndAlso row->ParentIndex < ctx->Snap->RowCount Then
+            Dim parentRow As TLRow Ptr = ctx->Snap->Rows[row->ParentIndex]
+            If parentRow = 0 OrElse parentRow->hItem = 0 Then Continue For
+            hParent = parentRow->hItem
+        End If
+
+        Dim itemText As StringW = ""
+        If row->Cols <> 0 AndAlso row->Cols[0] <> 0 Then itemText = *row->Cols[0]
+        row->hItem = tl.AddItem(hParent, itemText, i)
+        If row->hItem = 0 Then Continue For
+
+        For columnIndex As Long = 1 To row->ColCount - 1
+            If row->Cols[columnIndex] <> 0 Then
+                tl.SetItemText(row->hItem, columnIndex, *row->Cols[columnIndex])
+            End If
+        Next
+    Next
+
+    For i As Long = 0 To ctx->Snap->RowCount - 1
+        Dim row As TLRow Ptr = ctx->Snap->Rows[i]
+        If row = 0 OrElse row->hItem = 0 Then Continue For
+        If expandAll OrElse row->Expanded Then tl.Expand(row->hItem, MC_TLE_EXPAND, 0)
+    Next
+
+    TreeListRebuildItemMap(ctx)
+    tl.ReDraw = True
+    InvalidateRect(tl.hWnd, NULL, True)
+    TreeListRestorePosition(tl, ctx, selectedIndex, topIndex, visibleRows)
+End Sub
+
+Private Function TreeListCreateSnapshot(ByVal tl As Class_mCtrlTreeList) As TreeListSnapshot Ptr
+    Dim totalCount As Long = 0
+    Dim currentItem As MC_HTREELISTITEM = tl.GetRoot()
+    While currentItem <> 0
+        totalCount += 1
+        Dim childItem As MC_HTREELISTITEM = tl.GetNextItem(currentItem, MC_TLGN_CHILD)
+        If childItem <> 0 Then
+            currentItem = childItem
+            Continue While
+        End If
+        Dim siblingItem As MC_HTREELISTITEM = tl.GetNextItem(currentItem, MC_TLGN_NEXT)
+        If siblingItem <> 0 Then
+            currentItem = siblingItem
+            Continue While
+        End If
+        Do While currentItem <> 0
+            siblingItem = tl.GetNextItem(currentItem, MC_TLGN_NEXT)
+            If siblingItem <> 0 Then
+                currentItem = siblingItem
+                Exit Do
+            End If
+            currentItem = tl.GetNextItem(currentItem, MC_TLGN_PARENT)
+        Loop
+    Wend
+    If totalCount = 0 Then Return 0
+
+    Dim snap As TreeListSnapshot Ptr = Callocate(1, SizeOf(TreeListSnapshot))
+    If snap = 0 Then Return 0
+    snap->RowCount = totalCount
+    snap->Rows = Callocate(totalCount, SizeOf(TLRow Ptr))
+    If snap->Rows = 0 Then
+        FreeTreeListSnapshot(snap)
+        Return 0
+    End If
+
+    Dim parentStack As Long Ptr = Callocate(totalCount, SizeOf(Long))
+    If parentStack = 0 Then
+        FreeTreeListSnapshot(snap)
+        Return 0
+    End If
+
+    Dim columnCount As Long = tl.GetColumnCount()
+    If columnCount <= 0 Then columnCount = 1
+    Dim index As Long = 0
+    Dim depth As Long = 0
+    currentItem = tl.GetRoot()
+
+    While currentItem <> 0 AndAlso index < totalCount
+        Dim row As TLRow Ptr = Callocate(1, SizeOf(TLRow))
+        If row = 0 Then Exit While
+        row->ColCount = columnCount
+        row->Cols = Callocate(columnCount, SizeOf(WString Ptr))
+        If row->Cols = 0 Then
+            Deallocate row
+            Exit While
+        End If
+
+        For columnIndex As Long = 0 To columnCount - 1
+            Dim itemText As StringW = tl.GetItemText(currentItem, columnIndex)
+            row->Cols[columnIndex] = DupWStr(StrPtrW(itemText))
+        Next
+
+        row->Depth = depth
+        If depth > 0 Then
+            row->ParentIndex = parentStack[depth - 1]
+        Else
+            row->ParentIndex = -1
+        End If
+        parentStack[depth] = index
+        row->cChildren = IIf(tl.GetChildCount(currentItem) > 0, 1, 0)
+        row->Expanded = IsItemExpanded(tl, currentItem)
+        row->Match = True
+        row->Visible = True
+        row->hItem = currentItem
+        snap->Rows[index] = row
+        index += 1
+
+        Dim childItem As MC_HTREELISTITEM = tl.GetNextItem(currentItem, MC_TLGN_CHILD)
+        If childItem <> 0 Then
+            depth += 1
+            currentItem = childItem
+            Continue While
+        End If
+
+        Dim siblingItem As MC_HTREELISTITEM = tl.GetNextItem(currentItem, MC_TLGN_NEXT)
+        If siblingItem <> 0 Then
+            currentItem = siblingItem
+            Continue While
+        End If
+
+        Do
+            currentItem = tl.GetNextItem(currentItem, MC_TLGN_PARENT)
+            If currentItem = 0 Then
+                depth = 0
+                Exit Do
+            End If
+            depth -= 1
+            siblingItem = tl.GetNextItem(currentItem, MC_TLGN_NEXT)
+            If siblingItem <> 0 Then
+                currentItem = siblingItem
+                Exit Do
+            End If
+        Loop
+    Wend
+
+    Deallocate parentStack
+    If index <> totalCount Then
+        FreeTreeListSnapshot(snap)
+        Return 0
+    End If
+
+    snap->VisibleCount = totalCount
+    Return snap
+End Function
+
+Sub UninitTreeListData(ByVal tl As Class_mCtrlTreeList)
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    If ctx = 0 Then Exit Sub
+
+    TreeListFreeItemMap(ctx)
+    If ctx->Filter <> 0 Then Deallocate ctx->Filter
+    SetWindowLongPtr(tl.hWnd, GWLP_USERDATA, 0)
+    Delete ctx
+End Sub
+
+Sub BindTreeListData(ByVal tl As Class_mCtrlTreeList, ByVal snap As TreeListSnapshot Ptr)
+    UninitTreeListData(tl)
+    If snap = 0 Then Exit Sub
+
+    Dim ctx As TreeListContext Ptr = New TreeListContext
+    If ctx = 0 Then Exit Sub
+
+    ctx->hTreeList = tl.hWnd
+    ctx->Snap = snap
+    ctx->IsValid = True
+    ctx->SavedSelectedIndex = -1
+    ctx->SavedTopVisibleIndex = -1
+    ctx->SavedVisibleCount = 0
+    SetWindowLongPtr(tl.hWnd, GWLP_USERDATA, Cast(LONG_PTR, ctx))
+    TreeListRebuildItemMap(ctx)
+End Sub
+
+Sub CaptureTreeListData(ByVal tl As Class_mCtrlTreeList, ByVal moduleType As Interface)
+    Dim snap As TreeListSnapshot Ptr = TreeListCreateSnapshot(tl)
+    UninitTreeListData(tl)
+
+    Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
+    If cache->pTreeListSnap <> 0 Then FreeTreeListSnapshot(cache->pTreeListSnap)
+    cache->pTreeListSnap = snap
+    cache->IsCached = IIf(snap <> 0, True, False)
+    cache->ItemCount = IIf(snap <> 0, snap->RowCount, 0)
+    cache->TreeList_SelectedIndex = -1
+    cache->TreeList_TopVisibleIndex = -1
+    cache->TreeList_SavedVisibleCount = tl.GetVisibleCount()
+    If snap = 0 Then Exit Sub
+
+    BindTreeListData(tl, snap)
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    TreeListCaptureViewState(tl, ctx)
+    cache->TreeList_SelectedIndex = ctx->SavedSelectedIndex
+    cache->TreeList_TopVisibleIndex = ctx->SavedTopVisibleIndex
+    cache->TreeList_SavedVisibleCount = ctx->SavedVisibleCount
+End Sub
+
+Function GetTreeListVisibleItemCount(ByVal tl As Class_mCtrlTreeList) As Long
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Return 0
+    Return ctx->Snap->VisibleCount
+End Function
+
+Function TreeListCustomDraw(ByVal lParam As LPARAM) As LRESULT
+    Dim cd As MC_NMTLCUSTOMDRAW Ptr = Cast(MC_NMTLCUSTOMDRAW Ptr, lParam)
+    If cd = 0 Then Return CDRF_DODEFAULT
+
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(cd->nmcd.hdr.hwndFrom)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Return CDRF_DODEFAULT
+
+    Select Case cd->nmcd.dwDrawStage
+        Case CDDS_PREPAINT
+            Return CDRF_NOTIFYITEMDRAW
+        Case CDDS_ITEMPREPAINT
+            Return CDRF_NOTIFYSUBITEMDRAW
+        Case CDDS_ITEMPREPAINT Or CDDS_SUBITEM
+            Dim hItem As MC_HTREELISTITEM = Cast(MC_HTREELISTITEM, cd->nmcd.dwItemSpec)
+            Dim rowIndex As Long = TreeListMapFind(ctx, hItem)
+            If rowIndex < 0 Then rowIndex = Cast(Long, cd->nmcd.lItemlParam)
+            If rowIndex < 0 OrElse rowIndex >= ctx->Snap->RowCount Then Return CDRF_DODEFAULT
+            Dim row As TLRow Ptr = ctx->Snap->Rows[rowIndex]
+            If row = 0 OrElse Not row->HasCustomColor Then Return CDRF_DODEFAULT
+            cd->clrText = row->Fore
+            cd->clrTextBk = row->Back
+    End Select
+
+    Return CDRF_DODEFAULT
+End Function
+
+Sub InitTreeListData( _
+    tl As Class_mCtrlTreeList, _
+    snap As TreeListSnapshot Ptr)
+    BindTreeListData(tl, snap)
+End Sub
+
+Sub BuildTreeListItems( _
+    tl As Class_mCtrlTreeList, _
+    snap As TreeListSnapshot Ptr)
+    BindTreeListData(tl, snap)
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    TreeListShowAllRows(ctx)
+    TreeListRebuild(tl, ctx, False, -1, -1, 0)
+End Sub
+
+Sub CommitTreeListView( _
+    tl As Class_mCtrlTreeList)
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    TreeListUpdateMatchesAndVisibility(ctx)
+    TreeListRebuild(tl, ctx, ctx->Filter <> 0, -1, -1, 0)
+End Sub
+
+Sub UpdateTreeMatch( _
+    ctx As TreeListContext Ptr)
+
+
+    For i As Long=0 To _
+        ctx->Snap->RowCount-1
+
+
+        Dim row As TLRow Ptr
+
+        row=ctx->Snap->Rows[i]
+
+
+        row->Match=False
+
+
+
+        If ctx->Filter=NULL Then
+
+            row->Match=True
+
+
+        Else
+
+
+            For c As Long=0 To row->ColCount-1
+
+
+                If row->Cols[c]<>NULL Then
+
+
+                    If wcsstr( _
+                        row->Cols[c], _
+                        ctx->Filter)<>NULL Then
+
+
+                        row->Match=True
+
+                        Exit For
+
+                    End If
+
+                End If
+
+
+            Next
+
+
+        End If
+
+
+    Next
+
+
+End Sub
+
+Function UpdateTreeVisibleNode( _
+    ctx As TreeListContext Ptr, _
+    index As Long) As Boolean
+
+
+
+    Dim row As TLRow Ptr
+
+    row=ctx->Snap->Rows[index]
+
+
+
+    Dim visible As Boolean
+
+    visible=row->Match
+
+
+
+    For i As Long=0 To _
+        ctx->Snap->RowCount-1
+
+
+
+        If ctx->Snap->Rows[i]->ParentIndex=index Then
+
+
+            If UpdateTreeVisibleNode(ctx,i) Then
+
+                visible=True
+
+            End If
+
+
+        End If
+
+
+    Next
+
+
+
+    row->Visible=visible
+
+
+    Return visible
+
+
+End Function
+
+Sub UpdateTreeVisible( _
+    ctx As TreeListContext Ptr)
+
+
+    For i As Long=0 To _
+        ctx->Snap->RowCount-1
+
+
+        If ctx->Snap->Rows[i]->ParentIndex=-1 Then
+
+            UpdateTreeVisibleNode(ctx,i)
+
+        End If
+
+
+    Next
+
+
+End Sub
+
+Sub SetTreeListFilter( _
+    tl As Class_mCtrlTreeList, _
+    text As WString)
+    Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    If Len(text) = 0 AndAlso ctx->Filter = 0 AndAlso (Not ctx->IsFiltering) Then Exit Sub
+
+    Dim currentSelection As Long = TreeListMapFind(ctx, tl.Selection)
+    If Len(text) > 0 AndAlso Not ctx->IsFiltering Then
+        TreeListCaptureViewState(tl, ctx)
+        ctx->IsFiltering = True
+    End If
+
+    If ctx->Filter <> 0 Then
+        Deallocate ctx->Filter
+        ctx->Filter = 0
+    End If
+    If Len(text) > 0 Then ctx->Filter = DupWStr(StrPtrW(text))
+
+    If ctx->Filter = 0 Then
+        ctx->IsFiltering = False
+        TreeListShowAllRows(ctx)
+        TreeListRebuild(tl, ctx, False, ctx->SavedSelectedIndex, _
+            ctx->SavedTopVisibleIndex, ctx->SavedVisibleCount)
+    Else
+        TreeListUpdateMatchesAndVisibility(ctx)
+        If currentSelection < 0 OrElse currentSelection >= ctx->Snap->RowCount Then
+            currentSelection = -1
+        ElseIf ctx->Snap->Rows[currentSelection] = 0 OrElse _
+               Not ctx->Snap->Rows[currentSelection]->Visible Then
+            currentSelection = -1
+        End If
+        TreeListRebuild(tl, ctx, True, currentSelection, _
+            ctx->SavedTopVisibleIndex, ctx->SavedVisibleCount)
+    End If
+End Sub
+
+Sub SetTreeListItemColor( _
+    tl As Class_mCtrlTreeList, _
+    hItem As MC_HTREELISTITEM, _
+    fore As COLORREF, _
+    back As COLORREF)
+
+
+    Dim ctx As TreeListContext Ptr
+
+    ctx=TreeListGetContext(tl.hWnd)
+    If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
+
+    Dim rowIndex As Long = TreeListMapFind(ctx, hItem)
+    If rowIndex < 0 OrElse rowIndex >= ctx->Snap->RowCount Then Exit Sub
+    Dim row As TLRow Ptr = ctx->Snap->Rows[rowIndex]
+    If row = 0 Then Exit Sub
+    row->Fore = fore
+    row->Back = back
+    row->HasCustomColor = True
+    InvalidateRect(tl.hWnd, NULL, True)
+End Sub
+
+Function TreeListGetDispInfo( _
+    lParam As LPARAM) As LRESULT
+
+
+    Dim p As MC_NMTLDISPINFOW Ptr
+
+    p=Cast(MC_NMTLDISPINFOW Ptr,lParam)
+    If p = 0 Then Return 0
+
+
+
+    Dim ctx As TreeListContext Ptr
+
+    ctx=Cast(TreeListContext Ptr, _
+        GetWindowLongPtr( _
+        p->hdr.hwndFrom, _
+        GWLP_USERDATA))
+
+
+    If ctx=NULL Then Return 0
+
+
+
+    Dim row As TLRow Ptr
+
+    Dim rowIndex As Long = TreeListMapFind(ctx, p->hItem)
+    If rowIndex < 0 OrElse rowIndex >= ctx->Snap->RowCount Then Return 0
+    row=ctx->Snap->Rows[rowIndex]
+
+
+
+    If row=NULL Then Return 0
+
+
+
+    '这里根据MC_TLITEMW定义填写
+
+    p->item.pszText=row->Cols[0]
+
+
+
+    Return 0
+
+
+End Function
+
+Function FindTLRow( _
+    hItem As MC_HTREELISTITEM) As TLRow Ptr
+
+
+    Dim ctx As TreeListContext Ptr = 0
+    If ctx = 0 Then Return NULL
+
+
+    For i As Long=0 To ctx->Snap->RowCount-1
+
+        If ctx->Snap->Rows[i]->hItem=hItem Then
+
+            Return ctx->Snap->Rows[i]
+
+        End If
+
+    Next
+
+
+    Return NULL
+
+End Function
 
 Sub SetListViewItemBackColor(ListView As Class_ListView, ByVal ItemIndex As Integer, ByVal ItemColor As COLORREF)
     '设置背景色
@@ -2708,4 +3552,67 @@ Function GetNodeByText( _
 ) As HTREEITEM
     
     Return GetNodeByTextRecursive(MyTreeView.hWnd, TVI_ROOT, searchText, bExactMatch, bCaseSensitive)
+End Function
+
+Function FindProcessInListView Overload(ListView As Class_ListView, ByVal PID As DWORD) As Boolean
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If ValUInt(GetViewItemTextEx(ListView, i, 0)) = PID Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    FrmMain.lblNum.Caption = "正在刷新..."
+    GetProcessList ListView, GetMenuCheckState(FrmMain.mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
+    FrmMain.lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If ValUInt(GetViewItemTextEx(ListView, i, 0)) = PID Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    Return False
+End Function
+
+Function FindProcessInListView Overload(ListView As Class_ListView, ProcessPath As StringW) As Boolean
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If UCaseW(GetViewItemTextEx(ListView, i, 4)) = UCaseW(ProcessPath) Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    FrmMain.lblNum.Caption = "正在刷新..."
+    GetProcessList ListView, GetMenuCheckState(FrmMain.mnuProcess, FrmMain_mnuProcess_mnuCheckHideProcess)
+    FrmMain.lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If UCaseW(GetViewItemTextEx(ListView, i, 4)) = UCaseW(ProcessPath) Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    Return False
+End Function
+
+Function FindDriverInListView(ListView As Class_ListView, DriverPath As StringW) As Boolean
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If UCaseW(GetViewItemTextEx(ListView, i, 4)) = UCaseW(DriverPath) Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    FrmMain.lblNum.Caption = "正在刷新..."
+    GetKernelModuleList ListView, GetMenuCheckState(FrmMain.mnuKernelModule, FrmMain_mnuKernelModule_mnuCheckHideDriver)
+    FrmMain.lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+    For i As Integer = 0 To ListView.ItemCount - 1
+        If UCaseW(GetViewItemTextEx(ListView, i, 4)) = UCaseW(DriverPath) Then
+            ListView.SelectedItem = i
+            ListView_EnsureVisible(ListView.hWnd, i, False)
+            Return True
+        End If
+    Next
+    Return False
 End Function

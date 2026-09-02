@@ -1322,9 +1322,11 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
                 Dim strModulePath As WString * MAX_PATH
                 GetModuleByAddress 4, threadInfo->StartAddress, @strModulePath
                 'Print "线程ID: " & threadInfo->ClientID.UniqueThread & ", 切换次数: " & threadInfo->ContextSwitchCount & ", 起始地址:0x" & WHex(threadInfo->StartAddress)
-                AddItemColListEx lvwKernelThread, 6,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
+                Dim ItemIndex As Integer = AddItemColListEx(lvwKernelThread, 6,,, WStr(Cast(UInteger, threadInfo->ClientID.UniqueThread)), WStr(threadInfo->Priority), _
                 WStr(ThreadStateToString(Cast(DWORD, Cast(UInteger, ThreadInfo->ClientID.UniqueThread)), ThreadInfo->ThreadState, ThreadInfo->WaitReason)), _
-                WStr(strEThread), WStr("0x" & WHex(threadInfo->StartAddress)), WStr(strModulePath)
+                WStr(strEThread), WStr("0x" & WHex(ThreadInfo->StartAddress)), WStr(strModulePath))
+                VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, strModulePath
+                
                 threadInfo += 1
                 FF_DoEvents
             Next
@@ -1457,6 +1459,44 @@ End Sub
 
 Const CONTEXT_SIZE_X64 = 1232
 
+Type RUNTIME_FUNCTION_X64
+    BeginAddress As DWORD
+    EndAddress   As DWORD
+    UnwindData   As DWORD
+End Type
+
+Function StackWalkReadMemory( _
+    hProcess As HANDLE, _
+    lpBaseAddress As DWORD64, _
+    lpBuffer As Any Ptr, _
+    nSize As DWORD, _
+    lpNumberOfBytesRead As LPDWORD _
+) As BOOL
+
+    If lpNumberOfBytesRead = NULL Then Return FALSE
+
+    Dim bytesRead As SIZE_T = 0
+
+    If ReadProcessMemory( _
+        hProcess, _
+        CPtr(Any Ptr, lpBaseAddress), _
+        lpBuffer, _
+        nSize, _
+        @bytesRead) = 0 Then
+
+        *lpNumberOfBytesRead = 0
+        Return FALSE
+    End If
+
+    If bytesRead > &HFFFFFFFFULL Then
+        *lpNumberOfBytesRead = nSize
+    Else
+        *lpNumberOfBytesRead = CUInt(bytesRead)
+    End If
+
+    Return TRUE
+End Function
+
 Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As Class_ListView)
     Const MAX_STACK_FRAMES = 20
     Dim hProcess As HANDLE = NULL
@@ -1464,6 +1504,7 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     Dim ctxBuf As Byte Ptr
     Dim ctx As CONTEXT Ptr
     Dim sf As STACKFRAME64
+    ZeroMemory(@sf, SizeOf(sf))
     Dim prevSuspend As DWORD = 0
     Dim bNeedResume As Boolean = False
     
@@ -1472,12 +1513,12 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     ' ---------- 1. 分配 16 字节对齐的 CONTEXT 缓冲区 ----------
     ctxBuf = Allocate(CONTEXT_SIZE_X64 + 16)
     If ctxBuf = NULL Then
-        MyLog.PrintLog LOG_ERROR, "GetCallStack", "Allocate failed"
+        MyLog.PrintLog LOG_ERROR, "GetCallStack", "Allocate"
         Goto cleanup
     End If
     
-    ' 向上取整到 16 字节边界
-    ctx = CPtr(CONTEXT Ptr, (CInt(ctxBuf) + 15) And Not 15)
+    ' 向上取整到 16 字节边界（必须用 64 位整数运算，避免指针截断）
+    ctx = CPtr(CONTEXT Ptr, ((Cast(ULONG_PTR, ctxBuf) + 15) And (Not 15)))
     ZeroMemory(ctx, CONTEXT_SIZE_X64)
     ctx->ContextFlags = CONTEXT_FULL   ' &H10001F 也可以
     
@@ -1499,7 +1540,7 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     End If
     
     If hProcess = NULL Or hThread = NULL Then
-        MyLog.PrintLog LOG_ERROR, "GetCallStack", "Open failed"
+        MyLog.PrintLog LOG_ERROR, "GetCallStack",, "Open failed"
         GoTo cleanup
     End If
     
@@ -1513,7 +1554,6 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     
     If GetThreadContext(hThread, ctx) = 0 Then
         MyLog.PrintWin32Error "GetCallStack", "GetThreadContext", "hThread=0x" & WHex(hThread)
-        AfxMsg "1"
         Goto cleanup
     End If
     
@@ -1527,26 +1567,47 @@ Sub GetCallStack(ByVal PID As DWORD, ByVal TID As DWORD, lvwThreadCallStack As C
     
     ' ---------- 5. 栈回溯 ----------
     For i As Integer = 1 To MAX_STACK_FRAMES
-        If StackWalk64(IMAGE_FILE_MACHINE_AMD64, hProcess, hThread, @sf, ctx, CPtr(PREAD_PROCESS_MEMORY_ROUTINE64, @ReadProcessMemory), _
+        If StackWalk64(IMAGE_FILE_MACHINE_AMD64, hProcess, hThread, @sf, ctx, CPtr(PREAD_PROCESS_MEMORY_ROUTINE64, @StackWalkReadMemory), _
         @SymFunctionTableAccess64, @SymGetModuleBase64, 0) = 0 Then Exit For
         
         If sf.AddrPC.Offset = 0 Then Exit For
+        
+        If sf.AddrPC.Offset < &H10000ULL Then
+            MyLog.PrintLog LOG_WARN, "GetCallStack",, _
+                "Invalid PC=0x" & WHex(sf.AddrPC.Offset)
+            Exit For
+        End If
+
+        If (sf.AddrPC.Offset > &H7FFFFFFFFFFFULL) AndAlso _
+           (sf.AddrPC.Offset < &HFFFF800000000000ULL) Then
+            MyLog.PrintLog LOG_WARN, "GetCallStack",, _
+                "Non-canonical PC=0x" & WHex(sf.AddrPC.Offset)
+            Exit For
+        End If
         
         Dim img As RemotePeImageEx
         img.hProc = hProcess
         img.baseAddr = 0
         img.arch = IIf(IsProcessWow64_Ex(hProcess), PE_ARCH_X86, PE_ARCH_X64)
         Dim strAddr As StringW = GetProxyDescription(img, sf.AddrPC.Offset)
-        MyLog.PrintLog LOG_INFO, "GetCallStack",, (i - 1) & " 0x" & WHex(sf.AddrPC.Offset) & " " & WStr(strAddr)
-        AddItemColListEx lvwThreadCallStack, 4,,, WStr(i - 1), "0x" & WHex(sf.AddrPC.Offset), WStr(strAddr), WStr("")
+        ' 防御：远程 PE 解析失败/损坏可能产生坏 StringW 描述符，转换前先校验
+        If IsBadReadPtr(StrPtrW(strAddr), 2) Then strAddr = ""
+        Dim ModulePath As WString * MAX_PATH = ""
+        ModulePath = GetModuleOfAddress(hProcess, Cast(Any Ptr, sf.AddrPC.Offset))
+
+        Dim sIdx  As WString * MAX_PATH = WStr(i - 1)
+        Dim s_PC   As WString * MAX_PATH = "0x" & WHex(sf.AddrPC.Offset)
+        Dim sDesc As WString * MAX_PATH = strAddr
+        Dim sMod  As WString * MAX_PATH = ModulePath
+        MyLog.PrintLog LOG_INFO, "GetCallStack",, (i - 1) & " 0x" & WHex(sf.AddrPC.Offset) & " " & WStr(sDesc) & " " & WStr(strAddr)
+        AddItemColListEx lvwThreadCallStack, 4,,, WStr(sIdx), WStr(s_PC), WStr(""), WStr(sMod)
         FF_DoEvents
     Next
-
+    
 cleanup:
     If bNeedResume Then ResumeThread(hThread)
     If hThread  <> NULL Then CloseHandle(hThread)
     If hProcess <> NULL Then CloseHandle(hProcess)
     Deallocate(ctxBuf)
-    
     CommitListViewView lvwThreadCallStack
 End Sub

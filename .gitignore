@@ -55,8 +55,9 @@ Thumbs.db
 *.tmp
 *.temp
 
-# 6. Deep Code CLI 项目配置（不应提交到仓库）
+# 6. IDE / AI 工具本地配置（不应提交到仓库）
 .deepcode/
+.zcode/
 
 # 7. 仓库指南文件（面向AI Agent，不上传）
 AGENTS.md

@@ -53,6 +53,44 @@ SnowSword 是一款面向 **Windows 10/11 x64** 的内核分析与 Anti-Rootkit 
 └─────────────────────────────────────────┘
 ```
 
+## 运行截图
+
+### 主界面与进程列表
+
+启动后可在主界面查看进程、PID、父进程、路径、会话用户、命令行参数和公司信息。
+
+![SnowSword 主界面与进程列表](docs/images/main-process-list.jpg)
+
+### 内核过滤驱动分析
+
+查看文件系统过滤驱动、设备对象和驱动对象信息。
+
+![SnowSword 内核过滤驱动分析](docs/images/kernel-filters.jpg)
+
+### 文件系统分析
+
+浏览文件系统对象，并进行文件属性、物理磁盘和底层文件相关分析。
+
+![SnowSword 文件系统分析](docs/images/file-system.jpg)
+
+### 网络连接分析
+
+查看 TCP/UDP 连接、连接状态、进程 PID 和对应路径。
+
+![SnowSword 网络连接分析](docs/images/network-connections.jpg)
+
+### WFP 过滤器分析
+
+查看 WFP Filter/Callout、过滤器名称、Action 和 GUID 等信息。
+
+![SnowSword WFP 过滤器分析](docs/images/wfp-filters.jpg)
+
+### CLI 与 SSDT 查询
+
+通过 CLI/Agent Shell 加载驱动并查询 SSDT 数据，也支持帮助和管道过滤。
+
+![SnowSword CLI 与 SSDT 查询](docs/images/cli-ssdt.jpg)
+
 ## 功能详情
 
 ### 进程与线程
@@ -195,6 +233,7 @@ SnowSword/
 │  ├─ forms/
 │  ├─ modules/
 │  └─ images/
+├─ docs/images/           # README screenshots
 ├─ README.md
 ├─ README_EN.md
 └─ LICENSE

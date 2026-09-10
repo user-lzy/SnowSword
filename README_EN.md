@@ -45,6 +45,44 @@ The project covers hidden process/driver detection, kernel callbacks, SSDT / Sha
 └─────────────────────────────────────────┘
 ```
 
+## Screenshots
+
+### Main Window and Process List
+
+The main window displays processes, PIDs, parent processes, paths, session users, command lines and company information.
+
+![SnowSword main window and process list](docs/images/main-process-list.jpg)
+
+### Kernel Filter Analysis
+
+Inspect file-system filter drivers, device objects and driver objects.
+
+![SnowSword kernel filter analysis](docs/images/kernel-filters.jpg)
+
+### File-System Analysis
+
+Browse file-system objects and inspect file attributes, physical disks and low-level file information.
+
+![SnowSword file-system analysis](docs/images/file-system.jpg)
+
+### Network Connection Analysis
+
+Inspect TCP/UDP connections, connection states, process IDs and associated paths.
+
+![SnowSword network connection analysis](docs/images/network-connections.jpg)
+
+### WFP Filter Analysis
+
+Inspect WFP filters and callouts, including names, actions and GUIDs.
+
+![SnowSword WFP filter analysis](docs/images/wfp-filters.jpg)
+
+### CLI and SSDT Query
+
+Use the CLI/Agent Shell to load the driver and query SSDT data, with help output and pipeline filtering support.
+
+![SnowSword CLI and SSDT query](docs/images/cli-ssdt.jpg)
+
 ## Compatibility
 
 | Windows version | Status |
@@ -97,6 +135,7 @@ SnowSword/
 │  ├─ forms/
 │  ├─ modules/
 │  └─ images/
+├─ docs/images/           # README screenshots
 ├─ README.md
 ├─ README_EN.md
 └─ LICENSE

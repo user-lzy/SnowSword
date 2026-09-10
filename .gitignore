@@ -65,3 +65,6 @@ AGENTS.md
 # 本地发行暂存目录（资产上传到 Gitee/GitHub Release，不进入源码仓库）
 release/
 
+# 原始截图保留在本地；README 使用整理后的稳定英文文件名
+docs/images/360截图*.jpg
+

@@ -1681,10 +1681,10 @@ Function ForceCopyFolder(SourcePath As StringW, TargetPath As StringW) As Boolea
     pCopyPath->IsDirectory = True
     If IoControl(hDrv, IOCTL_CopyFolder, pCopyPath, SizeOf(COPY_PATH)) = 0 Then
         MyLog.PrintWin32Error "ForceCopyFolder", "IOCTL_CopyFolder", "SourcePath=" & SourcePath & ",TargetPath=" & TargetPath
-        AfxMsg "强制复制失败!"
+        ShowErrorBox "强制复制失败!"
         Function = False
     Else
-        AfxMsg "强制复制成功!"
+        ShowInfoBox "强制复制成功!"
         Function = True
     End If
     Deallocate pCopyPath

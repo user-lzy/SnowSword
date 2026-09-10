@@ -898,11 +898,11 @@ Function ParseBytesFromHexText(ByVal hexText As String, outBytes() As UByte) As 
     
     ' 合法性校验
     If Len(allHex) = 0 Then
-        AfxMsg "未解析到有效Hex数据！"
+        ShowErrorBox "未解析到有效Hex数据！"
         Return False
     End If
     If Len(allHex) Mod 2 <> 0 Then
-        AfxMsg "Hex数据长度不完整（奇数个字符），无法解析！"
+        ShowErrorBox "Hex数据长度不完整（奇数个字符），无法解析！"
         Return False
     End If
     
@@ -910,7 +910,7 @@ Function ParseBytesFromHexText(ByVal hexText As String, outBytes() As UByte) As 
     For i As Integer = 1 To Len(allHex)
         Dim c As String = UCase(Mid(allHex, i, 1))
         If Not ((c >= "0" And c <= "9") Or (c >= "A" And c <= "F")) Then
-            AfxMsg "包含非法Hex字符：" & c & "（位置：" & i & "）"
+            ShowErrorBox "包含非法Hex字符：" & c & "（位置：" & i & "）"
             Return False
         End If
     Next
@@ -1305,7 +1305,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Dim bytData() As UByte
     Dim dwSize As DWORD = ValUInt(FF_Replace(txtSize.Text, "0x", "&H"))
     If dwSize = 0 Then
-        AfxMsg "读取大小不能为0！"
+        ShowErrorBox "读取大小不能为0！"
         Exit Sub
     End If
     ReDim bytData(dwSize - 1) As UByte
@@ -1325,7 +1325,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         If IoControl(hDrv, IOCTL_ReadProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
             MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "IOCTL_ReadProcessMemory", _
             "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
-            AfxMsg "驱动读取内存失败！"
+            ShowErrorBox "驱动读取内存失败！"
         Else
             UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, readAddr
         End If
@@ -1358,7 +1358,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     ' API读取失败 → 弹窗询问是否使用驱动读取
     ' ==============================================
-    If AfxMsg("系统API读取内存失败，是否尝试加载驱动读取？",, MB_YESNO) = IDNO Then
+    If ShowMsgBox("系统API读取内存失败，是否尝试加载驱动读取？",, MB_YESNO) = IDNO Then
         Exit Sub
     End If
     
@@ -1367,7 +1367,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     If Not IsDriverLoaded Then
         If Not InitDriver Then
-            AfxMsg "驱动加载失败!"
+            ShowErrorBox "驱动加载失败!"
             Exit Sub
         End If
     End If
@@ -1383,7 +1383,7 @@ Sub FrmMemoryEditor_CmdRead_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If IoControl(hDrv, IOCTL_ReadProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
         MyLog.PrintWin32Error "FrmMemoryEditor_CmdRead_BN_Clicked", "IOCTL_ReadProcessMemory", _
         "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
-        AfxMsg "驱动读取内存失败！"
+        ShowErrorBox "驱动读取内存失败！"
     Else
         UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, readAddr
     End If
@@ -1397,7 +1397,7 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     
     ' 反汇编视图禁止直接写入
     If optDisasm.Value = True Then
-        AfxMsg "反汇编视图无法直接修改，请切换到Hex视图编辑字节后再写入。"
+        ShowErrorBox "反汇编视图无法直接修改，请切换到Hex视图编辑字节后再写入。"
         Exit Sub
     End If
     
@@ -1424,9 +1424,9 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
             MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "IOCTL_WriteProcessMemory", _
             "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
-            AfxMsg "驱动写入内存失败！"
+            ShowErrorBox "驱动写入内存失败！"
         Else
-            AfxMsg "驱动内存写入成功！"
+            ShowInfoBox "驱动内存写入成功！"
             ' 写入成功后刷新显示，同步ASCII与反汇编
             UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
         End If
@@ -1443,7 +1443,7 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Else
         Dim bytesWritten As SIZE_T = 0
         If WriteProcessMemory(hProcess, Cast(LPVOID, writeAddr), @bytData(0), dwSize, @bytesWritten) And bytesWritten = dwSize Then
-            AfxMsg "内存写入成功！"
+            ShowInfoBox "内存写入成功！"
             ' 写入成功后刷新显示
             UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
             CloseHandle(hProcess)
@@ -1459,7 +1459,7 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     ' API写入失败 → 弹窗询问是否使用驱动写入
     ' ==============================================
-    If AfxMsg("系统API写入内存失败，是否尝试加载驱动写入？",, MB_YESNO) = IDNO Then
+    If ShowMsgBox("系统API写入内存失败，是否尝试加载驱动写入？",, MB_YESNO) = IDNO Then
         Exit Sub
     End If
     
@@ -1468,7 +1468,7 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     ' ==============================================
     If Not IsDriverLoaded Then
         If Not InitDriver Then
-            AfxMsg "驱动加载失败!"
+            ShowErrorBox "驱动加载失败!"
             Exit Sub
         End If
     End If
@@ -1484,9 +1484,9 @@ Sub FrmMemoryEditor_CmdWrite_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     If IoControl(hDrv, IOCTL_WriteProcessMemory, @stMemory, SizeOf(MemoryStruct)) = 0 Then
         MyLog.PrintWin32Error "FrmMemoryEditor_CmdWrite_BN_Clicked", "IOCTL_WriteProcessMemory", _
         "dwProcessId=" & stMemory.dwProcessId & ",Addr=0x" & WHex(stMemory.Addr) & ",dwSize=" & stMemory.dwSize
-        AfxMsg "驱动写入内存失败！"
+        ShowErrorBox "驱动写入内存失败！"
     Else
-        AfxMsg "驱动内存写入成功！"
+        ShowInfoBox "驱动内存写入成功！"
         ' 同步更新显示
         UpdateTextBoxFromBytes txtData, bytData(), optDisasm.Value, writeAddr
     End If

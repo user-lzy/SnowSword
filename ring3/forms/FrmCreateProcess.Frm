@@ -277,26 +277,26 @@ Sub FrmCreateProcess_cmdOK_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     
     If Check2.Value Then
         If CreateSYSTEMPriviegeProcess(NULL, IIf(strCommandLine <> "", StrPtrW(strCommandLine), NULL)) Then
-            AfxMsg "创建成功!"
+            ShowInfoBox "创建成功!"
         Else
-            AfxMsg "创建失败!"
+            ShowErrorBox "创建失败!"
         End If
     ElseIf Check1.Value Then
         result = ShellExecute(NULL, "runas", strProgram, IIf(strParameters <> "", StrPtrW(strParameters), NULL), NULL, SW_SHOWNORMAL)
         ' 返回值 > 32 表示成功
         If result > Cast(HINSTANCE, 32) Then
-            AfxMsg "创建成功!"
+            ShowInfoBox "创建成功!"
         Else
-            AfxMsg "创建失败!"
+            ShowErrorBox "创建失败!"
             MyLog.PrintLog LOG_WARN, "FrmCreateProcess_cmdOK_BN_Clicked", "ShellExecute", "result=" & result
         End If
     Else
         result = ShellExecute(NULL, "open", strProgram, IIf(strParameters <> "", StrPtrW(strParameters), NULL), NULL, SW_SHOWNORMAL)
         ' 返回值 > 32 表示成功
         If result > Cast(HINSTANCE, 32) Then
-            AfxMsg "创建成功!"
+            ShowInfoBox "创建成功!"
         Else
-            AfxMsg "创建失败!"
+            ShowErrorBox "创建失败!"
             MyLog.PrintLog LOG_WARN, "FrmCreateProcess_cmdOK_BN_Clicked", "ShellExecute", "result=" & result
         End If
     End If

@@ -47,13 +47,11 @@ Enum Interface
     MinifilterInstances
     FilterDriver
     Ndis
-    ViolentCheck
     HalDispatch
     HalPrivateDispatch
     ObjectHook
     
     Etw
-    EtwProvider
     WinsockSPI
     TaskScheduler
     
@@ -97,7 +95,8 @@ End Type
 
 ' 🔥 移除 (Any) → 改为纯指针
 Type ListViewSnapshot
-    Rows As LVRow Ptr Ptr     ' 👈 替换 Rows(Any)
+    Rows As LVRow Ptr Ptr ' 👈 替换 Rows(Any)
+    RowCapacity As Long
     RowCount As Long
 End Type
 
@@ -565,11 +564,6 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "SrcPort",, 100
                 .AddColumn "DstPort",, 100
                 .AddColumn "数据长度",, 150
-            Case ViolentCheck
-                .AddColumn "索引",, 50
-                .AddColumn "类型",, 100
-                .AddColumn "地址",, 300
-                .AddColumn "所属模块",, 600
             Case HalDispatch, HalPrivateDispatch
                 .AddColumn "索引",, 100
                 .AddColumn "名称",, 250
@@ -580,12 +574,6 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "地址",, 300
                 .AddColumn "对象类型",, 250
                 .AddColumn "所属模块",, 600
-            Case EtwProvider
-                'TreeList.AddColumn "序号", 100
-                .AddColumn "GUID",, 600
-                .AddColumn "名称",, 500
-                'TreeList.AddColumn "类型", 150
-                'TreeList.AddColumn "状态", 100
             Case WinsockSPI
                 .AddColumn "类型",, 180
                 .AddColumn "ID",, 180
@@ -2275,45 +2263,69 @@ Function AddItemColListEx CDecl ( _
     Back As COLORREF = FB_White, _
     ... _
 ) As Long
+    Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
+    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    
+    ' ========== Step1：扩容检查，仅在容量不足时重新分配 ==========
+    If snap->Rows = NULL OrElse snap->RowCount >= snap->RowCapacity Then
 
-    Dim ctx As ListViewContext Ptr = _
-        Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
-        
+        Dim newCap As Long
+
+        If snap->RowCapacity <= 0 Then
+            newCap = 64
+        Else
+            newCap = snap->RowCapacity * 2
+        End If
+
+        Dim newRows As LVRow Ptr Ptr = _
+            CPtr(LVRow Ptr Ptr, Callocate(newCap, SizeOf(LVRow Ptr)))
+
+        If newRows = NULL Then
+            MyLog.PrintLog LOG_ERROR, "AddItemColListEx", _
+                "Callocate Rows failed. newCap=" & Str(newCap)
+            Return -1
+        End If
+
+        If snap->Rows <> NULL AndAlso snap->RowCount > 0 Then
+            For i As Long = 0 To snap->RowCount - 1
+                newRows[i] = snap->Rows[i]
+            Next
+        End If
+
+        If snap->Rows <> NULL Then
+            Deallocate snap->Rows
+        End If
+
+        snap->Rows = newRows
+        snap->RowCapacity = newCap
+    End If
+    
+    ' ========== Step2：新建LVRow，逻辑不变 ==========
     Dim row As LVRow Ptr = Callocate(1, SizeOf(LVRow))
     row->ColCount = colCnt
     row->Fore = Fore
     row->Back = Back
     row->iconIndex = I_IMAGENONE
     row->Cols = Callocate(colCnt, SizeOf(WCHAR Ptr))
-
+    
     Dim ap As Any Ptr
     ap = va_first()
-
     For i As Long = 0 To colCnt - 1
         Dim src As WCHAR Ptr = va_arg(ap, WCHAR Ptr)
         ap = va_next(ap, WCHAR Ptr)
-        ' 空指针/坏指针保护：至少能读 1 个 WCHAR，否则放空串，避免 lstrlenW 崩溃
         If src = NULL OrElse IsBadReadPtr(src, 2) Then
             row->Cols[i] = CAllocate(1, SizeOf(WCHAR))
         Else
             row->Cols[i] = DupWStr(src)
         End If
     Next
-
-    Dim idx As Long = ctx->Snap->RowCount
-    ctx->Snap->RowCount += 1
-
-    ' 🔥 修复：ReDim Preserve 改为手动分配
-    Dim newRows As LVRow Ptr Ptr = Callocate(ctx->Snap->RowCount, SizeOf(LVRow Ptr))
-    For i As Long = 0 To idx - 1
-        newRows[i] = ctx->Snap->Rows[i]
-    Next
-    If ctx->Snap->Rows Then Deallocate ctx->Snap->Rows
-    ctx->Snap->Rows = newRows
-    ctx->Snap->Rows[idx] = row
     
-    'Cache_AddRow CurrentInformation.intType, row ' 这里需要防止因为缓存未初始化导致崩溃的问题
-
+    ' ========== Step3：追加行，O(1) ==========
+    Dim idx As Long = snap->RowCount
+    snap->Rows[idx] = row
+    snap->RowCount += 1
+    
+    'Cache_AddRow CurrentInformation.intType, row
     Return idx
 End Function
 
@@ -3234,7 +3246,7 @@ Sub SetTreeListFilter( _
     Dim ctx As TreeListContext Ptr = TreeListGetContext(tl.hWnd)
     If ctx = 0 OrElse ctx->Snap = 0 Then Exit Sub
 
-    If Len(text) = 0 AndAlso ctx->Filter = 0 AndAlso (Not ctx->IsFiltering) Then Exit Sub
+    If CBool(LenW(text) = 0) AndAlso CBool(ctx->Filter = 0) AndAlso (Not ctx->IsFiltering) Then Exit Sub
 
     Dim currentSelection As Long = TreeListMapFind(ctx, tl.Selection)
     If Len(text) > 0 AndAlso Not ctx->IsFiltering Then

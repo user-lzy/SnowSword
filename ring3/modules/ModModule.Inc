@@ -858,7 +858,7 @@ Public Function GetModuleList(ByVal ProcessId As DWORD, lvwModule As Class_ListV
         If (Not IsInArray(ModuleInformation2(j).BaseAddr, ModuleInformation1())) Then ' 找到隐藏模块
             'Print "隐藏模块:" & ModuleInformation2(j).szPath
             ItemIndex = AddItemColListEx(lvwModule, 6, FB_Red, , WStr(lvwModule.ItemCount + 1), WStr(ModuleInformation2(j).szName), WStr("0x" & WHex(ModuleInformation2(j).BaseAddr)), _
-            WStr("0x" & WHex(ModuleInformation2(j).dwSize)), WStr(ModuleInformation2(j).szPath), WStr(GetFileCompany(ModuleInformation1(j).szPath)))
+            WStr("0x" & WHex(ModuleInformation2(j).dwSize)), WStr(ModuleInformation2(j).szPath), WStr(GetFileCompany(ModuleInformation2(j).szPath)))
             VerifyFileSignAsync FrmListView.hWnd, FrmListView.ListView.hWnd, "ListView", ItemIndex, ModuleInformation2(j).szPath
             'SetItemColor lvwModule, lvwModule.ItemCount, FB_Red, FB_White
             i += 1

@@ -654,8 +654,8 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     
     If bCheckHideKernelModule Then
         If Not IsDriverLoaded Then
-            If AfxMsg("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
-                If InitDriver Then AfxMsg "加载成功!" Else AfxMsg "加载失败!" : Return
+            If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
             Else
                 Return
             End If
@@ -745,10 +745,6 @@ Public Sub GetKernelModuleList(lvwKernelModule As Class_ListView, ByVal bCheckHi
     
     Deallocate buffer
     CommitListViewView lvwKernelModule
-    
-    /'If bCheckHideKernelModule Then
-        AfxMsg "扫描完成，官方模块: " & officialCount & " 个，发现可疑/隐藏项"
-    End If'/
 End Sub
 
 Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize As ULong) As PVOID

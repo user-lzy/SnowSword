@@ -136,7 +136,6 @@ Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As
     RegSetValueEx KeyHandle, "DependOnService", 0, REG_SZ, Cast(Const PBYTE,@DependOnService), SizeOf(DependOnService)
 
     Dim szImagePath As WString * 256 = "\??\" & szDrvPath
-    'AfxMsg szImagePath & Len(szImagePath)
     RegSetValueEx KeyHandle, "ImagePath", 0, REG_SZ, Cast(Const PBYTE, @szImagePath), Len(szImagePath) * 2
     RegCloseKey KeyHandle
     '-------------------MiniFilter部分-------------------

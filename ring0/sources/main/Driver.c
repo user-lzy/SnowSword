@@ -873,20 +873,159 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;*/
 	case IOCTL_QueryObject:
-		if (pInputData != NULL && InputDataLength > 0)
-		{
-			PHANDLE_INFO HandleInfo = (PHANDLE_INFO)pInputData;
-			status = QueryObject(HandleInfo);
-            if (OutputDataLength < sizeof(HANDLE_INFO))
-            {
-                status = STATUS_INFO_LENGTH_MISMATCH;
-                //DbgPrint("OutputDataLength:%d, sizeof(HANDLE_INFO):%d", (long)OutputDataLength, (long)sizeof(HANDLE_INFO));
-                break;
-            }
-			Information = sizeof(HANDLE_INFO);
-            memcpy(pOutputData, HandleInfo, sizeof(HANDLE_INFO));
-		}
+        if (pInputData == NULL ||
+            InputDataLength < sizeof(HANDLE_INFO))
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        if (pOutputData == NULL ||
+            OutputDataLength < sizeof(HANDLE_INFO))
+        {
+            status = STATUS_INFO_LENGTH_MISMATCH;
+            break;
+        }
+		PHANDLE_INFO HandleInfo = (PHANDLE_INFO)pInputData;
+		status = QueryObject(
+            HandleInfo->dwProcessId, 
+            HandleInfo->Handle, 
+            HandleInfo->Type,
+			sizeof(HandleInfo->Name),
+            HandleInfo->Name, 
+			sizeof(HandleInfo->Object),
+            &HandleInfo->Object
+        );
+		Information = sizeof(HANDLE_INFO);
+        //memcpy(pOutputData, HandleInfo, sizeof(HANDLE_INFO));
 		break;
+    case IOCTL_QueryFileObject:
+        if (pInputData == NULL ||
+            InputDataLength < sizeof(FILE_HANDLE_INFO))
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        if (pOutputData == NULL ||
+            OutputDataLength < sizeof(FILE_HANDLE_INFO))
+        {
+            status = STATUS_INFO_LENGTH_MISMATCH;
+            break;
+        }
+        PFILE_HANDLE_INFO FileInfo = (PFILE_HANDLE_INFO)pInputData;
+        status = QueryFileObject(FileInfo->dwProcessId, FileInfo->Handle, 
+            FileInfo->Name, MAX_PATH);
+        Information = sizeof(FILE_HANDLE_INFO);
+        //memcpy(pOutputData, FileInfo, sizeof(FILE_HANDLE_INFO));
+        break;
+    case IOCTL_QueryFileObjects:
+    {
+        ULONG Count;
+        ULONG i;
+
+        PFILE_HANDLE_QUERY_ENTRY QueryEntry;
+
+        ULONG RequiredInput;
+        ULONG RequiredOutput;
+
+        if (pInputData == NULL ||
+            InputDataLength < sizeof(ULONG))
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        Count = *(ULONG*)pInputData;
+
+        RequiredInput =
+            sizeof(ULONG) +
+            Count * sizeof(FILE_HANDLE_QUERY_ENTRY);
+
+        RequiredOutput =
+            Count * sizeof(FILE_HANDLE_QUERY_ENTRY);
+
+        if (InputDataLength < RequiredInput ||
+            OutputDataLength < RequiredOutput)
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        QueryEntry =
+            (PFILE_HANDLE_QUERY_ENTRY)(
+                (PUCHAR)pInputData + sizeof(ULONG));
+
+        for (i = 0; i < Count; i++)
+        {
+            QueryEntry[i].Status =
+                QueryFileObject(
+                    QueryEntry[i].dwProcessId,
+                    QueryEntry[i].dwHandle,
+                    QueryEntry[i].strName,
+                    sizeof(QueryEntry[i].strName));
+        }
+
+        Information = RequiredOutput;
+        status = STATUS_SUCCESS;
+
+        break;
+    }
+    case IOCTL_QueryObjects:
+    {
+        ULONG Count;
+        ULONG i;
+
+        PHANDLE_QUERY_ENTRY QueryEntry;
+
+        ULONG RequiredInput;
+        ULONG RequiredOutput;
+
+        if (pInputData == NULL ||
+            InputDataLength < sizeof(ULONG))
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        Count = *(ULONG*)pInputData;
+
+        RequiredInput =
+            sizeof(ULONG) +
+            Count * sizeof(HANDLE_QUERY_ENTRY);
+
+        RequiredOutput =
+            Count * sizeof(HANDLE_QUERY_ENTRY);
+
+        if (InputDataLength < RequiredInput ||
+            OutputDataLength < RequiredOutput)
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        QueryEntry =
+            (PHANDLE_QUERY_ENTRY)(
+                (PUCHAR)pInputData + sizeof(ULONG));
+
+        for (i = 0; i < Count; i++)
+        {
+            QueryEntry[i].Status =
+                QueryObject(
+                    QueryEntry[i].ProcessId,
+                    QueryEntry[i].Handle,
+                    QueryEntry[i].Type,
+					sizeof(QueryEntry[i].Type),
+                    QueryEntry[i].Name,
+					sizeof(QueryEntry[i].Name),
+                    &QueryEntry[i].Object);
+        }
+
+        Information = RequiredOutput;
+        status = STATUS_SUCCESS;
+
+        break;
+    }
     case IOCTL_SuspendProcess:
         if (pInputData != NULL && InputDataLength > 0)
         {

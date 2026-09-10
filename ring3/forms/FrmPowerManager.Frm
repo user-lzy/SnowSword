@@ -250,7 +250,7 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmPowerManager_Check1_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If AfxMsg("确认关机?", "警告", MB_YESNO) <> IDYES Then Exit Sub
+    If ShowMsgBox("确认关机?", "警告", MB_YESNO) <> IDYES Then Exit Sub
     Select Case Combo1.ListIndex
         Case 0
             MyShutdown
@@ -263,7 +263,7 @@ End Sub
 'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
 Sub FrmPowerManager_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If AfxMsg("确认重启?", "警告", MB_YESNO) <> IDYES Then Exit Sub
+    If ShowMsgBox("确认重启?", "警告", MB_YESNO) <> IDYES Then Exit Sub
     Select Case Combo1.ListIndex
         Case 0
             Reboot

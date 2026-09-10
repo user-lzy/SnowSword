@@ -35,32 +35,22 @@ Sub MyShutdown()
     Dim ret As Boolean = NT_SUCCESS(ZwInitiatePowerAction(PowerActionShutdown, PowerSystemShutdown, 0, True)) OrElse _
     NT_SUCCESS(ZwSetSystemPowerState(PowerActionShutdown, PowerSystemShutdown, 0)) OrElse _
     NT_SUCCESS(ZwShutdownSystem(ShutdownNoReboot))
-    If ret Then AfxMsg "普通关机成功!", "提示" Else AfxMsg "普通关机失败!", "提示"
+    If ret Then ShowInfoBox "普通关机成功!" Else ShowErrorBox "普通关机失败!"
 End Sub
 
 Sub ForceShutdown()
     Dim ret As BOOLEAN = NT_SUCCESS(ZwInitiatePowerAction(PowerActionShutdownOff, PowerSystemShutdown, 0, True)) Or _
     NT_SUCCESS(ZwSetSystemPowerState(PowerActionShutdownOff, PowerSystemShutdown, 0)) Or _
     NT_SUCCESS(ZwShutdownSystem(ShutdownPowerOff))
-    If ret Then AfxMsg "强制关机成功!", "提示" Else AfxMsg "强制关机失败!", "提示"
+    If ret Then ShowInfoBox "强制关机成功!" Else ShowErrorBox "强制关机失败!"
 End Sub
 
 Sub Reboot()
     Dim ret As BOOLEAN = NT_SUCCESS(ZwInitiatePowerAction(PowerActionShutdownReset, PowerSystemShutdown, 0, True)) Or _
     NT_SUCCESS(ZwSetSystemPowerState(PowerActionShutdownReset, PowerSystemShutdown, 0)) Or _
     NT_SUCCESS(ZwShutdownSystem(ShutdownReboot))
-    If ret Then AfxMsg "普通重启成功!", "提示" Else AfxMsg "普通重启失败!", "提示"
+    If ret Then ShowInfoBox "普通重启成功!" Else ShowErrorBox "普通重启失败!"
 End Sub
-
-/'Sub ForceReboot()
-    Dim st As NTSTATUS = ZwShutdownSystem(ShutdownForceReboot)
-    If NT_SUCCESS(st) Then
-        AfxMsg "强制重启成功!", "提示"
-    Else
-        AfxMsg "强制重启失败!", "提示"
-        MyLog.PrintNtError "ForceReboot", "ZwShutdownSystem", st
-    End If
-End Sub'/
 
 Function AddUnlockFileMenu() As Boolean
     Dim hKey As HKEY

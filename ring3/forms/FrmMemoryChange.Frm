@@ -316,10 +316,10 @@ Sub FrmMemoryChange_CmdOK_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Dim OldProtect As DWORD, NewProtect As DWORD
     NewProtect = ValUInt(FF_Replace(txtNew.Text, "0x", "&H"))
     If VirtualProtectEx(hProcess, Cast(LPVOID, mc->Addr), mc->dwSize, NewProtect, @OldProtect) <> 0 Then
-        AfxMsg "修改成功!"
+        ShowInfoBox "修改成功!"
     Else
         MyLog.PrintWin32Error "FrmMemoryChange_CmdOK_BN_Clicked", "VirtualProtectEx"
-        AfxMsg "修改失败!"
+        ShowErrorBox "修改失败!"
     End If
     CloseForm hWndForm
 End Sub

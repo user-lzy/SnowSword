@@ -11,11 +11,11 @@ End Type
 
 Dim Shared hWindows() As HWND
 Dim Shared hChildWindows() As HWND
-Dim Shared hwin32uDll As Any Ptr
 Dim Shared WindowCount As DWORD
 Dim Shared ChildWindowCount As DWORD
 
-'Declare Sub SetWindowTop Lib "user32"(ByVal hWin As hWnd, ByVal state As Integer)
+Dim Shared hwin32uDll As Any Ptr
+
 Dim Shared NtUserShowWindow As Function(ByVal hWnd As hWnd, ByVal nCmdShow As Integer) As WINBOOL
 Dim Shared NtUserDestroyWindow As Function(ByVal hWnd As hWnd) As WINBOOL
 
@@ -38,64 +38,6 @@ Private Function GetPIDFromHWND(ByVal hWnd As HWND) As DWORD
     GetWindowThreadProcessId hWnd, @dwProcessId
     Return dwProcessId
 End Function
-
-/'Public Sub GetVisibleWindowList(lvwForegroundWindow As Class_ListView)
-    Dim hWindow As hWnd = GetWindow(GetDesktopWindow, GW_CHILD)
-    Dim i As Integer, wText As WString * 260, dwProcessId As DWORD, ProcessName As StringW, ProcessPath As StringW
-    Dim szClass As WString * 260
-    Dim windowStyle As Long
-    
-    'lvwForegroundWindow.DeleteAllItems
-    
-    InitListViewData lvwForegroundWindow
-    
-    Do While (hWindow <> 0)
-        ' 检查窗口是否可见并且没有所有者窗口
-        If ((GetWindow(hWindow, GW_OWNER) = NULL) And (IsWindowVisible(hWindow))) Then
-            GetClassName hWindow, szClass, 256
-            
-            ' 获取窗口样式以进一步过滤
-            windowStyle = GetWindowLong(hWindow, GWL_STYLE)
-            
-            ' 扩展过滤条件，但仍然保留无标题窗口
-            If Not((szClass = "Shell_TrayWnd") Or (szClass = "Progman") Or _
-                   (szClass = "Button") Or (szClass = "MSCTFIME UI") Or _
-                   (szClass = "SysShadow") Or (szClass = "Cursor") Or _
-                   (windowStyle And WS_CHILD) = WS_CHILD) Then
-                
-                GetWindowTextW hWindow, @wText, 100
-                
-                ' 处理无标题窗口
-                If LenW(wText) = 0 Then
-                    ' 尝试获取进程名作为窗口标识
-                    GetWindowThreadProcessId hWindow, @dwProcessId
-                    ProcessPath = GetProcessPath(dwProcessId)
-                    ProcessName = RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
-                    
-                    ' 移除文件扩展名
-                    If InStrW(ProcessName, ".") > 0 Then
-                        ProcessName = LeftW(ProcessName, InStrW(ProcessName, ".") - 1)
-                    End If
-                    
-                    ' 使用进程名 + 窗口句柄作为显示文本
-                    wText = ProcessName & " [" & Hex(hWindow) & "]"
-                End If
-                
-                GetWindowThreadProcessId hWindow, @dwProcessId
-                ProcessPath = GetProcessPath(dwProcessId)
-                ProcessName = RightW(ProcessPath, LenW(ProcessPath) - InStrRevW(ProcessPath, "\"))
-                AddItemColListEx lvwForegroundWindow, 3,,, WStr(wText), WStr(ProcessName), WStr(IIf(IsHungAppWindow(hWindow), "未响应", "正在运行"))
-                
-                ' 可选：在第三列显示窗口类名，便于调试
-                'lvwForegroundWindow.SetItemText i, 3, szClass
-                
-                i += 1
-            End If
-        End If
-        hWindow = GetWindow(hWindow, GW_HWNDNEXT)
-    Loop
-    CommitListViewView lvwForegroundWindow
-End Sub"'/
 
 ' ==============================================
 ' 函数1：在数组中查找进程ID（替代 Dictionary.ContainsKey）
@@ -152,7 +94,6 @@ Public Sub GetVisibleProcessList(lvwForegroundProcess As Class_ListView)
     Dim procList() As Process_Info ' 动态数组：存储汇总后的进程
     
     ' 清空列表
-    'Erase procList
     InitListViewData lvwForegroundProcess ' 初始化3列：进程名 | 内存 | 状态
 
     ' 第一步：枚举所有窗口 → 按进程汇总
@@ -218,104 +159,183 @@ Public Sub GetVisibleProcessList(lvwForegroundProcess As Class_ListView)
     CommitListViewView lvwForegroundProcess
 End Sub
 
-' 回调函数
 Private Function EnumProc(ByVal hWnd As HWND, ByVal lParam As LPARAM) As WINBOOL
     '存储窗口句柄
     Dim ProcessId As DWORD = Cast(DWORD, lParam)
-    If GetPIDFromHWND(hWnd) = ProcessId Then
-        'Print hWnd
-        If WindowCount > UBound(hWindows) Then ReDim Preserve hWindows(WindowCount + 10) As hWnd
+    
+    If (ProcessId = Cast(DWORD, -1)) OrElse (GetPIDFromHWND(hWnd) = ProcessId) Then
+        If WindowCount > UBound(hWindows) Then ReDim Preserve hWindows(WindowCount + 10) As HWND
         hWindows(WindowCount) = hWnd
         WindowCount += 1
     End If
+    
     ' 继续枚举
     EnumProc = True
 End Function
 
-' 回调函数
 Private Function EnumChildProc(ByVal hWnd As HWND, ByVal lParam As LPARAM) As WINBOOL
     '存储窗口句柄
-    Dim ProcessId As DWORD = Cast(DWORD, lParam)
-    If GetPIDFromHWND(hWnd) = ProcessId Then
-        'Print hWnd
-        If ChildWindowCount > UBound(hChildWindows) Then ReDim Preserve hChildWindows(ChildWindowCount + 10) As hWnd
-        hChildWindows(ChildWindowCount) = hWnd
-        ChildWindowCount += 1
-    End If
+    If ChildWindowCount > UBound(hChildWindows) Then ReDim Preserve hChildWindows(ChildWindowCount + 10) As HWND
+    hChildWindows(ChildWindowCount) = hWnd
+    ChildWindowCount += 1
+    
     ' 继续枚举
     EnumChildProc = True
 End Function
 
-Public Sub GetWindowList(ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
-    ' 枚举所有子窗口
-    Dim window_Title As WString * MAX_PATH
-    Dim window_Class As WString * MAX_PATH
-    Dim titleLength As Long
-    Dim classLength As Long
-    
-    memset @hWindows(0), 0, SizeOf(hWnd) * (UBound(hWindows) + 1)
-    EnumWindows @EnumProc, Cast(lParam, ProcessId)
+Public Sub GetWindowList(ByVal bGlobal As Boolean, ByVal ProcessId As DWORD, lvwWindow As Class_ListView)
+    ' 初始化计数
     WindowCount = 0
-    
+    ChildWindowCount = 0
+
+    ' 全局模式使用 -1 表示枚举所有窗口
+    If bGlobal Then ProcessId = Cast(DWORD, -1)
+
+    ' 初始化数组
+    If UBound(hWindows) < 0 Then ReDim hWindows(10) As hWnd
+    If UBound(hChildWindows) < 0 Then ReDim hChildWindows(10) As HWND
+
+    ' 枚举所有顶层窗口
+    EnumWindows @EnumProc, Cast(lParam, ProcessId)
+
     InitListViewData lvwWindow
-    
-    For i As Integer = 0 To UBound(hWindows)
-        If hWindows(i) = 0 Then Continue For
+
+    If Not bGlobal Then
+        If lvwWindow.ColumnText(0) = "PID" Then lvwWindow.InsertColumn 0, "PID",, 150
+    Else
+        lvwWindow.DeleteColumn 0
+    End If
+
+    For i As Integer = 0 To WindowCount - 1
         ' 获取窗口标题
+        Dim window_Title As WString * MAX_PATH
+        Dim window_Class As WString * MAX_PATH
+        Dim titleLength As Long
+        Dim classLength As Long
+
         titleLength = GetWindowTextLength(hWindows(i))
-        window_Title = Wstring(titleLength + 1, 0)
-        GetWindowText hWindows(i), @window_Title, titleLength + 1
-        window_Title = Left(window_Title, titleLength)
+
+        If titleLength > 0 Then
+            window_Title = Wstring(titleLength + 1, 0)
+            GetWindowText hWindows(i), @window_Title, titleLength + 1
+            window_Title = Left(window_Title, titleLength)
+        Else
+            window_Title = ""
+        End If
 
         ' 获取窗口类名
         window_Class = Wstring(MAX_PATH, 0)
-        GetClassName hWindows(i), @window_Class, MAX_PATH
-        window_Class = Left(window_Class, MAX_PATH - 1)
+        classLength = GetClassName(hWindows(i), @window_Class, MAX_PATH)
+
+        If classLength > 0 Then
+            window_Class = Left(window_Class, classLength)
+        Else
+            window_Class = ""
+        End If
+
         ' 获取父窗口句柄
         Dim ParenthWnd As hWnd = GetParent(hWindows(i))
+
         ' 获取WndProc
-        Dim pWndProc As LONG_PTR = GetClassLongPtr(hWindows(i), GCLP_WNDPROC) ' GetWindowLongPtr(hWindows(i), GWL_WNDPROC)
-        'Print "0x" & WHex(pWndProc)
-        '获取TID和所属模块
+        Dim pWndProc As LONG_PTR = GetClassLongPtr(hWindows(i), GCLP_WNDPROC)
+
+        ' 获取TID和所属进程
         Dim dwProcessId As DWORD
         Dim dwThreadId As DWORD = GetWindowThreadProcessId(hWindows(i), @dwProcessId)
-        Dim strModulePath As WString * MAX_PATH
-        strModulePath = GetProcessPath(dwProcessId)
-        'Print "Window:" & "0x" & WHex(hWindows(i)) & " " & window_Class
-        AddItemColListEx lvwWindow, 7,,, WStr("0x" & WHex(hWindows(i))), IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), WStr(window_Title), _
-        "0x" & WHex(pWndProc), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
+
+        ' 获取所属进程路径
+        Dim strProcessPath As WString * MAX_PATH
+        strProcessPath = GetProcessPath(dwProcessId)
         
+        If Not bGlobal Then
+            AddItemColListEx lvwWindow, 7,,, _
+                WStr("0x" & WHex(hWindows(i))), _
+                IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
+                WStr(window_Title), _
+                "0x" & WHex(pWndProc), _
+                WStr(window_Class), _
+                WStr(dwThreadId), _
+                WStr(strProcessPath)
+        Else
+            AddItemColListEx lvwWindow, 8,,, _
+                WStr(ProcessId), _
+                WStr("0x" & WHex(hWindows(i))), _
+                IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
+                WStr(window_Title), _
+                "0x" & WHex(pWndProc), _
+                WStr(window_Class), _
+                WStr(dwThreadId), _
+                WStr(strProcessPath)
+        End If
+
+        ' 枚举当前窗口的所有子窗口
         ChildWindowCount = 0
-        memset @hChildWindows(0), 0, SizeOf(hWnd) * (UBound(hChildWindows) + 1)
-        EnumChildWindows hWindows(i), @EnumChildProc, Cast(lParam, ProcessId)
-        For j As Integer = 0 To UBound(hChildWindows)
-            If hChildWindows(j) = NULL Then Continue For
+
+        EnumChildWindows hWindows(i), @EnumChildProc, 0
+
+        For j As Integer = 0 To ChildWindowCount - 1
+
             ' 获取窗口标题
             titleLength = GetWindowTextLength(hChildWindows(j))
-            window_Title = Wstring(titleLength + 1, 0)
-            GetWindowText hChildWindows(j), @window_Title, titleLength + 1
-            window_Title = Left(window_Title, titleLength)
-            
+
+            If titleLength > 0 Then
+                window_Title = Wstring(titleLength + 1, 0)
+                GetWindowText hChildWindows(j), @window_Title, titleLength + 1
+                window_Title = Left(window_Title, titleLength)
+            Else
+                window_Title = ""
+            End If
+
             ' 获取窗口类名
             window_Class = Wstring(MAX_PATH, 0)
-            GetClassName hChildWindows(j), @window_Class, MAX_PATH
-            window_Class = Left(window_Class, MAX_PATH - 1)
+            classLength = GetClassName(hChildWindows(j), @window_Class, MAX_PATH)
+
+            If classLength > 0 Then
+                window_Class = Left(window_Class, classLength)
+            Else
+                window_Class = ""
+            End If
+
             ' 获取父窗口句柄
             ParenthWnd = GetParent(hChildWindows(j))
+
             ' 获取WndProc
-            pWndProc = GetClassLongPtr(hChildWindows(j), GCLP_WNDPROC) ' GetWindowLongPtr(hChildWindows(j), GWLP_WNDPROC)
-            'Print "0x" & WHex(pWndProc)
-            '获取TID和所属模块
+            pWndProc = GetClassLongPtr(hChildWindows(j), GCLP_WNDPROC)
+
+            ' 获取TID和所属进程
             dwThreadId = GetWindowThreadProcessId(hChildWindows(j), @dwProcessId)
-            Dim strModulePath As WString * MAX_PATH
-            strModulePath = GetProcessPath(dwProcessId)
-            'Print "Child Window:" & "0x" & WHex(hChildWindows(j)) & " " & window_Title & " " & window_Class & " " & dwThreadId & " " & strModulePath
-            AddItemColListEx lvwWindow, 7,,, WStr("0x" & WHex(hChildWindows(j))), IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), WStr(window_Title), _
-            "0x" & WHex(pWndProc), WStr(window_Class), WStr(dwThreadId), WStr(strModulePath)
+
+            ' 获取所属进程路径
+            Dim strProcessPath As WString * MAX_PATH
+            strProcessPath = GetProcessPath(dwProcessId)
+
+            If Not bGlobal Then
+                AddItemColListEx lvwWindow, 7,,, _
+                    WStr("0x" & WHex(hChildWindows(i))), _
+                    IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
+                    WStr(window_Title), _
+                    "0x" & WHex(pWndProc), _
+                    WStr(window_Class), _
+                    WStr(dwThreadId), _
+                    WStr(strProcessPath)
+            Else
+                AddItemColListEx lvwWindow, 8,,, _
+                    WStr(ProcessId), _
+                    WStr("0x" & WHex(hChildWindows(i))), _
+                    IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
+                    WStr(window_Title), _
+                    "0x" & WHex(pWndProc), _
+                    WStr(window_Class), _
+                    WStr(dwThreadId), _
+                    WStr(strProcessPath)
+            End If
         Next
+
         FF_DoEvents
     Next
+
     CommitListViewView lvwWindow
+
 End Sub
 
 Function MyCloseWindow(ByVal hWnd As HWND) As WINBOOL

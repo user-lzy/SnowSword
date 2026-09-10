@@ -62,3 +62,6 @@ Thumbs.db
 # 7. 仓库指南文件（面向AI Agent，不上传）
 AGENTS.md
 
+# 本地发行暂存目录（资产上传到 Gitee/GitHub Release，不进入源码仓库）
+release/
+

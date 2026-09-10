@@ -15,140 +15,15 @@ NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 	OUT PVOID* Object
 );
 
-/*NTSTATUS ObQueryObject(PHANDLE_INFO HandleInfo) {
-	PEPROCESS Process = NULL;
-	PsLookupProcessByProcessId(HandleInfo->dwProcessId, &Process);
-	if (!Process) return STATUS_UNSUCCESSFUL;
-
-	PHANDLE_TABLE HandleTable = (PHANDLE_TABLE)Process->ObjectTable;
-
-	// 清除句柄的低三位（通常用于标识句柄的属性）
-	HANDLE CleanedHandle = HandleInfo->Handle & ~((HANDLE)0x7);
-
-	// 计算句柄表项的索引
-	ULONG_PTR Index = CleanedHandle / 4;
-
-	// 获取句柄表项
-	PHANDLE_TABLE_ENTRY HandleTableEntry = (PHANDLE_TABLE_ENTRY)(HandleTable->TableCode + Index * sizeof(HANDLE_TABLE_ENTRY));
-
-	POBJECT_TYPE ObjectType = ObTypeIndexTable[HandleTableEntry->TypeIndex ^ OB_HEADER_COOKIE];
-
-	// 获取内核对象
-	//HandleInfo->Object = HandleTableEntry->Object;
-	//HandleInfo->Type = HandleTableEntry->Object->Type->Name;
-	//HandleInfo->Name = HandleTableEntry->Object->NameInfo.Name;
-
-	ObDereferenceObject(Process);
-	return STATUS_SUCCESS;
-}
-
-/*NTSTATUS ObQueryObject(PHANDLE_INFO HandleInfo) {
-	PEPROCESS hProcess = NULL;
-	NTSTATUS status;
-	
-	// 查找进程
-	status = PsLookupProcessByProcessId((HANDLE)HandleInfo->dwProcessId, &hProcess);
-	if (!NT_SUCCESS(status)) {
-		DbgPrint("PsLookupProcessByProcessId failed for Process ID %d, status: 0x%X\n", HandleInfo->dwProcessId, status);
-		return status;
-	}
-
-	// 进程上下文切换
-	KAPC_STATE ApcState;
-	KeStackAttachProcess(hProcess, &ApcState);
-
-	// 初始化 Object 指针为 NULL
-	HandleInfo->Object = NULL;
-
-	// 获取句柄对应的对象
-	status = ObReferenceObjectByHandle((HANDLE)HandleInfo->Handle, 0, NULL, KernelMode, &HandleInfo->Object, NULL);
-	if (!NT_SUCCESS(status)) {
-		DbgPrint("ObReferenceObjectByHandle failed for Handle %d, status: 0x%X\n", HandleInfo->Handle, status);
-		HandleInfo->Object = NULL;  // 确保 Object 指针被正确设置为 NULL
-		KeUnstackDetachProcess(&ApcState);
-		ObDereferenceObject(hProcess);
-		return STATUS_UNSUCCESSFUL;
-	}
-	else {
-		DbgPrint("The Object of Handle: 0x%p\n", HandleInfo->Object);
-	}
-
-	// 如果成功获取对象，查询对象名称
-	/*if (HandleInfo->Object) {
-		ULONG nameLength = 0;
-		status = ObQueryNameString(HandleInfo->Object, NULL, 0, &nameLength);
-
-		if (status == STATUS_INFO_LENGTH_MISMATCH) {
-			POBJECT_NAME_INFORMATION nameInfo = (POBJECT_NAME_INFORMATION)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, nameLength, 'MyTg');
-			if (nameInfo) {
-				status = ObQueryNameString(HandleInfo->Object, nameInfo, nameLength, &nameLength);
-				if (NT_SUCCESS(status)) {
-					HandleInfo->Name = nameInfo->Name;
-					DbgPrint("The Name of Handle: %wZ\n", HandleInfo->Name);
-				}
-				else {
-					DbgPrint("ObQueryNameString failed, status: 0x%X\n", status);
-				}
-				ExFreePool(nameInfo);
-			}
-			else {
-				DbgPrint("Failed to allocate memory for OBJECT_NAME_INFORMATION\n");
-			}
-		}
-		else if (!NT_SUCCESS(status)) {
-			DbgPrint("ObQueryNameString failed to get name length, status: 0x%X\n", status);
-		}
-	}
-
-	// 获取对象类型
-	if (HandleInfo->Object) {
-		POBJECT_TYPE objectType = *(POBJECT_TYPE*)((PUCHAR)HandleInfo->Object + 0x20);
-		//HandleInfo->Name = objectType->Name;
-		// 复制字符串内容
-		RtlCopyMemory(HandleInfo->Name, &objectType->Name, objectType->Name.Length);
-		// 添加字符串结束符
-		HandleInfo->Name[objectType->Name.Length / sizeof(WCHAR)] = UNICODE_NULL;
-		DbgPrint("The Name of Handle: %wZ\n", HandleInfo->Name);
-
-		POBJECT_HEADER objectHeader = OBJECT_TO_OBJECT_HEADER(HandleInfo->Object);
-		objectType = *(POBJECT_TYPE*)((PUCHAR)objectHeader + 0x20); // 偏移 0x20 获取对象类型指针
-
-		// 获取对象类型名称
-		if (objectType->Name.Length > 0 && objectType->Name.Length < 256 * sizeof(WCHAR))
-		{
-			DbgPrint("The Type of Handle: %wZ", &objectType->Name);
-			RtlCopyMemory(&HandleInfo->Type, objectType->Name.Buffer, objectType->Name.Length);
-			HandleInfo->Type[objectType->Name.Length / sizeof(WCHAR)] = UNICODE_NULL;
-			return STATUS_SUCCESS;
-		}
-		else
-		{
-			return STATUS_INVALID_PARAMETER;
-		}
-	}
-	DbgPrint("2");
-
-	// 释放对象引用
-	if (HandleInfo->Object) {
-		ObDereferenceObject(HandleInfo->Object);
-	}
-
-	// 恢复上下文
-	KeUnstackDetachProcess(&ApcState);
-	ObDereferenceObject(hProcess);
-
-	return status;
-}*/
-
-NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
+NTSTATUS QueryObject(HANDLE dwProcessId, HANDLE Handle, LPWSTR Type, ULONG TypeLength, LPWSTR Name, ULONG NameLength, PVOID* pObject)
 {
 	PEPROCESS hProcess = NULL;
 	NTSTATUS status;
 
 	// 查找进程
-	status = PsLookupProcessByProcessId(HandleInfo->dwProcessId, &hProcess);
+	status = PsLookupProcessByProcessId(dwProcessId, &hProcess);
 	if (!NT_SUCCESS(status)) {
-		DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)HandleInfo->dwProcessId, status);
+		DbgPrint("PsLookupProcessByProcessId failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)dwProcessId, status);
 		return status;
 	}
 
@@ -156,19 +31,19 @@ NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
 	HANDLE hSourceProcess;
 	status = ObOpenObjectByPointer(hProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &hSourceProcess);
 	if (!NT_SUCCESS(status)) {
-		DbgPrint("ObOpenObjectByPointer failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)HandleInfo->dwProcessId, status);
+		DbgPrint("ObOpenObjectByPointer failed for Process ID %lld, status: 0x%X\n", (ULONG_PTR)dwProcessId, status);
 		ObDereferenceObject(hProcess);
 		return status;
 	}
 
 	// 复制句柄(EtwRegistration返回C00000BB,WindowStation和Desktop返回C0000022)
 	HANDLE hTargetHandle;
-	status = ZwDuplicateObject(hSourceProcess, HandleInfo->Handle, NtCurrentProcess(), &hTargetHandle, PROCESS_ALL_ACCESS, 0, DUPLICATE_SAME_ACCESS);
+	status = ZwDuplicateObject(hSourceProcess, Handle, NtCurrentProcess(), &hTargetHandle, PROCESS_ALL_ACCESS, 0, DUPLICATE_SAME_ACCESS);
 	if (!NT_SUCCESS(status)) {
 		if (status == STATUS_NOT_SUPPORTED) {
 			DbgPrint("这是一个不支持的句柄类型，可能是EtwRegistration\n");
 			//设置句柄类型为EtwRegistration,使用RtlStringCbCopyW
-			RtlStringCbCopyW(HandleInfo->Type, sizeof(HandleInfo->Type), L"EtwRegistration");
+			RtlStringCbCopyW(Type, TypeLength, L"EtwRegistration");
 			//清理并退出
 			ZwClose(hSourceProcess);
 			ObDereferenceObject(hProcess);
@@ -181,42 +56,26 @@ NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
 			return status;
 		}
 		else {
-			DbgPrint("ZwDuplicateObject failed for Process ID %lld at Handle %lld, status: 0x%X\n", (ULONG_PTR)HandleInfo->dwProcessId, (ULONG_PTR)HandleInfo->Handle, status);
+			DbgPrint("ZwDuplicateObject failed for Process ID %lld at Handle %lld, status: 0x%X\n", (ULONG_PTR)dwProcessId, (ULONG_PTR)Handle, status);
 			ZwClose(hSourceProcess);
 			ObDereferenceObject(hProcess);
 			return status;
 		}
 	}
 
-	// 进程上下文切换
-	//KAPC_STATE ApcState;
-	//KeStackAttachProcess(hProcess, &ApcState);
-
 	// 初始化 Object 指针为 NULL
-	HandleInfo->Object = NULL;
+	*pObject = NULL;
 
 	// 获取句柄对应的对象
-	status = ObReferenceObjectByHandle(hTargetHandle, 0, NULL, UserMode, &HandleInfo->Object, NULL);
+	status = ObReferenceObjectByHandle(hTargetHandle, 0, NULL, UserMode, pObject, NULL);
 	if (!NT_SUCCESS(status)) {
-		DbgPrint("ObReferenceObjectByHandle failed for Handle 0x%p, PID:%lld, status: %X\n", HandleInfo->Handle, (ULONG_PTR)HandleInfo->dwProcessId, status);
+		DbgPrint("ObReferenceObjectByHandle failed for Handle 0x%p, PID:%lld, status: %X\n", Handle, (ULONG_PTR)dwProcessId, status);
 	}
 	else {
-		ObDereferenceObject(HandleInfo->Object);
+		ObDereferenceObject(*pObject);
 	}
 
-	OBJECT_BASIC_INFORMATION BasicInfo;
 	OBJECT_NAME_INFORMATION* NameInfo = NULL;
-	//OBJECT_TYPE_INFORMATION* TypeInfo = NULL;
-	//ULONG ReturnLength;
-
-	/*if (KeGetCurrentIrql() == DISPATCH_LEVEL) {
-		DbgPrint("当前IRQL为2,退出MyQueryObject");
-		return STATUS_SUCCESS;
-	}*/
-
-	// 查询句柄的基本信息
-	status = ZwQueryObject(hTargetHandle, ObjectBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL);
-	if (!NT_SUCCESS(status)) DbgPrint("查询0x%p基本信息失败:%X", HandleInfo->Handle, status);
 
 	// 查询句柄的名称信息
 	// 初始查询，获取所需的缓冲区大小
@@ -225,72 +84,44 @@ NTSTATUS QueryObject(PHANDLE_INFO HandleInfo)
 	status = ZwQueryObject(hTargetHandle, ObjectNameInformation, NameInfo, bufferSize, &returnLength);
 	if (status != STATUS_INFO_LENGTH_MISMATCH)
 	{
-		DbgPrint("第一次查询0x%p名称失败:%X", HandleInfo->Handle, status);
+		DbgPrint("第一次查询0x%p名称失败:%X", Handle, status);
 		goto QueryType;
 	}
 	bufferSize = returnLength;
 	NameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
 	if (!NameInfo)
 	{
-		DbgPrint("查询0x%p名称分配空间失败:%X", HandleInfo->Handle, STATUS_INSUFFICIENT_RESOURCES);
+		DbgPrint("查询0x%p名称分配空间失败:%X", Handle, STATUS_INSUFFICIENT_RESOURCES);
 		goto QueryType;
 	}
 
 	status = ZwQueryObject(hTargetHandle, ObjectNameInformation, NameInfo, bufferSize, &returnLength);
 	if (!NT_SUCCESS(status)) {
 		ExFreePool(NameInfo);
-		DbgPrint("第二次查询0x%p名称失败:%X", HandleInfo->Handle, status);
+		DbgPrint("第二次查询0x%p名称失败:%X", Handle, status);
 		goto QueryType;
 	}
 	// 检查复制的长度是否超过缓冲区大小
-	if (NameInfo->Name.Length <= sizeof(HandleInfo->Name) - sizeof(WCHAR)) {
-		memcpy(HandleInfo->Name, NameInfo->Name.Buffer, NameInfo->Name.Length);
-		HandleInfo->Name[NameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
-		DbgPrint("The Name of Handle 0x%p:%wZ", HandleInfo->Handle, NameInfo->Name);
+	if (NameInfo->Name.Length <= NameLength - sizeof(WCHAR)) {
+		memcpy(Name, NameInfo->Name.Buffer, NameInfo->Name.Length);
+		Name[NameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
+		DbgPrint("The Name of Handle 0x%p:%wZ", Handle, NameInfo->Name);
 	}
 	ExFreePool(NameInfo);
 
 	// 查询句柄的类型信息
 QueryType:
-	/*status = ZwQueryObject(hTargetHandle, ObjectTypeInformation, TypeInfo, bufferSize, &returnLength);
-	if (status != STATUS_INFO_LENGTH_MISMATCH)
-	{
-		DbgPrint("第一次查询0x%p类型失败:%X", HandleInfo->Handle, status);
-		status = STATUS_SUCCESS;
-		goto Cleanup;
-	}
-	bufferSize = returnLength;
-	TypeInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
-	if (!TypeInfo)
-	{
-		DbgPrint("查询类型分配空间失败:%X", STATUS_INSUFFICIENT_RESOURCES);
-		status = STATUS_SUCCESS;
-		goto Cleanup;
-	}
-
-	status = ZwQueryObject(hTargetHandle, ObjectTypeInformation, TypeInfo, bufferSize, &returnLength);
-	if (!NT_SUCCESS(status)) {
-		ExFreePool(TypeInfo);
-		DbgPrint("第二次查询0x%p类型失败:%X", HandleInfo->Handle, status);
-		status = STATUS_SUCCESS;
-		goto Cleanup;
-	}
-
-	if (TypeInfo->TypeName.Length <= sizeof(HandleInfo->Type) - sizeof(WCHAR)) {
-		memcpy(HandleInfo->Type, TypeInfo->TypeName.Buffer, TypeInfo->TypeName.Length);
-		HandleInfo->Type[TypeInfo->TypeName.Length / sizeof(WCHAR)] = L'\0';
-		DbgPrint("The Type of Handle 0x%p:%wZ", HandleInfo->Handle, TypeInfo->TypeName);
-	}
-	ExFreePool(TypeInfo);*/
 	typedef POBJECT_TYPE ObGetObjectTypeFunc(PVOID Object);
-	UNICODE_STRING ObGetObjectTypeName = RTL_CONSTANT_STRING(L"ObGetObjectType");
-	ObGetObjectTypeFunc* ObGetObjectType = (ObGetObjectTypeFunc*)MmGetSystemRoutineAddress(&ObGetObjectTypeName);
-	if (ObGetObjectType && HandleInfo->Object) {
-		POBJECT_TYPE ObjectType = ObGetObjectType(HandleInfo->Object);
+	static UNICODE_STRING ObGetObjectTypeName = RTL_CONSTANT_STRING(L"ObGetObjectType");
+	static ObGetObjectTypeFunc* ObGetObjectType = NULL;
+	if (!ObGetObjectType)
+		ObGetObjectType = (ObGetObjectTypeFunc*)MmGetSystemRoutineAddress(&ObGetObjectTypeName);
+	
+	if (ObGetObjectType && *pObject) {
+		POBJECT_TYPE ObjectType = ObGetObjectType(*pObject);
 		if (ObjectType && ObjectType->Name.Buffer) {
-			RtlCopyMemory(HandleInfo->Type, ObjectType->Name.Buffer, ObjectType->Name.Length);
-			HandleInfo->Type[ObjectType->Name.Length / sizeof(WCHAR)] = L'\0';
-			DbgPrint("The Type of Handle 0x%p:%wZ", HandleInfo->Handle, ObjectType->Name);
+			RtlCopyMemory(Type, ObjectType->Name.Buffer, ObjectType->Name.Length);
+			Type[ObjectType->Name.Length / sizeof(WCHAR)] = L'\0';
 		}
 		else {
 			DbgPrint("获取对象类型失败");
@@ -299,32 +130,131 @@ QueryType:
 	else {
 		DbgPrint("获取ObGetObjectType失败");
 	}
-	if (HandleInfo->Handle == (HANDLE)0x1cc) DbgPrint("status:%X", status);
 //Cleanup:
 	ZwClose(hTargetHandle);
 	ZwClose(hSourceProcess);
-	//KeUnstackDetachProcess(&ApcState);
 	ObDereferenceObject(hProcess);
 	return status;
 }
 
-// QueryObject 函数
-/*NTSTATUS QueryObject(PHANDLE_INFO HandleInfo, PDEVICE_OBJECT DeviceObject)
+NTSTATUS QueryFileObject(
+	HANDLE ProcessId,
+	HANDLE Handle,
+	PWCHAR Name,
+	ULONG NameSize)
 {
+	PEPROCESS hProcess = NULL;
 	NTSTATUS status;
-	KIRQL currentIrql = KeGetCurrentIrql();
 
-	// 检查当前 IRQL 级别
-	if (KeGetCurrentIrql() == DISPATCH_LEVEL) {
-		// 当前 IRQL 为 DISPATCH_LEVEL，需要通过工作线程异步执行任务
-		return QueryObjectAsync(HandleInfo, DeviceObject);
+	HANDLE hSourceProcess = NULL;
+	HANDLE hTargetHandle = NULL;
+
+	OBJECT_NAME_INFORMATION* NameInfo = NULL;
+
+	ULONG returnLength = 0;
+	ULONG bufferSize = 0;
+
+	status = PsLookupProcessByProcessId(
+		ProcessId,
+		&hProcess);
+
+	if (!NT_SUCCESS(status))
+		return status;
+
+	status = ObOpenObjectByPointer(
+		hProcess,
+		OBJ_KERNEL_HANDLE,
+		NULL,
+		PROCESS_ALL_ACCESS,
+		*PsProcessType,
+		KernelMode,
+		&hSourceProcess);
+
+	if (!NT_SUCCESS(status))
+	{
+		ObDereferenceObject(hProcess);
+		return status;
 	}
-	else {
-		// 当前 IRQL 为 PASSIVE_LEVEL，可以直接执行任务
-		QueryObjectSync(HandleInfo);
-		return STATUS_SUCCESS;
+
+	status = ZwDuplicateObject(
+		hSourceProcess,
+		Handle,
+		NtCurrentProcess(),
+		&hTargetHandle,
+		0,
+		0,
+		DUPLICATE_SAME_ACCESS);
+
+	if (!NT_SUCCESS(status))
+	{
+		ZwClose(hSourceProcess);
+		ObDereferenceObject(hProcess);
+		return status;
 	}
-}*/
+
+	/*
+	 * 第一次查询名称，获取缓冲区大小
+	 */
+	status = ZwQueryObject(
+		hTargetHandle,
+		ObjectNameInformation,
+		NULL,
+		0,
+		&returnLength);
+
+	if (status != STATUS_INFO_LENGTH_MISMATCH &&
+		status != STATUS_BUFFER_TOO_SMALL)
+	{
+		goto Exit;
+	}
+
+	bufferSize = returnLength;
+
+	NameInfo = KernelAlloc_NonPagedPoolNx(
+		POOL_FLAG_NON_PAGED,
+		bufferSize,
+		'aaaa');
+
+	if (NameInfo == NULL)
+	{
+		status = STATUS_INSUFFICIENT_RESOURCES;
+		goto Exit;
+	}
+
+	status = ZwQueryObject(
+		hTargetHandle,
+		ObjectNameInformation,
+		NameInfo,
+		bufferSize,
+		&returnLength);
+
+	if (!NT_SUCCESS(status))
+		goto Exit;
+
+	if (NameInfo->Name.Buffer != NULL &&
+		NameInfo->Name.Length <=
+		NameSize - sizeof(WCHAR))
+	{
+		memcpy(Name, NameInfo->Name.Buffer, NameInfo->Name.Length);
+		Name[NameInfo->Name.Length / sizeof(WCHAR)] = L'\0';
+	}
+
+Exit:
+
+	if (NameInfo)
+		ExFreePool(NameInfo);
+
+	if (hTargetHandle)
+		ZwClose(hTargetHandle);
+
+	if (hSourceProcess)
+		ZwClose(hSourceProcess);
+
+	if (hProcess)
+		ObDereferenceObject(hProcess);
+
+	return status;
+}
 
 NTSTATUS CloseHandle(PDO_SOMETHING DoSomething) {
 	PEPROCESS TargetProcess;

@@ -429,3 +429,20 @@ Sub InitLog()
     MyLog.PrintLog(LOG_INFO, "模块初始化完成")
     MyLog.PrintLog(LOG_FATAL, "程序异常退出")'/
 End Sub
+
+Function ShowMsgBox(ByVal pwszText As WString Ptr, ByRef wszCaption As WString = "SnowSword", ByVal uType As DWORD = 0) As Long
+    Return AfxMsg(pwszText, wszCaption, uType)
+End Function
+
+Function ShowErrorBox(ByVal pwszText As WString Ptr) As Long
+    Return AfxMsg(pwszText, "错误", MB_OK Or MB_ICONERROR)
+End Function
+
+Function ShowWarningBox(ByVal pwszText As WString Ptr) As Long
+    Return AfxMsg(pwszText, "警告", MB_OK Or MB_ICONWARNING)
+End Function
+
+
+Function ShowInfoBox(ByVal pwszText As WString Ptr) As Long
+    Return AfxMsg(pwszText, "提示", MB_OK Or MB_ICONINFORMATION)
+End Function

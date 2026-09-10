@@ -47,7 +47,7 @@ End Function
 
 Sub RestartasAdmin(ByVal IsLoadDriver As Boolean = False)
     If IsAdmin Then
-        AfxMsg "当前进程已获得管理员(UAC)权限!", "提示"
+        ShowInfoBox "当前进程已获得管理员(UAC)权限!"
         Exit Sub
     End If
     

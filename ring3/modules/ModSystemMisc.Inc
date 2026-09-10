@@ -174,6 +174,9 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
     ' =====================================================
 
     lvwEtw.DeleteItem MC_TLI_ROOT
+    
+    Dim cliRows() As CuiExportRow       ' CLI 行数据数组
+    Dim cliRowIdx As Long = 0           ' 当前行索引
 
     For i = 0 To count - 1
         Dim pName As WString Ptr
@@ -186,27 +189,47 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
             loggerIdToIndex(sid) = i
         End If
         
-        hSession(i) = lvwEtw.AddItem(MC_TLI_ROOT, *pName)
-        lvwEtw.SetItemText hSession(i), 1, "Session"
-        lvwEtw.SetItemText hSession(i), 2, "LoggerId=" & WStr(sid)
-        lvwEtw.SetItemText hSession(i), 3, WStr(pProps(i)->EventsLost)
+        If g_CuiMode Then
+            ' ---- CLI 模式：填充会话根行 ----
+            ReDim Preserve cliRows(cliRowIdx) As CuiExportRow
+            cliRows(cliRowIdx).IndentLevel = 0
+            cliRows(cliRowIdx).IsGroup = True
+            cliRows(cliRowIdx).ColCount = 5
+            cliRows(cliRowIdx).Cols(0) = *pName
+            cliRows(cliRowIdx).Cols(1) = "Session"
+            cliRows(cliRowIdx).Cols(2) = "LoggerId=" & WStr(sid)
+            cliRows(cliRowIdx).Cols(3) = "EventsLost=" & WStr(pProps(i)->EventsLost)
+            cliRows(cliRowIdx).Cols(4) = ""
+            cliRowIdx += 1
+        Else
+            ' ---- GUI 模式：原有代码 ----
+            hSession(i) = lvwEtw.AddItem(MC_TLI_ROOT, *pName)
+            lvwEtw.SetItemText hSession(i), 1, "Session"
+            lvwEtw.SetItemText hSession(i), 2, "LoggerId=" & WStr(sid)
+            lvwEtw.SetItemText hSession(i), 3, WStr(pProps(i)->EventsLost)
+        End If
         
         If *pName = "NT Kernel Logger" Then
-
-            Dim hItem As MC_HTREELISTITEM
-
-            hItem = lvwEtw.AddItem( _
-                        hSession(i), _
-                        "Windows Kernel Trace")
-
-            lvwEtw.SetItemText hItem,1,"Provider"
-
-            lvwEtw.SetItemText hItem,2, _
-                "{9E814AAD-3204-11D2-9A82-006008A86939}"
-
-            lvwEtw.SetItemText hItem,3, _
-                "EnableFlags=0x" & _
-                Hex(pProps(i)->EnableFlags)
+            If g_CuiMode Then
+                ' CLI 模式：添加该特殊提供者子行
+                ReDim Preserve cliRows(cliRowIdx) As CuiExportRow
+                cliRows(cliRowIdx).IndentLevel = 1
+                cliRows(cliRowIdx).IsGroup = False
+                cliRows(cliRowIdx).ColCount = 5
+                cliRows(cliRowIdx).Cols(0) = "Windows Kernel Trace"
+                cliRows(cliRowIdx).Cols(1) = "Provider"
+                cliRows(cliRowIdx).Cols(2) = "{9E814AAD-3204-11D2-9A82-006008A86939}"
+                cliRows(cliRowIdx).Cols(3) = "EnableFlags=0x" & Hex(pProps(i)->EnableFlags)
+                cliRows(cliRowIdx).Cols(4) = ""
+                cliRowIdx += 1
+            Else
+                ' GUI 模式：原有代码
+                Dim hItem As MC_HTREELISTITEM
+                hItem = lvwEtw.AddItem(hSession(i), "Windows Kernel Trace")
+                lvwEtw.SetItemText hItem,1,"Provider"
+                lvwEtw.SetItemText hItem,2,"{9E814AAD-3204-11D2-9A82-006008A86939}"
+                lvwEtw.SetItemText hItem,3,"EnableFlags=0x" & Hex(pProps(i)->EnableFlags)
+            End If
         End If
         FF_DoEvents
     Next
@@ -354,27 +377,41 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
                         Dim sIdx As Long = loggerIdToIndex(sid)
 
                         If sIdx <> -1 Then
-                            Dim hItem As MC_HTREELISTITEM
-                            Dim pProviderName As WString Ptr
-
-                            ' 这里用 GUID 字符串当作节点标题，
-                            ' 避免同 GUID 的不同 runtime instance 混淆
-                            'pProviderName = @curGuidStr
-                            
                             Dim displayName As StringW
-
                             displayName = FindProviderName(curGuidStr, ProviderMap(), ProviderCount)
-                            hItem = lvwEtw.AddItem(hSession(sIdx), displayName)
-                            lvwEtw.SetItemText hItem, 1, "Provider"
-                            lvwEtw.SetItemText hItem, 2, curGuidStr
-                            lvwEtw.SetItemText hItem, 3, _
-                                "LoggerId=" & WStr(sid) & _
-                                " Level=" & WStr(pEnable->Level) & _
-                                " MatchAny=0x" & Hex(pEnable->MatchAnyKeyword) & _
-                                " Flags=0x" & Hex(pInstance->dwFlags) & _
-                                " PID=" & pInstance->PID
-                                
-                            If lvwEtw.GetItemText(hSession(sIdx), 0) = "Circular Kernel Context Logger" Then lvwEtw.SetItemText hItem, 0, "Circular Kernel Session Provider"
+
+                            If g_CuiMode Then
+                                ' ---- CLI 模式：填充提供者子行 ----
+                                ReDim Preserve cliRows(cliRowIdx) As CuiExportRow
+                                cliRows(cliRowIdx).IndentLevel = 1
+                                cliRows(cliRowIdx).IsGroup = False
+                                cliRows(cliRowIdx).ColCount = 5
+                                cliRows(cliRowIdx).Cols(0) = displayName
+                                cliRows(cliRowIdx).Cols(1) = "Provider"
+                                cliRows(cliRowIdx).Cols(2) = curGuidStr
+                                cliRows(cliRowIdx).Cols(3) = _
+                                    "LoggerId=" & WStr(sid) & _
+                                    " Level=" & WStr(pEnable->Level) & _
+                                    " MatchAny=0x" & Hex(pEnable->MatchAnyKeyword) & _
+                                    " Flags=0x" & Hex(pInstance->dwFlags) & _
+                                    " PID=" & pInstance->PID
+                                cliRows(cliRowIdx).Cols(4) = ""
+                                cliRowIdx += 1
+                            Else
+                                ' ---- GUI 模式：原有代码 ----
+                                Dim hItem As MC_HTREELISTITEM
+                                hItem = lvwEtw.AddItem(hSession(sIdx), displayName)
+                                lvwEtw.SetItemText hItem, 1, "Provider"
+                                lvwEtw.SetItemText hItem, 2, curGuidStr
+                                lvwEtw.SetItemText hItem, 3, _
+                                    "LoggerId=" & WStr(sid) & _
+                                    " Level=" & WStr(pEnable->Level) & _
+                                    " MatchAny=0x" & Hex(pEnable->MatchAnyKeyword) & _
+                                    " Flags=0x" & Hex(pInstance->dwFlags) & _
+                                    " PID=" & pInstance->PID
+
+                                If lvwEtw.GetItemText(hSession(sIdx), 0) = "Circular Kernel Context Logger" Then lvwEtw.SetItemText hItem, 0, "Circular Kernel Session Provider"
+                            End If
                         End If
                     End If
 
@@ -393,9 +430,26 @@ Function EnumETWSession(lvwEtw As Class_mCtrlTreeList) As ULong
     If pGuids <> NULL Then Deallocate(pGuids)
 
     ' =====================================================
+    ' CLI 模式输出
+    ' =====================================================
+    If g_CuiMode Then
+        Dim colNames(4) As StringW = { _
+            "名称", "类型", "标识信息", "详情", "" _
+        }
+        If cliRowIdx > 0 Then
+            ReDim Preserve cliRows(cliRowIdx - 1) As CuiExportRow
+            CuiPrintTreeListData "ETW", cliRows(), colNames(), 5
+        Else
+            Dim emptyRows() As CuiExportRow
+            ReDim emptyRows(-1) As CuiExportRow
+            CuiPrintTreeListData "ETW", emptyRows(), colNames(), 5
+        End If
+    End If
+    
+    ' =====================================================
     ' Cleanup
     ' =====================================================
-
+    
     For i = 0 To MAX_SESSIONS - 1
         If pProps(i) <> NULL Then Deallocate(pProps(i))
     Next
@@ -531,7 +585,7 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
     Dim taskArg(0) As VARIANT : taskArg(0).vt = VT_I4 : taskArg(0).lVal = 1
     hr = DispatchInvokeMethod(folderDisp, "GetTasks", @taskArg(0), 1, tasksVar)
     
-    If hr = 0 And tasksVar.vt = VT_DISPATCH Then
+    If hr = 0 And tasksVar.vt = VT_DISPATCH AndAlso tasksVar.pdispVal <> NULL Then
         Dim countVar As VARIANT : VariantInit(@countVar)
         hr = DispatchInvokeGet(tasksVar.pdispVal, "Count", countVar)
         
@@ -542,12 +596,9 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                     Dim taskVar As VARIANT : VariantInit(@taskVar)
                     Dim idxArg(0) As VARIANT : idxArg(0).vt = VT_I4 : idxArg(0).lVal = i
                     
-                    ' ==============================================
-                    ' 核心修复：任务集合Item是属性，改用PropertyGet调用
-                    ' ==============================================
                     hr = DispatchInvokeGetWithArgs(tasksVar.pdispVal, "Item", @idxArg(0), 1, taskVar)
                     
-                    If hr = 0 And taskVar.vt = VT_DISPATCH Then
+                    If hr = 0 And taskVar.vt = VT_DISPATCH AndAlso taskVar.pdispVal <> NULL Then
                         Dim taskDisp As IDispatch Ptr = taskVar.pdispVal
                         
                         ' 1. 获取任务名称
@@ -579,7 +630,7 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                         
                         ' 4. 获取上次运行时间
                         Dim lastRunVar As VARIANT : VariantInit(@lastRunVar)
-                        Dim lastRunTime As WString * MAX_PATH = "无"
+                        Dim lastRunTime As String = "无"
                         hr = DispatchInvokeGet(taskDisp, "LastRunTime", lastRunVar)
                         If hr = 0 And lastRunVar.vt = VT_DATE Then
                             lastRunTime = DateToText(lastRunVar)
@@ -588,7 +639,7 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                         
                         ' 5. 获取下次运行时间
                         Dim nextRunVar As VARIANT : VariantInit(@nextRunVar)
-                        Dim nextRunTime As WString * MAX_PATH = "无"
+                        Dim nextRunTime As String = "无"
                         hr = DispatchInvokeGet(taskDisp, "NextRunTime", nextRunVar)
                         If hr = 0 And nextRunVar.vt = VT_DATE Then
                             nextRunTime = DateToText(nextRunVar)
@@ -597,97 +648,90 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                         
                         ' 6. 获取上次运行结果
                         Dim lastResultVar As VARIANT : VariantInit(@lastResultVar)
-                        Dim lastResult As WString * MAX_PATH = "未知"
+                        Dim lastResult As String = "未知"
                         hr = DispatchInvokeGet(taskDisp, "LastTaskResult", lastResultVar)
                         If hr = 0 And (lastResultVar.vt = VT_I4 Or lastResultVar.vt = VT_I2) Then
                             lastResult = "0x" & Hex(lastResultVar.lVal) & IIf(lastResultVar.lVal = 0, " (成功)", " (失败)")
                         End If
                         VariantClear(@lastResultVar)
                         
-                        ' ======================
-                        ' 获取 Definition（后续复用）
-                        ' ======================
+                        ' 获取任务定义
                         Dim defVar As VARIANT : VariantInit(@defVar)
-                        Dim description As WString * MAX_PATH = ""
-                        Dim execPath As WString * MAX_PATH = ""
-
-                        If DispatchInvokeGet(taskDisp, "Definition", defVar) = 0 And defVar.vt = VT_DISPATCH Then
-
-                            ' ----------------------
-                            ' 1. Description
-                            ' ----------------------
+                        Dim description As String = ""
+                        Dim execPath As String = ""
+                        If DispatchInvokeGet(taskDisp, "Definition", defVar) = 0 And defVar.vt = VT_DISPATCH AndAlso defVar.pdispVal <> NULL Then
+                            ' 1. 描述信息
                             Dim regVar As VARIANT : VariantInit(@regVar)
                             Dim descVar As VARIANT : VariantInit(@descVar)
-
-                            If DispatchInvokeGet(defVar.pdispVal, "RegistrationInfo", regVar) = 0 And regVar.vt = VT_DISPATCH Then
+                            If DispatchInvokeGet(defVar.pdispVal, "RegistrationInfo", regVar) = 0 And regVar.vt = VT_DISPATCH AndAlso regVar.pdispVal <> NULL Then
                                 If DispatchInvokeGet(regVar.pdispVal, "Description", descVar) = 0 Then
                                     If descVar.vt = VT_BSTR Then description = BSTRToString(descVar.bstrVal)
                                 End If
                             End If
-
                             VariantClear(@descVar)
+                            ReleaseVariantDispatch(regVar)
                             VariantClear(@regVar)
-
-                            ' ----------------------
-                            ' 2. ExecPath
-                            ' ----------------------
+                            
+                            ' 2. 执行路径
                             Dim actionsVar As VARIANT : VariantInit(@actionsVar)
-
-                            If DispatchInvokeGet(defVar.pdispVal, "Actions", actionsVar) = 0 And actionsVar.vt = VT_DISPATCH Then
-                                
+                            If DispatchInvokeGet(defVar.pdispVal, "Actions", actionsVar) = 0 And actionsVar.vt = VT_DISPATCH AndAlso actionsVar.pdispVal <> NULL Then
                                 Dim actVar As VARIANT : VariantInit(@actVar)
-                                Dim idxArg2(0) As VARIANT
-                                idxArg2(0).vt = VT_I4 : idxArg2(0).lVal = 1
-
-                                If DispatchInvokeGetWithArgs(actionsVar.pdispVal, "Item", @idxArg2(0), 1, actVar) = 0 And actVar.vt = VT_DISPATCH Then
-                                    
+                                Dim idxArg2(0) As VARIANT : idxArg2(0).vt = VT_I4 : idxArg2(0).lVal = 1
+                                If DispatchInvokeGetWithArgs(actionsVar.pdispVal, "Item", @idxArg2(0), 1, actVar) = 0 And actVar.vt = VT_DISPATCH AndAlso actVar.pdispVal <> NULL Then
                                     Dim pathVar As VARIANT : VariantInit(@pathVar)
                                     If DispatchInvokeGet(actVar.pdispVal, "Path", pathVar) = 0 Then
                                         If pathVar.vt = VT_BSTR Then execPath = BSTRToString(pathVar.bstrVal)
                                     End If
                                     VariantClear(@pathVar)
-
                                 End If
+                                ReleaseVariantDispatch(actVar)
                                 VariantClear(@actVar)
-
                             End If
+                            ReleaseVariantDispatch(actionsVar)
                             VariantClear(@actionsVar)
-
                         End If
-
-                        ' ⚠️ 最后再释放 Definition
+                        ReleaseVariantDispatch(defVar)
                         VariantClear(@defVar)
                         
-                        Dim taskPath As WString * MAX_PATH = ""
-                        If currentPath <> "\" Then taskPath = currentPath & "\" & taskName Else taskPath = currentPath & taskName
+                        ' 拼接任务完整路径
+                        Dim taskPath As String
+                        If currentPath <> "\" Then
+                            taskPath = currentPath & "\" & taskName
+                        Else
+                            taskPath = currentPath & taskName
+                        End If
+                        
                         execPath = LCase(execPath)
                         execPath = FF_Replace(execPath, "%systemroot%", Environ("SystemRoot"))
                         execPath = FF_Replace(execPath, "%windir%", Environ("windir"))
                         execPath = FF_Replace(execPath, "%localappdata%", Environ("localappdata"))
-                        ' 打印任务完整信息
-                        Dim ItemIndex As Long = AddItemColListEx(lvwTaskScheduler, 12,,, WStr(TaskIndex), taskPath, WStr(isEnabled), _
-                        WStr(taskState), lastRunTime, nextRunTime, lastResult, execPath, description, WStr(""), WStr(""), WStr(""))
+                        
+                        ' 加入列表
+                        AddItemColListEx(lvwTaskScheduler, 12,,, WStr(TaskIndex), WStr(taskPath), WStr(isEnabled), _
+                                        WStr(taskState), WStr(lastRunTime), WStr(nextRunTime), WStr(lastResult), _
+                                        WStr(execPath), WStr(description), WStr(""), WStr(""), WStr(""))
                         TaskIndex += 1
                     Else
-                        ' 调试打印：任务获取失败的错误码
                         MyLog.PrintLog LOG_WARN, "EnumTasksInFolder",, "第" & i & "个任务获取失败, hr=0x" & Hex(hr) & ", vt=" & taskVar.vt
                     End If
+                    
+                    ReleaseVariantDispatch(taskVar)
                     VariantClear(@taskVar)
                     FF_DoEvents
                 Next
-                'Print
             End If
         End If
         VariantClear(@countVar)
     End If
+    ReleaseVariantDispatch(tasksVar)
     VariantClear(@tasksVar)
-
+    
     ' 递归枚举子文件夹
     Dim subFoldersVar As VARIANT : VariantInit(@subFoldersVar)
     Dim folderArg(0) As VARIANT : folderArg(0).vt = VT_I4 : folderArg(0).lVal = 1
     hr = DispatchInvokeMethod(folderDisp, "GetFolders", @folderArg(0), 1, subFoldersVar)
     
-    If hr = 0 And subFoldersVar.vt = VT_DISPATCH Then
+    If hr = 0 And subFoldersVar.vt = VT_DISPATCH AndAlso subFoldersVar.pdispVal <> NULL Then
         Dim folderCountVar As VARIANT : VariantInit(@folderCountVar)
         hr = DispatchInvokeGet(subFoldersVar.pdispVal, "Count", folderCountVar)
         
@@ -698,64 +742,62 @@ Sub EnumTasksInFolder(folderDisp As IDispatch Ptr, currentPath As String, lvwTas
                 Dim idxArg(0) As VARIANT : idxArg(0).vt = VT_I4 : idxArg(0).lVal = i
                 hr = DispatchInvokeGetWithArgs(subFoldersVar.pdispVal, "Item", @idxArg(0), 1, subFolderVar)
                 
-                If hr = 0 And subFolderVar.vt = VT_DISPATCH Then
+                If hr = 0 And subFolderVar.vt = VT_DISPATCH AndAlso subFolderVar.pdispVal <> NULL Then
                     Dim nameVar As VARIANT : VariantInit(@nameVar)
                     hr = DispatchInvokeGet(subFolderVar.pdispVal, "Name", nameVar)
                     If hr = 0 And nameVar.vt = VT_BSTR And nameVar.bstrVal <> NULL Then
-                        Dim subFolderName As WString * 1024 = BSTRToString(nameVar.bstrVal)
-                        ' lstrcpyW(@subFolderName, nameVar.bstrVal)
-                        Dim fullPath As String = IIf(currentPath = "\", "\" & WStr(subFolderName), currentPath & "\" & WStr(subFolderName))
+                        Dim subFolderName As String = BSTRToString(nameVar.bstrVal)
+                        Dim fullPath As String
+                        If currentPath = "\" Then
+                            fullPath = "\" & subFolderName
+                        Else
+                            fullPath = currentPath & "\" & subFolderName
+                        End If
                         EnumTasksInFolder(subFolderVar.pdispVal, fullPath, lvwTaskScheduler)
                     End If
                     VariantClear(@nameVar)
                 End If
+                
+                ReleaseVariantDispatch(subFolderVar)
                 VariantClear(@subFolderVar)
                 FF_DoEvents
             Next
         End If
         VariantClear(@folderCountVar)
     End If
+    ReleaseVariantDispatch(subFoldersVar)
     VariantClear(@subFoldersVar)
 End Sub
 
 ' ==============================================
-' 主函数
+' 主函数：枚举所有任务计划
 ' ==============================================
 Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
     Dim pTaskService As IDispatch Ptr
     Dim hr As Long
-
-    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
-    If hr <> 0 And hr <> 1 Then
-        MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "CoInitializeEx", "COM初始化失败, hr=0x" & Hex(hr)
-        Exit Sub
-    End If
+    Dim connectVar As VARIANT : VariantInit(@connectVar)
+    Dim rootFolderVar As VARIANT : VariantInit(@rootFolderVar)
+    Dim folderArg(0) As VARIANT
 
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pTaskService)
     If hr <> 0 Or pTaskService = NULL Then
         MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "CoCreateInstance", "创建TaskScheduler对象失败, hr=0x" & Hex(hr)
-        CoUninitialize()
-        Exit Sub
+        GoTo Cleanup
     End If
 
-    Dim connectVar As VARIANT : VariantInit(@connectVar)
     hr = DispatchInvokeMethod(pTaskService, "Connect", NULL, 0, connectVar)
     If hr <> 0 Then
         MyLog.PrintLog LOG_ERROR, "GetTaskSchedulerList", "DispatchInvokeMethod(Connect)", "hr=0x" & Hex(hr)
-        pTaskService->lpVtbl->Release(pTaskService)
-        CoUninitialize()
-        Exit Sub
+        GoTo Cleanup
     End If
     VariantClear(@connectVar)
 
-    Dim rootFolderVar As VARIANT : VariantInit(@rootFolderVar)
-    Dim folderArg(0) As VARIANT : folderArg(0).vt = VT_BSTR : folderArg(0).bstrVal = SysAllocString(WStr("\"))
+    folderArg(0).vt = VT_BSTR : folderArg(0).bstrVal = SysAllocString(WStr("\"))
     hr = DispatchInvokeMethod(pTaskService, "GetFolder", @folderArg(0), 1, rootFolderVar)
     SysFreeString(folderArg(0).bstrVal)
     
     InitListViewData lvwTaskScheduler
-
-    If hr = 0 And rootFolderVar.vt = VT_DISPATCH Then
+    If hr = 0 And rootFolderVar.vt = VT_DISPATCH AndAlso rootFolderVar.pdispVal <> NULL Then
         TaskIndex = 0
         EnumTasksInFolder(rootFolderVar.pdispVal, "\", lvwTaskScheduler)
     Else
@@ -763,17 +805,23 @@ Sub GetTaskSchedulerList(lvwTaskScheduler As Class_ListView)
     End If
     
     CommitListViewView lvwTaskScheduler
-    
-    VariantClear(@rootFolderVar)
 
-    pTaskService->lpVtbl->Release(pTaskService)
-    CoUninitialize()
+Cleanup:
+    ReleaseVariantDispatch(rootFolderVar)
+    VariantClear(@rootFolderVar)
+    VariantClear(@connectVar)
+    If pTaskService Then
+        pTaskService->lpVtbl->Release(pTaskService)
+        pTaskService = NULL
+    End If
 End Sub
 
-' ==============================================
-' 计划任务管理常用函数（对齐你的代码风格）
-' 依赖：已有的COM封装、BSTRToString、Dispatch系列函数
-' ==============================================
+Sub ReleaseVariantDispatch(ByRef v As VARIANT)
+    If v.vt = VT_DISPATCH AndAlso v.pdispVal <> NULL Then
+        v.pdispVal->lpVtbl->Release(v.pdispVal)
+        v.pdispVal = NULL
+    End If
+End Sub
 
 ' --------------------------
 ' 1. 立即运行指定任务
@@ -788,40 +836,66 @@ Function RunTask(taskPath As String) As Long
     Dim fArg(0) As VARIANT
     Dim tArg(0) As VARIANT
     Dim runArg(0) As VARIANT
-
-    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
-    If hr < 0 And hr <> &h80010106 Then Return -1  ' RPC_E_CHANGED_MODE 允许继续
+    ' === 解析路径 ===
+    Dim folderPath As String, taskName As String
+    Dim lastSlash As Integer = InStrRev(taskPath, "\")
+    If lastSlash > 1 Then
+        folderPath = Left(taskPath, lastSlash - 1)
+        taskName = Mid(taskPath, lastSlash + 1)
+    ElseIf lastSlash = 1 Then
+        folderPath = "\"
+        taskName = Mid(taskPath, 2)
+    Else
+        folderPath = "\"
+        taskName = taskPath
+    End If
 
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
-    If hr <> 0 Or pService = NULL Then GoTo Cleanup
-
+    If hr <> 0 Or pService = NULL Then
+        MyLog.PrintLog LOG_ERROR, "RunTask", "CoCreateInstance", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     hr = DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
-    If hr <> 0 Then GoTo Cleanup
-
-    ' 获取根文件夹
-    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    If hr <> 0 Then
+        MyLog.PrintLog LOG_ERROR, "RunTask", "Connect", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 获取目标文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr(folderPath))
     hr = DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
     SysFreeString(fArg(0).bstrVal)
-    If hr <> 0 Or folderVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    ' 获取任务对象（GetTask 是方法，不是属性）
-    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskPath))
+    If hr <> 0 Or folderVar.vt <> VT_DISPATCH OrElse folderVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "RunTask", "GetFolder(" & folderPath & ")", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 获取任务对象
+    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskName))
     hr = DispatchInvokeMethod(folderVar.pdispVal, "GetTask", @tArg(0), 1, taskVar)
     SysFreeString(tArg(0).bstrVal)
-    If hr <> 0 Or taskVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    ' 运行任务：Run(0)
+    If hr <> 0 Or taskVar.vt <> VT_DISPATCH OrElse taskVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "RunTask", "GetTask(" & taskName & ")", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 运行任务：Run(pParameters)，单参数无需逆序
     runArg(0).vt = VT_I4 : runArg(0).lVal = 0
     hr = DispatchInvokeMethod(taskVar.pdispVal, "Run", @runArg(0), 1, result)
+    If hr = 0 Then
+        MyLog.PrintLog LOG_INFO, "RunTask", "Run", "hr=0x" & WHex(hr)
+    Else
+        MyLog.PrintLog LOG_ERROR, "RunTask", "Run", "hr=0x" & WHex(hr)
+    End If
     ret = IIf(hr = 0, 0, -2)
-
 Cleanup:
     VariantClear(@result)
+    ReleaseVariantDispatch(taskVar)
     VariantClear(@taskVar)
+    ReleaseVariantDispatch(folderVar)
     VariantClear(@folderVar)
     VariantClear(@vConn)
-    If pService Then pService->lpVtbl->Release(pService)
-    CoUninitialize()
+    If pService Then
+        pService->lpVtbl->Release(pService)
+        pService = NULL
+    End If
     Return ret
 End Function
 
@@ -838,46 +912,73 @@ Function SetTaskEnabled(taskPath As String, ByVal enable As Boolean) As Long
     Dim tArg(0) As VARIANT
     Dim vEnable As VARIANT : VariantInit(@vEnable)
     Dim dummyResult As VARIANT : VariantInit(@dummyResult)
-
-    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
-    If hr < 0 And hr <> &h80010106 Then Return -1
+    ' === 解析路径 ===
+    Dim folderPath As String, taskName As String
+    Dim lastSlash As Integer = InStrRev(taskPath, "\")
+    If lastSlash > 1 Then
+        folderPath = Left(taskPath, lastSlash - 1)
+        taskName = Mid(taskPath, lastSlash + 1)
+    ElseIf lastSlash = 1 Then
+        folderPath = "\"
+        taskName = Mid(taskPath, 2)
+    Else
+        folderPath = "\"
+        taskName = taskPath
+    End If
 
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
-    If hr <> 0 Or pService = NULL Then GoTo Cleanup
-
+    If hr <> 0 Or pService = NULL Then
+        MyLog.PrintLog LOG_ERROR, "SetTaskEnabled", "CoCreateInstance", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     hr = DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
-    If hr <> 0 Then GoTo Cleanup
-
-    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    If hr <> 0 Then
+        MyLog.PrintLog LOG_ERROR, "SetTaskEnabled", "Connect", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 获取目标文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr(folderPath))
     hr = DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
     SysFreeString(fArg(0).bstrVal)
-    If hr <> 0 Or folderVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskPath))
+    If hr <> 0 Or folderVar.vt <> VT_DISPATCH OrElse folderVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "SetTaskEnabled", "GetFolder(" & folderPath & ")", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 获取任务对象
+    tArg(0).vt = VT_BSTR : tArg(0).bstrVal = SysAllocString(WStr(taskName))
     hr = DispatchInvokeMethod(folderVar.pdispVal, "GetTask", @tArg(0), 1, taskVar)
     SysFreeString(tArg(0).bstrVal)
-    If hr <> 0 Or taskVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    ' 设置 Enabled 属性
+    If hr <> 0 Or taskVar.vt <> VT_DISPATCH OrElse taskVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "SetTaskEnabled", "GetTask(" & taskName & ")", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 设置 Enabled 属性，单参数PUT，无逆序问题
     vEnable.vt = VT_BOOL
     vEnable.boolVal = IIf(enable, VARIANT_TRUE, VARIANT_FALSE)
-    
     hr = DispatchInvokeGeneric(taskVar.pdispVal, "Enabled", @vEnable, 1, DISPATCH_PROPERTYPUT, dummyResult)
+    If hr = 0 Then
+        MyLog.PrintLog LOG_INFO, "SetTaskEnabled", "Enabled=" & IIf(enable, "True", "False"), "hr=0x" & WHex(hr)
+    Else
+        MyLog.PrintLog LOG_ERROR, "SetTaskEnabled", "Enabled=" & IIf(enable, "True", "False"), "hr=0x" & WHex(hr)
+    End If
     ret = IIf(hr = 0, 0, -2)
-
 Cleanup:
     VariantClear(@dummyResult)
     VariantClear(@vEnable)
+    ReleaseVariantDispatch(taskVar)
     VariantClear(@taskVar)
+    ReleaseVariantDispatch(folderVar)
     VariantClear(@folderVar)
     VariantClear(@vConn)
-    If pService Then pService->lpVtbl->Release(pService)
-    CoUninitialize()
+    If pService Then
+        pService->lpVtbl->Release(pService)
+        pService = NULL
+    End If
     Return ret
 End Function
 
 ' --------------------------
-' 3. 删除任务
+' 删除任务计划任务
 ' --------------------------
 Function DeleteTask(taskPath As String) As Long
     Dim hr As Long, pService As IDispatch Ptr
@@ -886,38 +987,70 @@ Function DeleteTask(taskPath As String) As Long
     Dim folderVar As VARIANT : VariantInit(@folderVar)
     Dim dummyResult As VARIANT : VariantInit(@dummyResult)
     Dim fArg(0) As VARIANT
-    Dim delArg(0) As VARIANT
-
-    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
-    If hr < 0 And hr <> &h80010106 Then Return -1
+    Dim delArg(1) As VARIANT
+    ' === 解析路径 ===
+    Dim folderPath As String, taskName As String
+    Dim lastSlash As Integer = InStrRev(taskPath, "\")
+    If lastSlash > 1 Then
+        folderPath = Left(taskPath, lastSlash - 1)
+        taskName = Mid(taskPath, lastSlash + 1)
+    ElseIf lastSlash = 1 Then
+        folderPath = "\"
+        taskName = Mid(taskPath, 2)
+    Else
+        folderPath = "\"
+        taskName = taskPath
+    End If
 
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
-    If hr <> 0 Or pService = NULL Then GoTo Cleanup
-
+    If hr <> 0 Or pService = NULL Then
+        MyLog.PrintLog LOG_ERROR, "DeleteTask", "CoCreateInstance", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     hr = DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
-    If hr <> 0 Then GoTo Cleanup
-
-    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
+    If hr <> 0 Then
+        MyLog.PrintLog LOG_ERROR, "DeleteTask", "Connect", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 获取目标文件夹
+    fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr(folderPath))
     hr = DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
     SysFreeString(fArg(0).bstrVal)
-    If hr <> 0 Or folderVar.vt <> VT_DISPATCH Then GoTo Cleanup
+    If hr <> 0 Or folderVar.vt <> VT_DISPATCH OrElse folderVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "DeleteTask", "GetFolder(" & folderPath & ")", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
 
-    delArg(0).vt = VT_BSTR : delArg(0).bstrVal = SysAllocString(WStr(taskPath))
-    hr = DispatchInvokeMethod(folderVar.pdispVal, "DeleteTask", @delArg(0), 1, dummyResult)
-    SysFreeString(delArg(0).bstrVal)
-    ret = IIf(hr = 0, 0, -2)
+    ' ===================== 核心：IDispatch 参数逆序 =====================
+    ' ITaskFolder.DeleteTask(Name, Flags)
+    ' rgvarg[0] = Flags（第2参数，右侧）
+    ' rgvarg[1] = Name（第1参数，左侧）
+    delArg(0).vt = VT_I4 : delArg(0).lVal = 0
+    delArg(1).vt = VT_BSTR : delArg(1).bstrVal = SysAllocString(WStr(taskName))
+    hr = DispatchInvokeMethod(folderVar.pdispVal, "DeleteTask", @delArg(0), 2, dummyResult)
+    SysFreeString(delArg(1).bstrVal)
+
+    If hr = 0 Then
+        MyLog.PrintLog LOG_INFO, "DeleteTask", "DeleteTask(" & taskName & ")", "hr=0x" & WHex(hr)
+    Else
+        MyLog.PrintLog LOG_ERROR, "DeleteTask", "DeleteTask(" & taskName & ")", "hr=0x" & WHex(hr)
+    End If
+    ret = IIf(hr = 0, 0, -6)
 
 Cleanup:
     VariantClear(@dummyResult)
+    ReleaseVariantDispatch(folderVar)
     VariantClear(@folderVar)
     VariantClear(@vConn)
-    If pService Then pService->lpVtbl->Release(pService)
-    CoUninitialize()
+    If pService Then
+        pService->lpVtbl->Release(pService)
+        pService = NULL
+    End If
     Return ret
 End Function
 
 ' --------------------------
-' 4. 创建简单执行程序任务
+' 4. 创建简单执行程序任务（开机触发器）
 ' --------------------------
 Function CreateBasicTask(ByVal taskName As String, _
                          ByVal CommandLine As String, _
@@ -938,82 +1071,124 @@ Function CreateBasicTask(ByVal taskName As String, _
     Dim vDesc As VARIANT : VariantInit(@vDesc)
     Dim pathVar As VARIANT : VariantInit(@pathVar)
     Dim triggerCreateArg(0) As VARIANT
-    Dim regArg(4) As VARIANT
+    Dim regArg(5) As VARIANT ' RegisterTaskDefinition 共6参数
     Dim registerResult As VARIANT : VariantInit(@registerResult)
 
-    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)
-    If hr < 0 And hr <> &h80010106 Then Return -1
-
     hr = CoCreateInstance(@CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, @IID_ITaskService, @pService)
-    If hr <> 0 Or pService = NULL Then GoTo Cleanup
-
+    If hr <> 0 Or pService = NULL Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "CoCreateInstance", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     hr = DispatchInvokeMethod(pService, "Connect", NULL, 0, vConn)
-    If hr <> 0 Then GoTo Cleanup
-
+    If hr <> 0 Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "Connect", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     ' 获取根文件夹
     fArg(0).vt = VT_BSTR : fArg(0).bstrVal = SysAllocString(WStr("\"))
     hr = DispatchInvokeMethod(pService, "GetFolder", @fArg(0), 1, folderVar)
     SysFreeString(fArg(0).bstrVal)
-    If hr <> 0 Or folderVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
+    If hr <> 0 Or folderVar.vt <> VT_DISPATCH OrElse folderVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "GetFolder", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     ' 创建任务定义
     hr = DispatchInvokeMethod(pService, "NewTask", NULL, 0, defVar)
-    If hr <> 0 Or defVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    ' === 注册信息 ===
+    If hr <> 0 Or defVar.vt <> VT_DISPATCH OrElse defVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "NewTask", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' === 注册信息：Description ===
     hr = DispatchInvokeGet(defVar.pdispVal, "RegistrationInfo", regVar)
-    If hr = 0 And regVar.vt = VT_DISPATCH Then
+    If hr = 0 And regVar.vt = VT_DISPATCH AndAlso regVar.pdispVal <> NULL Then
         vDesc.vt = VT_BSTR : vDesc.bstrVal = SysAllocString(WStr(desc))
         hr = DispatchInvokeGeneric(regVar.pdispVal, "Description", @vDesc, 1, DISPATCH_PROPERTYPUT, dummyResult)
         SysFreeString(vDesc.bstrVal)
         VariantClear(@dummyResult)
     End If
-
-    ' === 执行动作 ===
+    ' === 添加执行Action ===
     hr = DispatchInvokeGet(defVar.pdispVal, "Actions", actionsVar)
-    If hr <> 0 Or actionsVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
+    If hr <> 0 Or actionsVar.vt <> VT_DISPATCH OrElse actionsVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "Actions", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
     createArg(0).vt = VT_I4 : createArg(0).lVal = 0  ' TASK_ACTION_EXEC
     hr = DispatchInvokeMethod(actionsVar.pdispVal, "Create", @createArg(0), 1, actionVar)
-    If hr <> 0 Or actionVar.vt <> VT_DISPATCH Then GoTo Cleanup
-
-    ' 设置执行路径
+    If hr <> 0 Or actionVar.vt <> VT_DISPATCH OrElse actionVar.pdispVal = NULL Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "Actions.Create", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' 设置Action Path
     pathVar.vt = VT_BSTR : pathVar.bstrVal = SysAllocString(WStr(CommandLine))
     hr = DispatchInvokeGeneric(actionVar.pdispVal, "Path", @pathVar, 1, DISPATCH_PROPERTYPUT, dummyResult)
     SysFreeString(pathVar.bstrVal)
     VariantClear(@dummyResult)
-    If hr <> 0 Then GoTo Cleanup
-
-    ' === 触发器（开机启动 TASK_TRIGGER_BOOT）===
+    If hr <> 0 Then
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "Action.Path", "hr=0x" & WHex(hr)
+        GoTo Cleanup
+    End If
+    ' === 添加开机触发器 TASK_TRIGGER_BOOT=8 ===
     hr = DispatchInvokeGet(defVar.pdispVal, "Triggers", triggersVar)
-    If hr = 0 And triggersVar.vt = VT_DISPATCH Then
-        triggerCreateArg(0).vt = VT_I4 : triggerCreateArg(0).lVal = 8  ' TASK_TRIGGER_BOOT = 8
+    If hr = 0 And triggersVar.vt = VT_DISPATCH AndAlso triggersVar.pdispVal <> NULL Then
+        triggerCreateArg(0).vt = VT_I4 : triggerCreateArg(0).lVal = 8
         hr = DispatchInvokeMethod(triggersVar.pdispVal, "Create", @triggerCreateArg(0), 1, triggerVar)
+        If hr <> 0 Then
+            MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "Triggers.Create", "hr=0x" & WHex(hr)
+        End If
     End If
 
-    ' === 注册任务 ===
-    regArg(0).vt = VT_BSTR : regArg(0).bstrVal = SysAllocString(WStr(taskName))
-    regArg(1).vt = VT_DISPATCH : regArg(1).pdispVal = defVar.pdispVal
-    regArg(2).vt = VT_I4 : regArg(2).lVal = 6  ' TASK_CREATE_OR_UPDATE = 6
-    regArg(3).vt = VT_BSTR : regArg(3).bstrVal = NULL
-    regArg(4).vt = VT_BSTR : regArg(4).bstrVal = NULL
+    ' ======================================
+    ' RegisterTaskDefinition 核心修复：6参数逆序
+    ' 原型顺序(从左至右)：TaskDefinition, TaskPath, Flags, UserName, Password, LogonType
+    ' rgvarg[0] = LogonType（最右侧）
+    ' rgvarg[1] = Password
+    ' rgvarg[2] = UserName
+    ' rgvarg[3] = Flags
+    ' rgvarg[4] = TaskPath
+    ' rgvarg[5] = TaskDefinition（最左侧）
+    ' ======================================
+    VariantInit(@regArg(0))
+    VariantInit(@regArg(1))
+    VariantInit(@regArg(2))
+    VariantInit(@regArg(3))
+    VariantInit(@regArg(4))
+    VariantInit(@regArg(5))
+    regArg(0).vt = VT_I4 : regArg(0).lVal = 0        ' LogonType: TASK_LOGON_NONE
+    regArg(1).vt = VT_EMPTY                         ' Password
+    regArg(2).vt = VT_EMPTY                         ' UserName
+    regArg(3).vt = VT_I4 : regArg(3).lVal = 6       ' Flags: TASK_CREATE_OR_UPDATE
+    regArg(4).vt = VT_BSTR : regArg(4).bstrVal = SysAllocString(WStr(taskName)) ' TaskPath
+    regArg(5).vt = VT_DISPATCH : regArg(5).pdispVal = defVar.pdispVal ' TaskDefinition
 
-    hr = DispatchInvokeMethod(folderVar.pdispVal, "RegisterTaskDefinition", @regArg(0), 5, registerResult)
-    
-    SysFreeString(regArg(0).bstrVal)
+    hr = DispatchInvokeMethod(folderVar.pdispVal, "RegisterTaskDefinition", @regArg(0), 6, registerResult)
+    SysFreeString(regArg(4).bstrVal)
     VariantClear(@registerResult)
-    ret = IIf(hr = 0, 0, -2)
 
+    If hr = 0 Then
+        MyLog.PrintLog LOG_INFO, "CreateBasicTask", "RegisterTaskDefinition", "hr=0x" & WHex(hr)
+    Else
+        MyLog.PrintLog LOG_ERROR, "CreateBasicTask", "RegisterTaskDefinition", "hr=0x" & WHex(hr)
+    End If
+    ret = IIf(hr = 0, 0, -2)
 Cleanup:
+    ReleaseVariantDispatch(triggerVar)
     VariantClear(@triggerVar)
+    ReleaseVariantDispatch(triggersVar)
     VariantClear(@triggersVar)
+    ReleaseVariantDispatch(actionVar)
     VariantClear(@actionVar)
+    ReleaseVariantDispatch(actionsVar)
     VariantClear(@actionsVar)
+    ReleaseVariantDispatch(regVar)
     VariantClear(@regVar)
+    ReleaseVariantDispatch(defVar)
     VariantClear(@defVar)
+    ReleaseVariantDispatch(folderVar)
     VariantClear(@folderVar)
     VariantClear(@vConn)
-    If pService Then pService->lpVtbl->Release(pService)
-    CoUninitialize()
+    If pService Then
+        pService->lpVtbl->Release(pService)
+        pService = NULL
+    End If
     Return ret
 End Function

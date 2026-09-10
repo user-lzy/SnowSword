@@ -371,7 +371,7 @@ Sub CheckUpdate()
     ' 🔥 关键：替换更新日志里的 \n 为真实换行
     ReplaceJsonNewLine(@updateLog)
     msg = "检测到新版本！" & !"\n\n当前版本：" & localVer & !"\n最新版本：" & remoteVer & !"\n\n更新内容：\n" & updateLog
-    userChoice = AfxMsg(msg, "更新检测", MB_YESNO Or MB_ICONQUESTION)
+    userChoice = ShowMsgBox(msg, "更新检测", MB_YESNO Or MB_ICONQUESTION)
 
     ' 用户选择 否 → 取消更新
     If userChoice = IDNO Then
@@ -412,5 +412,5 @@ Sub CheckUpdate()
     DeleteFileW(@tempSys)
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "已删除临时文件!"
     DEBUG_LOG LOG_INFO, "CheckUpdate",, "更新完成！重启软件生效"
-    AfxMsg "更新完成！请重启软件",APP_NAME, MB_OK
+    ShowInfoBox "更新完成！请重启软件"
 End Sub

@@ -581,7 +581,7 @@ Function ThreadStateToString(ByVal dwThreadId As DWORD, ByVal ThreadState As Lon
     Dim suspendCount As ULONG = 0
     Dim threadHandle As HANDLE = NULL
     Dim st As NTSTATUS
-    'Print dwThreadId & " " & ThreadState & " " & WaitReason
+    
     ' 第一步：转换基础状态
     Select Case ThreadState
         Case StateInitialized: stateStr = "Initialized"
@@ -597,9 +597,7 @@ Function ThreadStateToString(ByVal dwThreadId As DWORD, ByVal ThreadState As Lon
     
     ' 第二步：处理挂起状态
     If (WaitReason = WaitReasonSuspended) Or (WaitReason = WaitReasonWrSuspended) Then
-        ' ████████████████████████████████████████████████
         ' 关键改动：只需要 THREAD_QUERY_INFORMATION，不需要 SUSPEND_RESUME
-        ' ████████████████████████████████████████████████
         If IsDriverLoaded Then
             threadHandle = SnowSword_OpenThread(dwThreadId)
         Else
@@ -1210,6 +1208,7 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
     
     ' 遍历进程信息链表
     procInfo = buffer
+    
     Do While True
         ' 遍历当前进程的线程
         If procInfo->ProcessId = ProcessId Then
@@ -1238,42 +1237,6 @@ Function GetThreadList(ByVal ProcessId As DWORD, lvwThread As Class_ListView) As
     
     Deallocate buffer
     CommitListViewView lvwThread
-    /'Dim i As Long
-    Dim thre As THREADENTRY32
-    Dim hSnapshot As HANDLE, strModulePath As WString * 260, ThreadStartAddress As PVOID
-    
-    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, ProcessId)
-    If hSnapshot > 0 Then
-        thre.dwSize = SizeOf(THREADENTRY32)
-        If Thread32First(hSnapshot, @thre) Then
-            Do
-                If thre.th32OwnerProcessID = ProcessId Then
-                    Dim strEThread As StringW
-                    If IsDriverLoaded Then strEThread = "0x" & WHex(GetEThread(thre.th32ThreadID))
-                    ThreadStartAddress = GetThreadStartAddr(thre.th32ThreadID)
-                    GetModuleByAddress ProcessId, ThreadStartAddress, @strModulePath'如果直接使用 *GetModuleByAddress(ProcessId, ThreadStartAddress)会导致GetModuleByAddress中的诡异问题
-                    'Print thre.th32ThreadID & " " & thre.tpBasePri
-                    lvwThread.AddItemColList ,, WStr(thre.th32ThreadID), WStr(thre.tpBasePri), GetThreadState(thre.th32ThreadID), _
-                    strEThread, "0x" & WHex(ThreadStartAddress), "0x" & WHex(GetTeb(thre.th32ThreadID)), strModulePath
-                    i += 1
-                End If
-            Loop Until Thread32Next(hSnapshot, @thre) = 0
-        End If
-        CloseHandle hSnapshot '关闭模块快照句柄
-    ElseIf IsDriverLoaded Then
-        Dim OwnerPID As DWORD, pEThread As HANDLE
-        For TID As DWORD = 0 To &H20000
-            IoControl hDrv, IOCTL_GetEThread, @TID, SizeOf(DWORD), @pEThread, SizeOf(HANDLE)
-            If pEThread > 0 Then
-                Print "TID:" & TID
-                'IoControl hDrv, IOCTL_GetPIDFromTID, @TID, SizeOf(DWORD), @OwnerPID, SizeOf(DWORD)
-                If (GetLastError = 0) AndAlso (OwnerPID = ProcessId) Then
-                    lvwThread.AddItemColList,, WStr(thre.th32ThreadID),,, "0x" & WHex(pEThread)
-                    i += 1
-                End If
-            End If
-        Next
-    End If'/
     Return i
 End Function
 
@@ -1343,7 +1306,6 @@ Function GetKernelThreadList(lvwKernelThread As Class_ListView) As Integer
 End Function
 
 Public Function MySuspendThread(ByVal dwThreadId As DWORD) As Boolean
-    'Print "代码行数基准:" & __FUNCTION__
     Dim hThread As HANDLE
     If IsDriverLoaded Then
         hThread = SnowSword_OpenThread(dwThreadId)
@@ -1394,7 +1356,7 @@ Public Function KillThread(ByVal dwThreadId As DWORD) As Boolean
     Dim IsCritical As Boolean
     If (NT_SUCCESS(IsThreadCritical(dwThreadId, @IsCritical))) Then
         If (IsCritical) Then
-            If (AfxMsg("此线程处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDNO) Then
+            If (ShowMsgBox("此线程处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDNO) Then
                 Return False
             Else
                 SetCriticalThread dwThreadId, False

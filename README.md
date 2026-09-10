@@ -86,6 +86,21 @@ Windows Kernel
 
 > 使用时需将 `SnowSword.sys` 与 `SnowSword.exe` 放在同一目录下运行。
 
+## v1.0.2 发布资产
+
+正式发行版本使用 `v1.0.2` 标签。Gitee 是客户端更新源，GitHub 用于同步镜像；两个平台的 Release 应保持相同标签和资产。
+
+发行包包含：
+
+- `SnowSword.exe`
+- `SnowSword.sys`
+- `dbghelp.dll`
+- `symsrv.dll`
+- `SHA256SUMS.txt`
+- `SnowSword-v1.0.2-x64.zip`
+
+源码仓库不再保存 `bin/`、编译产物或发布同步脚本。发布前请分别在 VisualFreeBasic 和 Visual Studio 中完成编译及目标系统验证，再将上述资产上传到 Gitee 与 GitHub 的 `v1.0.2` Release。
+
 ## 兼容性
 
 | Windows 版本 | 支持状态 |

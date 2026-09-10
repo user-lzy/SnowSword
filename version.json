@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1.4454",
-  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.7/SnowSword.exe",
-  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0-beta.7/SnowSword.sys",
-  "update_log": "修复bug,添加部分CLI功能",
+  "version": "1.0.2",
+  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.2/SnowSword.exe",
+  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.2/SnowSword.sys",
+  "update_log": "同步最新 Ring0/Ring3 工程，修复文件操作与兼容性问题，补充符号支持组件",
   "mandatory": false
 }

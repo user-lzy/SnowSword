@@ -74,14 +74,14 @@ Function GetIPAddress(dwAddr As DWORD) As String
     Return *strIP
 End Function
 
-Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, ByVal IsFilter As Boolean)
+Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, ByVal bGlobal As Boolean)
     InitListViewData lvwInternet
     
     ' ==================== 列调整 ====================
-    If IsFilter And lvwInternet.ColumnText(1) = "PID" Then
+    If (Not bGlobal) And lvwInternet.ColumnText(1) = "PID" Then
         lvwInternet.DeleteColumn 5   ' 删除"路径"列（索引变了）
         lvwInternet.DeleteColumn 1   ' 删除"PID"列
-    ElseIf (Not IsFilter) And lvwInternet.ColumnText(1) <> "PID" Then
+    ElseIf bGlobal And lvwInternet.ColumnText(1) <> "PID" Then
         lvwInternet.InsertColumn 1, "PID"
         lvwInternet.AddColumn "路径",, 500
     End If
@@ -113,7 +113,7 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
         wszLocalAddr  = wszLIP & ":" & wszLP
         wszRemoteAddr = wszRIP & ":" & wszRP
         
-        If Not IsFilter Then
+        If bGlobal Then
             wszPID = WStr(pTcpTable->table(i).dwOwningPid)
             wszPath = GetProcessPath(pTcpTable->table(i).dwOwningPid)
             AddItemColListEx lvwInternet, 6,,, wszProtocol, wszPID, wszState, wszLocalAddr, wszRemoteAddr, wszPath
@@ -144,7 +144,7 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
         wszLocalAddr  = "[" & wszLIP6 & "]:" & wszLP6   ' IPv6 用方括号包裹
         wszRemoteAddr = "[" & wszRIP6 & "]:" & wszRP6
         
-        If Not IsFilter Then
+        If bGlobal Then
             wszPID = WStr(pTcp6Table->table(i).dwOwningPid)
             wszPath = GetProcessPath(pTcp6Table->table(i).dwOwningPid)
             AddItemColListEx lvwInternet, 6,,, wszProtocol, wszPID, wszState, wszLocalAddr, wszRemoteAddr, wszPath
@@ -173,7 +173,7 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
         wszLocalAddr  = wszLIPU & ":" & wszLPU
         wszRemoteAddr = ""   ' UDP无远程地址
         
-        If Not IsFilter Then
+        If bGlobal Then
             wszPID = WStr(pUdpTable->table(i).dwOwningPid)
             wszPath = GetProcessPath(pUdpTable->table(i).dwOwningPid)
             AddItemColListEx lvwInternet, 6,,, wszProtocol, wszPID, wszState, wszLocalAddr, wszRemoteAddr, wszPath
@@ -202,7 +202,7 @@ Public Sub GetWebConnectList(ByVal PID As DWORD, lvwInternet As Class_ListView, 
         wszLocalAddr  = "[" & wszLIPU6 & "]:" & wszLPU6   ' IPv6 用方括号
         wszRemoteAddr = ""
         
-        If Not IsFilter Then
+        If bGlobal Then
             wszPID = WStr(pUdp6Table->table(i).dwOwningPid)
             wszPath = GetProcessPath(pUdp6Table->table(i).dwOwningPid)
             AddItemColListEx lvwInternet, 6,,, wszProtocol, wszPID, wszState, wszLocalAddr, wszRemoteAddr, wszPath

@@ -895,7 +895,6 @@ Function CreateHighPrivProcess( _
     End If
     
     MyLog.PrintInfo "CreateHighPrivProcess",, "hCustomToken:0x" & WHex(hCustomToken) & " hDupTokenForProcess:0x" & WHex(hDupTokenForProcess)
-    'AfxMsg "Pause"
     
     ' ========================================================
     ' 6. 创建进程（关键修改:使用 szCmdLine 而非硬编码）

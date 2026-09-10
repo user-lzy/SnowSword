@@ -90,10 +90,6 @@ typedef struct _OBJECT_BASIC_INFORMATION
 	LARGE_INTEGER CreateTime;      // 创建时间
 } OBJECT_BASIC_INFORMATION, * POBJECT_BASIC_INFORMATION;
 
-/*typedef struct _EX_PUSH_LOCK {
-	ULONG_PTR Lock;
-} EX_PUSH_LOCK, * PEX_PUSH_LOCK;*/
-
 typedef struct _OBJECT_HEADER {
 	LONG64 PointerCount;          // +0x000
 	union {
@@ -112,17 +108,43 @@ typedef struct _OBJECT_HEADER {
 } OBJECT_HEADER, * POBJECT_HEADER;
 
 typedef struct _HANDLE_INFO {
-	//BOOLEAN IsUnlockFile;
 	HANDLE dwProcessId;
 	HANDLE Handle;
     PVOID Object;
     wchar_t Type[50];
 	wchar_t Name[260];
-	//ACCESS_MASK GrantedAccess;
-	//ULONG ReferenceCount;
-	//KEVENT ResultReadyEvent;
-	//PIO_WORKITEM pWorkItem;
 }HANDLE_INFO, *PHANDLE_INFO;
+
+typedef struct _HANDLE_QUERY_ENTRY
+{
+	HANDLE ProcessId;
+	HANDLE Handle;
+
+	NTSTATUS Status;
+
+	PVOID Object;
+
+	ULONG GrantedAccess;
+	BYTE HandleFlag;
+
+	WCHAR Type[64];
+	WCHAR Name[260];
+} HANDLE_QUERY_ENTRY, * PHANDLE_QUERY_ENTRY;
+
+typedef struct _FILE_HANDLE_INFO
+{
+	HANDLE dwProcessId;
+	HANDLE Handle;
+	WCHAR Name[260];
+} FILE_HANDLE_INFO, * PFILE_HANDLE_INFO;
+
+typedef struct _FILE_HANDLE_QUERY_ENTRY
+{
+	HANDLE dwProcessId;
+	HANDLE dwHandle;
+	NTSTATUS Status;
+	WCHAR strName[260];
+} FILE_HANDLE_QUERY_ENTRY, * PFILE_HANDLE_QUERY_ENTRY;
 
 typedef struct _SYSTEM_HANDLE {
 	ULONG ProcessId;       // 所属进程的PID 
@@ -137,11 +159,6 @@ typedef struct _SYSTEM_HANDLE_INFORMATION {
 	ULONG NumberOfHandles;
 	SYSTEM_HANDLE Information[1]; // 动态数组 
 } SYSTEM_HANDLE_INFORMATION, * PSYSTEM_HANDLE_INFORMATION;
-
-/*NTKERNELAPI NTSTATUS ObQueryObjectType(
-	PVOID Object,                // 指向内核对象的指针
-	PUNICODE_STRING TypeName     // 输出：对象类型的名称
-);*/
 
 typedef struct _DO_SOMETHING {
 	HANDLE ProcessId;
@@ -163,7 +180,6 @@ typedef struct _OBJECT_INFORMATION {
 }OBJECT_INFORMATION, * POBJECT_INFORMATION;
 
 NTKERNELAPI NTSTATUS ObSetHandleAttributes(HANDLE Handle, POBJECT_HANDLE_FLAG_INFORMATION HandleFlags, KPROCESSOR_MODE PreviousMode);
-//NTSTATUS NTAPI ZwQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass,PVOID SystemInformation,ULONG SystemInformationLength,PULONG ReturnLength);
 
 #define ObjectNameInformation 1
 
@@ -175,7 +191,19 @@ NTKERNELAPI NTSTATUS ObSetHandleAttributes(HANDLE Handle, POBJECT_HANDLE_FLAG_IN
 #define MyDbgPrint(Format, ...) \
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, Format, ##__VA_ARGS__)
 
-NTSTATUS QueryObject(PHANDLE_INFO HandleInfo);
+NTSTATUS QueryObject(
+	HANDLE dwProcessId, 
+	HANDLE Handle, 
+	LPWSTR Type, 
+	ULONG TypeLength, 
+	LPWSTR Name, 
+	ULONG NameLength, 
+	PVOID* pObject);
+NTSTATUS QueryFileObject(
+	HANDLE ProcessId,
+	HANDLE Handle,
+	PWCHAR Name,
+	ULONG NameSize);
 
 NTSTATUS CloseHandle(PDO_SOMETHING DoSomething);
 

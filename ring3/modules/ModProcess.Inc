@@ -1563,7 +1563,7 @@ Public Function KillProcess(ByVal dwProcessId As DWORD) As Boolean
     Dim IsCritical As BOOLEAN
     If (IsProcessCritical(dwProcessId, @IsCritical)) Then
         If IsCritical Then
-            If (AfxMsg("此进程处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDNO) Then
+            If (ShowMsgBox("此进程处于Critical状态,强行结束可能蓝屏,是否结束?", "提示", MB_YESNO) = IDNO) Then
                 Return False
             Else
                 SetCriticalProcess dwProcessId, False

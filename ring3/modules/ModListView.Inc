@@ -106,6 +106,7 @@ Type TVNode
     Back As COLORREF
     Level As Long
     ParentIndex As Long
+    Expanded As Boolean   ' 🔥 新增：保存展开状态
 End Type
 
 ' 🔥 移除 (Any) → 纯指针
@@ -1323,6 +1324,8 @@ Sub SaveCurrentTreeViewState(ByVal tvw As Class_TreeView, ByVal moduleType As In
         pNode->Text = DupWStr(tvw.Text(hCur))
         pNode->Level = tvw.GetLevel(hCur)
         pNode->ParentIndex = -1
+        
+        pNode->Expanded = ((TreeView_GetItemState(tvw.hWnd, hCur, TVIS_EXPANDED) And TVIS_EXPANDED) <> 0)
 
         hItemMap[index] = hCur
         pNewSnap->Nodes[index] = pNode
@@ -1385,56 +1388,140 @@ End Sub
 
 ' =============================================================================
 Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As Interface)
-    'Print "===== [DEBUG] RestoreTreeView 模块: " & moduleType & " ====="
+
     Dim cache As ViewModuleCache Ptr = @g_ViewCache(moduleType)
-    If cache = NULL OrElse cache->IsCached = False OrElse cache->pTreeSnap = NULL Then 
-        'Print "  缓存无效，退出"
+
+    If cache = NULL OrElse _
+       cache->IsCached = False OrElse _
+       cache->pTreeSnap = NULL Then
         Exit Sub
     End If
 
     Dim snap As TreeViewSnapshot Ptr = cache->pTreeSnap
-    'Print "  缓存总项数: " & snap->NodeCount
-    'Print "  缓存选中: " & cache->Tree_SelectedIndex & " | 缓存顶部: " & cache->Tree_TopVisibleIndex
-    If snap->NodeCount <= 0 OrElse snap->Nodes = 0 Then Exit Sub
 
+    If snap->NodeCount <= 0 OrElse snap->Nodes = NULL Then Exit Sub
+
+    ' ============================================================
+    ' Step 1：清空当前 TreeView
+    ' ============================================================
     tvw.DeleteAllItems()
+
     Dim hNewNodes(snap->NodeCount - 1) As HTREEITEM
     Dim i As Long
 
+    ' ============================================================
+    ' Step 2：重新创建全部节点
+    ' ============================================================
     For i = 0 To snap->NodeCount - 1
+
         Dim node As TVNode Ptr = snap->Nodes[i]
-        If node = 0 Then Continue For
+
+        If node = NULL Then Continue For
+
         If node->ParentIndex = -1 Then
-            hNewNodes(i) = tvw.InsertItem(TVI_ROOT, TVI_LAST, *node->Text)
-        Else
-            hNewNodes(i) = tvw.InsertItem(hNewNodes(node->ParentIndex), TVI_LAST, *node->Text)
+
+            hNewNodes(i) = tvw.InsertItem( _
+                TVI_ROOT, _
+                TVI_LAST, _
+                *node->Text _
+            )
+
+        ElseIf node->ParentIndex >= 0 AndAlso _
+               node->ParentIndex < snap->NodeCount Then
+
+            ' 父节点必须已经创建成功
+            If hNewNodes(node->ParentIndex) <> 0 Then
+
+                hNewNodes(i) = tvw.InsertItem( _
+                    hNewNodes(node->ParentIndex), _
+                    TVI_LAST, _
+                    *node->Text _
+                )
+
+            End If
+
         End If
+
     Next
 
-    ' 🔥 修复：控件必须先渲染完成，再调用滚动API（核心坑！）
-    'FF_DoEvents
-    'tvw.Refresh
-    
-    ' NULL guard: only dereference when a deep copy exists
-    Dim restoredPath As StringW = ""
-    If g_ViewCache(moduleType).PathText <> 0 Then restoredPath = *(g_ViewCache(moduleType).PathText)
-    FrmMain.txtFilePath.Text = restoredPath
-    MyLog.PrintInfo "RestoreCurrentTreeViewState",, "moduleType=" & moduleType & " txtFilePath=" & FrmMain.txtFilePath.Text & " PathText=" & restoredPath
+    ' ============================================================
+    ' Step 3：恢复节点展开状态
+    '
+    ' 必须先把所有节点创建完，再恢复 Expanded。
+    ' 否则 TreeView 的可见布局还没有稳定。
+    ' ============================================================
+    For i = 0 To snap->NodeCount - 1
 
-    ' 恢复选中
-    If cache->Tree_SelectedIndex >= 0 And cache->Tree_SelectedIndex < snap->NodeCount Then
-        tvw.Selection = hNewNodes(cache->Tree_SelectedIndex)
-        'Print "  执行恢复选中: " & cache->Tree_SelectedIndex
+        Dim node As TVNode Ptr = snap->Nodes[i]
+
+        If node = NULL Then Continue For
+        If hNewNodes(i) = 0 Then Continue For
+
+        If node->Expanded Then
+
+            SendMessage( _
+                tvw.hWnd, _
+                TVM_EXPAND, _
+                Cast(WPARAM, TVE_EXPAND), _
+                Cast(LPARAM, hNewNodes(i)) _
+            )
+
+        End If
+
+    Next
+
+    ' ============================================================
+    ' Step 4：恢复路径文本
+    ' ============================================================
+    If cache->PathText <> NULL Then
+
+        FrmMain.txtFilePath.Text = *(cache->PathText)
+
+        MyLog.PrintInfo _
+            "RestoreCurrentTreeViewState",, _
+            "moduleType=" & moduleType & _
+            " txtFilePath=" & FrmMain.txtFilePath.Text & _
+            " PathText=" & *(cache->PathText)
+
     End If
 
-    ' 恢复滚动条
-    If cache->Tree_TopVisibleIndex >= 0 And cache->Tree_TopVisibleIndex < snap->NodeCount Then
-        tvw.SelectSetFirstVisible(hNewNodes(cache->Tree_TopVisibleIndex))
-        'Print "  执行恢复顶部: " & cache->Tree_TopVisibleIndex
+    ' ============================================================
+    ' Step 5：恢复选中项
+    ' ============================================================
+    If cache->Tree_SelectedIndex >= 0 AndAlso _
+       cache->Tree_SelectedIndex < snap->NodeCount Then
+
+        If hNewNodes(cache->Tree_SelectedIndex) <> 0 Then
+            tvw.Selection = hNewNodes(cache->Tree_SelectedIndex)
+        End If
+
     End If
 
-    If cache->Tree_SelectedIndex >= 0 Then tvw.SetFocus()
-    'Print "============================================="
+    ' ============================================================
+    ' Step 6：恢复顶部可见项
+    '
+    ' 必须在节点展开状态恢复以后再执行。
+    ' ============================================================
+    If cache->Tree_TopVisibleIndex >= 0 AndAlso _
+       cache->Tree_TopVisibleIndex < snap->NodeCount Then
+
+        If hNewNodes(cache->Tree_TopVisibleIndex) <> 0 Then
+
+            tvw.SelectSetFirstVisible( _
+                hNewNodes(cache->Tree_TopVisibleIndex) _
+            )
+
+        End If
+
+    End If
+
+    ' ============================================================
+    ' Step 7：恢复焦点
+    ' ============================================================
+    If cache->Tree_SelectedIndex >= 0 Then
+        tvw.SetFocus()
+    End If
+
 End Sub
 
 Sub SaveCurrentTreeListState(ByVal tls As Class_mCtrlTreeList, ByVal moduleType As Interface)

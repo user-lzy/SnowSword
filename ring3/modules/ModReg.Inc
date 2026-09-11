@@ -70,31 +70,106 @@ Function GetRegPathByNodeW(Node As HTREEITEM, treKey As Class_TreeView, ByRef Re
     Function = GetHKEYFromStr(treKey.Text(CurrentNode))
 End Function
 
-' 新增：获取完整路径字符串（用于显示/比较）
-Function GetFullPathByNode(Node As HTREEITEM, treKey As Class_TreeView) As String
-    Dim CurrentNode As HTREEITEM = Node
-    Dim pathParts() As String
-    Dim partCount As Integer = 0
-    
-    ' 收集所有节点（包括根节点）
-    Do While CurrentNode <> NULL
-        Dim parentNode As HTREEITEM = treKey.GetParent(CurrentNode)
-        
-        ReDim Preserve pathParts(partCount)
-        pathParts(partCount) = treKey.Text(CurrentNode)
-        partCount += 1
-        
-        CurrentNode = parentNode
+Function GetNodeByRegPathW(RegPath As StringW, treKey As Class_TreeView, lvwValue As Class_ListView, UseHive As Boolean) As HTREEITEM
+
+    Dim hRootNode As HTREEITEM
+    Dim pCurrent As HTREEITEM
+    Dim segArray() As StringW
+    Dim rootDispName As StringW
+    Dim hRootKey As HKEY
+
+    ' ========== 1. 拆分根键名称 和 后面子路径 ==========
+    MyLog.PrintInfo "",, "RegPath:" & RegPath
+    Dim slashPos As Integer = InStrW(RegPath, "\")
+    Dim subPart As StringW
+
+    If slashPos > 0 Then
+        rootDispName = LeftW(RegPath, slashPos - 1)
+        subPart = MidW(RegPath, slashPos + 1)
+    Else
+        rootDispName = RegPath
+        subPart = ""
+    End If
+
+    ' 由根名称拿到 HKEY（本函数内部使用，不再作为入参）
+    hRootKey = GetHKEYFromStr(rootDispName)
+    If hRootKey = NULL Then
+        MyLog.PrintInfo "",, "GetHKEYFromStr failed for rootDispName: " & rootDispName
+        Return NULL
+    End If
+
+    ' ========== 2. 在Tree顶层找到对应的根键节点(HKEY_xxx) ==========
+    hRootNode = treKey.GetRoot
+    Do While hRootNode <> NULL
+        MyLog.PrintInfo "",, "treKey.Text(hRootNode):" & treKey.Text(hRootNode)
+        If treKey.Text(hRootNode) = rootDispName Then
+            Exit Do
+        End If
+        hRootNode = treKey.GetNextSiblin(hRootNode)
     Loop
-    
-    ' 反向拼接（从根到叶子）
-    Dim result As String = ""
-    For i As Integer = partCount - 1 To 0 Step -1
-        result &= pathParts(i)
-        If i > 0 Then result &= "\"
-    Next
-    
-    Return result
+
+    If hRootNode = NULL Then
+        MyLog.PrintInfo "",, "Root node not found: " & rootDispName
+        Return NULL
+    End If
+
+    MyLog.PrintInfo "",, "hRootNode found: " & treKey.Text(hRootNode)
+
+    ' 子路径为空 → 返回根节点本身
+    If subPart = "" Then
+        Function = hRootNode
+        Exit Function
+    End If
+
+    ' ========== 3. 按 \ 分割子路径为分段 ==========
+    vbSplitW(subPart, "\", segArray())
+    pCurrent = hRootNode
+
+    ' ========== 4. 逐层向下查找子节点 ==========
+    For i As Integer = LBound(segArray) To UBound(segArray)
+        Dim segName As StringW = segArray(i)
+        MyLog.PrintInfo "",, "segArray(" & i & "):" & segName
+
+        Dim hChild As HTREEITEM = NULL
+        Dim bFound As Boolean = False
+
+        ' ---- 4.1 先在现有子节点中查找 ----
+        hChild = treKey.GetChild(pCurrent)
+        Do While hChild <> NULL
+            MyLog.PrintInfo "",, "treKey.Text(hChild):" & treKey.Text(hChild) & " segName:" & segName
+            If UCaseW(treKey.Text(hChild)) = UCaseW(segName) Then
+                pCurrent = hChild
+                bFound = True
+                Exit Do
+            End If
+            hChild = treKey.GetNextSiblin(hChild)
+        Loop
+
+        ' ---- 4.2 未找到，枚举当前节点下的子项后重试 ----
+        If bFound = False Then
+            MyLog.PrintInfo "",, "Not found, call GetRegList to enumerate children of: " & treKey.Text(pCurrent)
+            GetRegList pCurrent, treKey, lvwValue, UseHive
+
+            hChild = treKey.GetChild(pCurrent)
+            Do While hChild <> NULL
+                MyLog.PrintInfo "",, "After Enum, treKey.Text(hChild):" & treKey.Text(hChild) & " segName:" & segName
+                If UCaseW(treKey.Text(hChild)) = UCaseW(segName) Then
+                    pCurrent = hChild
+                    bFound = True
+                    Exit Do
+                End If
+                hChild = treKey.GetNextSiblin(hChild)
+            Loop
+        End If
+
+        ' ---- 4.3 枚举后仍找不到，整体失败 ----
+        If bFound = False Then
+            MyLog.PrintInfo "",, "Segment not found after enumeration: " & segName
+            Return NULL
+        End If
+    Next i
+
+    Function = pCurrent
 End Function
 
 Public Sub GetRootList(treKey As Class_TreeView)

@@ -204,7 +204,9 @@ Type ViewModuleCache
     VisibleCount As Long       ' 可见项数量
     
     ' ===================== 新增：筛选条件 =====================
-    FilterText As Wstring Ptr  ' 保存时的筛选文本（可选，用于恢复时自动应用）
+    FilterText As Wstring Ptr ' 保存时的筛选文本（可选，用于恢复时自动应用）
+    
+    PathText As Wstring Ptr ' 保存时的路径文本
 End Type
 
 ' ===================== 列配置：列表头右键菜单"选择列"功能 =====================
@@ -949,6 +951,12 @@ Private Sub InitAllModuleCache()
             g_ViewCache(i).FilterText = 0
         End If
         
+        ' 释放路径文本
+        If g_ViewCache(i).PathText <> 0 Then
+            Deallocate g_ViewCache(i).PathText
+            g_ViewCache(i).PathText = 0
+        End If
+        
         ' 释放TreeView快照（不变）
         If g_ViewCache(i).pTreeSnap <> 0 Then
             FreeTreeViewSnapshot g_ViewCache(i).pTreeSnap
@@ -1157,6 +1165,7 @@ Sub SaveCurrentListViewState(ByVal lvw As Class_ListView, ByVal moduleType As In
         Deallocate cache->FilterText
         cache->FilterText = NULL
     End If
+    ' PathText lifetime is owned by SaveCurrentTreeViewState; SaveCurrentListViewState must not free it
 
     ' ===================== 保存完整数据快照（始终从 ctx->Snap，保证数据完整）====================
     cache->pListSnap = CloneListViewSnapshot(ctx->Snap)
@@ -1245,8 +1254,6 @@ Sub RestoreListViewFromCache(ByVal lvw As Class_ListView, ByVal moduleType As In
         If ctx <> 0 Then
             ctx->SortedColumn = cache->SortedColumn
             ctx->SortAscending = cache->SortAscending
-            ' 可选：恢复筛选
-            ' If cache->FilterText <> 0 Then SetListViewFilter(lvw, *cache->FilterText)
         End If
     Else
         ' 无排序/筛选：按原始顺序恢复
@@ -1338,6 +1345,14 @@ Sub SaveCurrentTreeViewState(ByVal tvw As Class_TreeView, ByVal moduleType As In
             Next
         End If
     Next
+    
+    ' PathText is owned solely by this routine: release the previous deep copy first
+    If g_ViewCache(moduleType).PathText <> 0 Then
+        Deallocate g_ViewCache(moduleType).PathText
+        g_ViewCache(moduleType).PathText = NULL
+    End If
+    g_ViewCache(moduleType).PathText = DupFromStringW(FrmMain.txtFilePath.Text)
+    MyLog.PrintInfo "SaveCurrentTreeViewState",, "moduleType=" & moduleType & " txtFilePath=" & FrmMain.txtFilePath.Text & " PathText=" & *(g_ViewCache(moduleType).PathText)
 
     g_ViewCache(moduleType).pTreeSnap = pNewSnap
     g_ViewCache(moduleType).IsCached = True
@@ -1399,6 +1414,12 @@ Sub RestoreTreeViewFromCache(ByVal tvw As Class_TreeView, ByVal moduleType As In
     ' 🔥 修复：控件必须先渲染完成，再调用滚动API（核心坑！）
     'FF_DoEvents
     'tvw.Refresh
+    
+    ' NULL guard: only dereference when a deep copy exists
+    Dim restoredPath As StringW = ""
+    If g_ViewCache(moduleType).PathText <> 0 Then restoredPath = *(g_ViewCache(moduleType).PathText)
+    FrmMain.txtFilePath.Text = restoredPath
+    MyLog.PrintInfo "RestoreCurrentTreeViewState",, "moduleType=" & moduleType & " txtFilePath=" & FrmMain.txtFilePath.Text & " PathText=" & restoredPath
 
     ' 恢复选中
     If cache->Tree_SelectedIndex >= 0 And cache->Tree_SelectedIndex < snap->NodeCount Then

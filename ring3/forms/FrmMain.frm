@@ -751,7 +751,7 @@ Tag=
 Name=mnuRegValue
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuRegValue_mnuRefresh0-10-FrmMain_mnuRegValue_mnuStep10-10新建FrmMain_mnuRegValue_mnuCreate0-10{新建字符串值FrmMain_mnuRegValue_mnuCreateString0-10}删除FrmMain_mnuRegValue_mnuDeleteValue0-10修改FrmMain_mnuRegValue_mnuModifyValue0-10
+Menu=新建FrmMain_mnuRegValue_mnuCreate0-10{字符串值(REG_SZ)FrmMain_mnuRegValue_mnuCreateString0-10二进制值(REG_BINARY)FrmMain_mnuRegValue_mnuCreateBinary0-10DWORD值(REG_DWORD)FrmMain_mnuRegValue_mnuCreateDword0-10QWORD值(REG_QWORD)FrmMain_mnuRegValue_mnuCreateQword0-10}
 Left=420
 Top=280
 Tag=
@@ -1778,8 +1778,8 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
     Dim treSelect As HTREEITEM = treMain.HitTest(xPos, yPos)
     If treMain.GetChild(treSelect) <> NULL Then Exit Sub ' 父节点直接滚，不碰任何逻辑
     
+    MyLog.PrintInfo "FrmMain_treMain_WM_LButtonDblclk",, "txtFilePath=" & FrmMain.txtFilePath.Text
     Dim SelectText As String = treMain.Text(treSelect)
-    txtFilePath.Text = ""
     ' ===================== 核心：切换前 → 保存【当前模块】状态（自动识别控件类型） =====================
     If CurrentInformation.intType >= 0 Then
         Select Case gLayoutMode
@@ -1797,6 +1797,8 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         End Select
     End If
     ' ===================== 模块切换逻辑（完全保留你的原有代码，仅补全缓存恢复） =====================
+    ' Reset path bar before switching: dual-pane branches refill it via
+    txtFilePath.Text = WStr("")
     If SelectText = "前台进程" Then
         gLayoutMode = LAYOUT_LIST_ONLY
         gMainView = VIEW_LISTVIEW
@@ -2348,6 +2350,7 @@ Sub FrmMain_treMain_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mous
         UpdateLayout
         Exit Sub
     End If
+    ' (removed: path bar reset happens once, right before the Select Case chain)
 End Sub
 
 Sub DeleteChildItem(MyTreeView As Class_TreeView, Node As HTREEITEM)
@@ -2945,6 +2948,10 @@ Function FrmMain_txtFilePath_WM_KeyUp(hWndForm As hWnd, hWndControl As hWnd, nVi
                     ShellExecute NULL, NULL, CurrentPath, NULL, NULL, 1 ' 以默认方式打开文件
                 End If
             Case Registry
+                CurrentNode = GetNodeByRegPathW(strPath, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis))
+                If CurrentNode <> NULL Then
+                    SendMessage TreeView.hWnd, TVM_SELECTITEM, TVGN_CARET, Cast(lParam, CurrentNode) ' 选中这项
+                End If
         End Select
     End If
     Function = FALSE ' 若想屏蔽这个按键到控件中就返回 TRUE （注意：屏蔽字符用WM_CHAR事件）    
@@ -3430,7 +3437,13 @@ Function WndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM,
                 pWindowPos = Cast(WINDOWPOS Ptr, lParam)
                 If pWindowPos <> NULL Then
                     If (pWindowPos->FLAGS And SWP_SHOWWINDOW) <> 0 Then
-                        pWindowPos->FLAGS = pWindowPos->FLAGS And (Not SWP_SHOWWINDOW)
+                        ' 禁止显示主窗口
+                        pWindowPos->flags = _
+                            pWindowPos->flags And (Not SWP_SHOWWINDOW)
+
+                        ' 禁止激活主窗口 / 抢夺前台焦点
+                        pWindowPos->flags = _
+                            pWindowPos->FLAGS Or SWP_NOACTIVATE
                     End If
                 End If
             End If
@@ -3822,6 +3835,7 @@ Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
             If RegCreateKey(hHKEY, CurrentPath & "\" & NewKey, @hkResult) = ERROR_SUCCESS Then
                 ShowInfoBox "创建成功!"
                 TreeView.InsertItem CurrentNode, TVI_SORT, NewKey
+                TreeView.EnsureVisible CurrentNode
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
                 MyLog.PrintWin32Error "", "RegCreateKey", CurrentPath & "\" & NewKey
@@ -3856,18 +3870,73 @@ End Sub
 'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 ''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
 'wID      菜单项命令ID
-Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd,wID As ULong)
+Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim CurrentPath As StringW = "", hHKEY As HKEY
+    hHKEY = GetRegPathByNodeW(CurrentNode, TreeView, CurrentPath)
     Select Case wID
-        Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
-
-        Case FrmMain_mnuRegValue_mnuCreate ' 新建
-
-        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值
-
-        Case FrmMain_mnuRegValue_mnuDeleteValue ' 删除
-
-        Case FrmMain_mnuRegValue_mnuModifyValue ' 修改
-
+        'Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
+            /'lblNum.Caption = "正在刷新..."
+            GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+            TreeView.ExpandEx CurrentNode, TVE_EXPAND
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)'/
+        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值(REG_SZ)
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
+            Dim hkResult As HKEY
+            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateString", "RegCreateKey", CurrentPath
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, StrPtrW("")), 2) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateString", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            ShowInfoBox "创建成功!"
+        Case FrmMain_mnuRegValue_mnuCreateBinary ' 新建二进制值(REG_BINARY)
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
+            Dim hkResult As HKEY
+            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateBinary", "RegCreateKey", CurrentPath
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            If RegSetValueEx(hHKEY, NewKey, 0, REG_BINARY, NULL, 0) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateBinary", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            ShowInfoBox "创建成功!"
+        Case FrmMain_mnuRegValue_mnuCreateDword ' 新建DWORD值(REG_DWORD)
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
+            Dim emptyDword As DWORD = 0
+            Dim hkResult As HKEY
+            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateDword", "RegCreateKey", CurrentPath
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, @emptyDword), 4) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateDword", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            ShowInfoBox "创建成功!"
+        Case FrmMain_mnuRegValue_mnuCreateQword ' 新建QWORD值(REG_QWORD)
+            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
+            Dim emptyQword As QWORD = 0
+            Dim hkResult As HKEY
+            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateQword", "RegCreateKey", CurrentPath
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, @emptyQword), 8) <> ERROR_SUCCESS Then
+                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateQword", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
+                ShowErrorBox "创建失败!"
+                Exit Sub
+            End If
+            ShowInfoBox "创建成功!"
     End Select
 End Sub
 

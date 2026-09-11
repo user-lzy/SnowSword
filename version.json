@@ -1,7 +1,7 @@
 {
-  "version": "1.0.2",
-  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.2/SnowSword.exe",
-  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.2/SnowSword.sys",
-  "update_log": "同步最新 Ring0/Ring3 工程，修复文件操作与兼容性问题，补充符号支持组件",
+  "version": "1.0.3",
+  "exe_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.3/SnowSword.exe",
+  "sys_url": "https://gitee.com/le-ziyi/SnowSword/releases/download/v1.0.3/SnowSword.sys",
+  "update_log": "修复模块切换后路径栏(txtFilePath)状态丢失问题；TreeView 新增节点展开状态的保存与恢复，切回文件/注册表/对象目录模块时完整还原展开层级、选中项与滚动位置；增强模块切换缓存的空指针保护与内存管理。",
   "mandatory": false
 }

@@ -3823,46 +3823,119 @@ End Sub
 Sub FrmMain_mnuRegKey_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentPath As StringW = "", hHKEY As HKEY
     hHKEY = GetRegPathByNodeW(CurrentNode, TreeView, CurrentPath)
+    If hHKEY = 0 Then
+        ShowErrorBox "无法获取注册表根键!"
+        Exit Sub
+    End If
+
     Select Case wID
         Case FrmMain_mnuRegKey_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
             GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
             TreeView.ExpandEx CurrentNode, TVE_EXPAND
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+
         Case FrmMain_mnuRegKey_mnuCreateKey ' 新建
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新子键名称:", "新项 #1")
+            Dim NewKey As StringW = AfxInputBox(hWndForm,,, "提示", "请输入新子键名称:", "新项 #1")
+            If LenW(NewKey) = 0 Then Exit Sub
+            Dim fullPath As StringW
+            If LenW(CurrentPath) = 0 Then
+                fullPath = NewKey
+            Else
+                fullPath = CurrentPath & "\" & NewKey
+            End If
             Dim hkResult As HKEY
-            If RegCreateKey(hHKEY, CurrentPath & "\" & NewKey, @hkResult) = ERROR_SUCCESS Then
+            If RegCreateKey(hHKEY, fullPath, @hkResult) = ERROR_SUCCESS Then
+                RegCloseKey hkResult
                 ShowInfoBox "创建成功!"
                 TreeView.InsertItem CurrentNode, TVI_SORT, NewKey
                 TreeView.EnsureVisible CurrentNode
+                GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+                lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                MyLog.PrintWin32Error "", "RegCreateKey", CurrentPath & "\" & NewKey
+                MyLog.PrintWin32Error "FrmMain_mnuRegKey_mnuCreateKey", "RegCreateKey", fullPath
                 ShowErrorBox "创建失败!"
             End If
+
         Case FrmMain_mnuRegKey_mnuDeleteKey ' 删除
-            Dim hkResult As HKEY
+            If LenW(CurrentPath) = 0 Then
+                ShowErrorBox "不能删除根键!"
+                Exit Sub
+            End If
+            Dim hParent As HTREEITEM = TreeView.GetParent(CurrentNode)
             If RegDeleteTree(hHKEY, CurrentPath) = ERROR_SUCCESS Then
                 ShowInfoBox "删除成功!"
                 TreeView.DeleteItem CurrentNode
-                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+                If hParent <> 0 Then
+                    CurrentNode = hParent
+                    TreeView.Selection = hParent
+                    GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+                    lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+                    SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+                Else
+                    ' 没有父节点（理论上根节点已排除），清空列表
+                    DeleteAllItemsEx ListView1
+                    lblNum.Caption = "数量:0"
+                End If
             Else
-                MyLog.PrintWin32Error "", "RegDeleteTree", CurrentPath
+                MyLog.PrintWin32Error "FrmMain_mnuRegKey_mnuDeleteKey", "RegDeleteTree", CurrentPath
                 ShowErrorBox "删除失败!"
             End If
+
         Case FrmMain_mnuRegKey_mnuRenameKey ' 重命名
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入子键新名称:", "新项 #1")
-            If RegRenameKey(hHKEY, CurrentPath, NewKey) = ERROR_SUCCESS Then
+            Dim NewKey As StringW = AfxInputBox(hWndForm,,, "提示", "请输入子键新名称:", "新项 #1")
+            If LenW(NewKey) = 0 Then Exit Sub
+            If LenW(CurrentPath) = 0 Then
+                ShowErrorBox "不能重命名根键!"
+                Exit Sub
+            End If
+
+            ' 拆出父路径和旧名称
+            Dim pos1 As Integer = InStrRev(CurrentPath, "\")
+            Dim parentPath As StringW
+            Dim oldName As StringW
+            If pos1 > 0 Then
+                parentPath = LeftW(CurrentPath, pos1 - 1)
+                oldName = MidW(CurrentPath, pos1 + 1)
+            Else
+                parentPath = ""
+                oldName = CurrentPath
+            End If
+
+            Dim hParent As HKEY
+            If LenW(parentPath) = 0 Then
+                hParent = hHKEY
+            Else
+                If RegOpenKeyEx(hHKEY, parentPath, 0, KEY_ALL_ACCESS, @hParent) <> ERROR_SUCCESS Then
+                    ShowErrorBox "打开父键失败!"
+                    Exit Sub
+                End If
+            End If
+
+            If RegRenameKey(hParent, oldName, NewKey) = ERROR_SUCCESS Then
                 ShowInfoBox "重命名成功!"
                 TreeView_SetItemText(TreeView.hWnd, CurrentNode, StrPtrW(NewKey))
+                ' 更新 CurrentPath 供后续使用（如果外部依赖）
+                If LenW(parentPath) = 0 Then
+                    CurrentPath = NewKey
+                Else
+                    CurrentPath = parentPath & "\" & NewKey
+                End If
+                GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+                lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
             Else
-                MyLog.PrintWin32Error "", "RegRenameKey", CurrentPath & " " & NewKey
+                MyLog.PrintWin32Error "FrmMain_mnuRegKey_mnuRenameKey", "RegRenameKey", CurrentPath & " -> " & NewKey
                 ShowErrorBox "重命名失败!"
             End If
+            If hParent <> hHKEY Then RegCloseKey hParent
+
         Case FrmMain_mnuRegKey_mnuEnableHiveAnalysis ' 启用Hive分析
             SetMenuCheckState mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis, Not GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+            lblNum.Caption = "正在刷新..."
+            GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
     End Select
 End Sub
 
@@ -3872,72 +3945,85 @@ End Sub
 'wID      菜单项命令ID
 Sub FrmMain_mnuRegValue_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentPath As StringW = "", hHKEY As HKEY
+    Dim NewKey As StringW
+    Dim hkResult As HKEY = 0
+    Dim emptyDword As DWORD = 0
+    Dim emptyQword As QWORD = 0
+    Dim emptyStr As StringW = ""
+    Dim emptyBin As Byte = 0
+
     hHKEY = GetRegPathByNodeW(CurrentNode, TreeView, CurrentPath)
+    If hHKEY = 0 Then
+        ShowErrorBox "无法获取注册表根键!"
+        Exit Sub
+    End If
+
+    ' 打开目标键（节点对应的键一定已存在）
+    If Len(CurrentPath) = 0 Then
+        hkResult = hHKEY          ' 已经是根节点本身
+    Else
+        If RegOpenKeyEx(hHKEY, CurrentPath, 0, KEY_SET_VALUE, @hkResult) <> ERROR_SUCCESS Then
+            MyLog.PrintWin32Error "mnuRegValue", "RegOpenKeyEx", CurrentPath
+            ShowErrorBox "打开注册表键失败!"
+            Exit Sub
+        End If
+    End If
+
+    ' 询问新值名称（先判断取消/空输入）
+    NewKey = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
+    If Len(NewKey) = 0 Then
+        If hkResult <> hHKEY Then RegCloseKey hkResult
+        Exit Sub
+    End If
+
+    Dim dwType As DWORD
+    Dim pData  As Const Byte Ptr
+    Dim cbData As DWORD
+
     Select Case wID
-        'Case FrmMain_mnuRegValue_mnuRefresh ' 刷新
-            /'lblNum.Caption = "正在刷新..."
-            GetRegList CurrentNode, TreeView, ListView1, GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
-            TreeView.ExpandEx CurrentNode, TVE_EXPAND
-            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)'/
-        Case FrmMain_mnuRegValue_mnuCreateString ' 新建字符串值(REG_SZ)
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
-            Dim hkResult As HKEY
-            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateString", "RegCreateKey", CurrentPath
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, StrPtrW("")), 2) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateString", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            ShowInfoBox "创建成功!"
-        Case FrmMain_mnuRegValue_mnuCreateBinary ' 新建二进制值(REG_BINARY)
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
-            Dim hkResult As HKEY
-            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateBinary", "RegCreateKey", CurrentPath
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            If RegSetValueEx(hHKEY, NewKey, 0, REG_BINARY, NULL, 0) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateBinary", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            ShowInfoBox "创建成功!"
-        Case FrmMain_mnuRegValue_mnuCreateDword ' 新建DWORD值(REG_DWORD)
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
-            Dim emptyDword As DWORD = 0
-            Dim hkResult As HKEY
-            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateDword", "RegCreateKey", CurrentPath
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, @emptyDword), 4) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateDword", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            ShowInfoBox "创建成功!"
-        Case FrmMain_mnuRegValue_mnuCreateQword ' 新建QWORD值(REG_QWORD)
-            Dim NewKey As StringW = AfxInputBox(,,, "提示", "请输入新值名称:", "新值 #1")
-            Dim emptyQword As QWORD = 0
-            Dim hkResult As HKEY
-            If RegCreateKey(hHKEY, CurrentPath, @hkResult) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateQword", "RegCreateKey", CurrentPath
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            If RegSetValueEx(hHKEY, NewKey, 0, REG_SZ, CPtr(Const Byte Ptr, @emptyQword), 8) <> ERROR_SUCCESS Then
-                MyLog.PrintWin32Error "FrmMain_mnuRegValue_mnuCreateQword", "RegSetValueEx", "CurrentPath:" & CurrentPath & " NewKey=" & NewKey
-                ShowErrorBox "创建失败!"
-                Exit Sub
-            End If
-            ShowInfoBox "创建成功!"
+        Case FrmMain_mnuRegValue_mnuCreateString
+            dwType = REG_SZ
+            pData  = CPtr(Const Byte Ptr, StrPtrW(emptyStr))
+            cbData = (Len(emptyStr) + 1) * SizeOf(WString)
+
+        Case FrmMain_mnuRegValue_mnuCreateBinary
+            dwType = REG_BINARY
+            pData  = CPtr(Const Byte Ptr, @emptyBin)
+            cbData = 0
+
+        Case FrmMain_mnuRegValue_mnuCreateDword
+            dwType = REG_DWORD
+            pData  = CPtr(Const Byte Ptr, @emptyDword)
+            cbData = 4
+
+        Case FrmMain_mnuRegValue_mnuCreateQword
+            dwType = REG_QWORD
+            pData  = CPtr(Const Byte Ptr, @emptyQword)
+            cbData = 8
+
+        Case Else
+            If hkResult <> hHKEY Then RegCloseKey hkResult
+            Exit Sub
     End Select
+
+    ' 关键：用 hkResult（真正的目标键句柄）写值，而不是 hHKEY
+    If RegSetValueEx(hkResult, NewKey, 0, dwType, pData, cbData) <> ERROR_SUCCESS Then
+        MyLog.PrintWin32Error "mnuRegValue", "RegSetValueEx", _
+            "Path=" & CurrentPath & " NewKey=" & NewKey
+        ShowErrorBox "创建失败!"
+        If hkResult <> hHKEY Then RegCloseKey hkResult
+        Exit Sub
+    End If
+
+    If hkResult <> hHKEY Then RegCloseKey hkResult
+
+    ShowInfoBox "创建成功!"
+
+    ' 刷新列表
+    GetRegList CurrentNode, TreeView, ListView1, _
+        GetMenuCheckState(mnuRegKey, FrmMain_mnuRegKey_mnuEnableHiveAnalysis)
+    TreeView.ExpandEx CurrentNode, TVE_EXPAND
+    lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
 End Sub
 
 '[FrmMain.mnuListView]事件 : 点击了菜单项
@@ -4122,7 +4208,7 @@ End Sub
 'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
 ''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
 'wID      菜单项命令ID
-Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
+Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentPath As StringW
     GetPathByNodeW CurrentNode, TreeView, CurrentPath
     Select Case wID
@@ -4130,27 +4216,36 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
             lblNum.Caption = "正在刷新..."
             GetFileList CurrentNode, TreeView, ListView1, False, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+
         Case FrmMain_mnuFile_mnuCreateFile ' 新建
-            Dim hFile As HANDLE
-            Dim FileName As String = AfxInputBox(hWndForm,,, "提示", "请输入文件名:")
-            hFile = CreateFileW(CurrentPath & FileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-            If (hFile > 0) Then
+            Dim FileName As StringW = AfxInputBox(hWndForm,,, "提示", "请输入文件名:")
+            If LenW(FileName) = 0 Then Exit Sub
+            Dim hFile As HANDLE = CreateFileW(CurrentPath & FileName, GENERIC_WRITE, _
+                FILE_SHARE_READ Or FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+            If hFile <> INVALID_HANDLE_VALUE Then
                 Dim nFileSize As LARGE_INTEGER
                 GetFileSizeEx hFile, @nFileSize
-                AddItemColListEx ListView1, 3,,, WStr(FileName), WStr(""), WStr(nFileSize.HighPart * (2 ^ 32) + nFileSize.LowPart)
+                Dim nSize As ULONGLONG = (Cast(ULONGLONG, nFileSize.HighPart) Shl 32) Or Cast(ULONGLONG, nFileSize.LowPart)
+                CloseHandle hFile
+                AddItemColListEx ListView1, 3,,, WStr(FileName), WStr(""), WStr(nSize)
                 CommitListViewView ListView1
                 ShowInfoBox "创建文件成功!"
                 SaveCurrentListViewState ListView1, CurrentInformation.intType
-                CloseHandle hFile
+            Else
+                MyLog.PrintWin32Error "FrmMain_mnuFile_mnuCreateFile", "CreateFileW", CurrentPath & FileName
+                ShowErrorBox "创建文件失败!"
             End If
+
         Case FrmMain_mnuFile_mnuCopyTo ' 复制到
+            If ListView1.SelectedItem < 0 Then Exit Sub
             Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            Dim TargetPath As StringW = AfxInputBox(,,,"提示", "目标路径")
-            
+            Dim TargetPath As StringW = AfxInputBox(hWndForm,,,"提示", "目标路径")
+            If LenW(TargetPath) = 0 Then Exit Sub
+
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            
+
             Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
             If dwAttr <> INVALID_FILE_ATTRIBUTES Then
                 If ShowMsgBox("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
@@ -4159,20 +4254,23 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
                     Exit Sub
                 End If
             End If
-            
+
             If CopyFile(SourcePath, TargetPath, True) <> 0 Then
                 ShowInfoBox "复制成功!"
             Else
                 ShowErrorBox "复制失败!"
             End If
+
         Case FrmMain_mnuFile_mnuForceCopyTo ' 强制复制到...
+            If ListView1.SelectedItem < 0 Then Exit Sub
             Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            Dim TargetPath As StringW = AfxInputBox(,,, "目标路径")
-            
+            Dim TargetPath As StringW = AfxInputBox(hWndForm,,, "提示", "目标路径")
+            If LenW(TargetPath) = 0 Then Exit Sub
+
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            
+
             Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
             If dwAttr <> INVALID_FILE_ATTRIBUTES Then
                 If ShowMsgBox("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
@@ -4181,47 +4279,60 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd,wID As ULong)
                     Exit Sub
                 End If
             End If
-            
+
             If IsDriverLoaded Then
                 If ForceCopyFolder("\??\" & SourcePath, "\??\" & TargetPath) Then ShowInfoBox "复制成功!" Else ShowErrorBox "复制失败!"
             Else
                 If MyCopyFile(SourcePath, TargetPath) Then ShowInfoBox "复制成功!" Else ShowErrorBox "复制失败!"
             End If
+
         Case FrmMain_mnuFile_mnuDelete ' 删除
-            Dim Path As StringW, ret As NTSTATUS
-            Path = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            ret = MyDeleteFile(Path)
+            If ListView1.SelectedItem < 0 Then Exit Sub
+            Dim strFullPath As StringW = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            Dim ret As NTSTATUS = MyDeleteFile(strFullPath)
             If ret = STATUS_SUCCESS Then
                 DeleteItemEx ListView1, ListView1.SelectedItem
+                lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+                SaveCurrentListViewState ListView1, CurrentInformation.intType
                 ShowInfoBox "删除文件(夹)成功!"
             Else
                 ShowErrorBox "删除文件(夹)失败!"
-                MyLog.PrintNtError "FrmMain_mnuFile_mnuDelete", "MyDeleteFile", ret, "Path=" & Path
+                MyLog.PrintNtError "FrmMain_mnuFile_mnuDelete", "MyDeleteFile", ret, "Path=" & strFullPath
             End If
+
         Case FrmMain_mnuFile_mnuForceDelete ' 强制删除
-            Dim strFile As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
-            If (strFile = NULL) Then
+            If ListView1.SelectedItem < 0 Then Exit Sub
+            If Not IsDriverLoaded Then
+                ShowErrorBox "驱动未加载,无法强制删除!"
                 Exit Sub
             End If
-            *strFile = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            If IsDriverLoaded Then
-                #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
-                Dim status As NTSTATUS = MyDeleteFile(strFile)
-                If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
-                    IoControl hDrv, IOCTL_DeleteFileByIRP, strFile, MAX_PATH * SizeOf(Wstring)
-                Else ' 是被打开的文件
-                    IoControl hDrv, IOCTL_DeleteFileByXCB, strFile, MAX_PATH * SizeOf(Wstring)
-                    DeleteFile strFile
-                End If
+            Dim ntPath As StringW = "\??\" & CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            Dim cbPath As DWORD = (LenW(ntPath) + 1) * SizeOf(WString)
+            Dim strFile As LPWSTR = Allocate(cbPath)
+            If strFile = NULL Then Exit Sub
+            *strFile = ntPath
+
+            #define STATUS_CANNOT_DELETE Cast(NTSTATUS, &HC0000121)
+            Dim status As NTSTATUS = MyDeleteFile(strFile)
+            If status = STATUS_CANNOT_DELETE Then ' 是正在运行的可执行文件
+                IoControl hDrv, IOCTL_DeleteFileByIRP, strFile, cbPath
+            Else ' 是被打开的文件
+                IoControl hDrv, IOCTL_DeleteFileByXCB, strFile, cbPath
             End If
             Deallocate strFile
+
             DeleteItemEx ListView1, ListView1.SelectedItem
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+            SaveCurrentListViewState ListView1, CurrentInformation.intType
             ShowInfoBox "删除成功!"
+
         Case FrmMain_mnuFile_mnuViewFileStream ' 查看文件流
+            If ListView1.SelectedItem < 0 Then Exit Sub
             Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->FilePath = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
             CurrentInfo->intType = FileStream
             FrmListView.Show,, Cast(Integer, CurrentInfo)
+
         Case FrmMain_mnuFile_mnuLittleCopy ' 复制单格数据
             If (LastClickedItem >= 0 AndAlso LastClickedItem <= ListView1.ItemCount - 1) AndAlso _
                (LastClickedSubItem >= 0 AndAlso LastClickedSubItem <= ListView1.ColumnCount - 1) Then
@@ -4243,22 +4354,30 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
             TreeView.ExpandEx CurrentNode, TVE_EXPAND
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+
         Case FrmMain_mnuFolder_mnuCreateFolder ' 新建
-            Dim FolderName As String = AfxInputBox(NULL,,,"提示","请输入文件夹名:")
-            If (MkDir(CurrentPath & FolderName) = 0) Then
+            Dim FolderName As StringW = AfxInputBox(hWndForm,,,"提示","请输入文件夹名:")
+            If LenW(FolderName) = 0 Then Exit Sub
+            If MkDir(CurrentPath & FolderName) = 0 Then
                 TreeView.InsertItem CurrentNode, TVI_SORT, FolderName
+                GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+                lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
                 SaveCurrentTreeViewState TreeView, CurrentInformation.intType
                 ShowInfoBox "创建文件夹成功!"
             Else
                 ShowErrorBox "创建文件夹失败!"
             End If
+
         Case FrmMain_mnuFolder_mnuCopyFolder ' 复制
             Dim SourcePath As StringW = CurrentPath
-            Dim TargetPath As StringW = AfxInputBox(,,,"提示", "目标路径")
-            
+            ' CurrentPath 以 "\" 结尾,GetNameByPath 会返回空,必须先去掉尾部反斜杠
+            If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
+            Dim TargetPath As StringW = AfxInputBox(hWndForm,,,"提示", "目标路径")
+            If LenW(TargetPath) = 0 Then Exit Sub
+
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            
+
             Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
             If dwAttr <> INVALID_FILE_ATTRIBUTES Then
                 If ShowMsgBox("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
@@ -4267,20 +4386,23 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
                     Exit Sub
                 End If
             End If
-            
+
             If FB_ShellCopyFile(SourcePath, TargetPath, NULL) <> 0 Then
                 ShowInfoBox "复制成功!"
             Else
                 ShowErrorBox "复制失败!"
             End If
+
         Case FrmMain_mnuFolder_mnuForceCopyTo ' 强制复制到...
+            If ListView1.SelectedItem < 0 Then Exit Sub
             Dim SourcePath As StringW = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
-            Dim TargetPath As StringW = AfxInputBox(,,, "目标路径")
-            
+            Dim TargetPath As StringW = AfxInputBox(hWndForm,,, "提示", "目标路径")
+            If LenW(TargetPath) = 0 Then Exit Sub
+
             If RightW(SourcePath, 1) = "\" Then SourcePath = LeftW(SourcePath, LenW(SourcePath) - 1)
             If RightW(TargetPath, 1) <> "\" Then TargetPath = TargetPath & "\"
             TargetPath = TargetPath & GetNameByPath(SourcePath)
-            
+
             Dim dwAttr As DWORD = GetFileAttributes(TargetPath)
             If dwAttr <> INVALID_FILE_ATTRIBUTES Then
                 If ShowMsgBox("目标路径已存在,覆盖并继续复制吗?",, MB_YESNO) = IDYES Then
@@ -4294,30 +4416,54 @@ Sub FrmMain_mnuFolder_WM_Command(hWndForm As hWnd, wID As ULong)
             Else
                 If CopyFolder(SourcePath, TargetPath) Then ShowInfoBox "复制成功!" Else ShowErrorBox "复制失败!"
             End If
+
         Case FrmMain_mnuFolder_mnuDeleteFolder ' 删除
             If DeleteDirectoryIterative(CurrentPath) Then
                 ShowInfoBox "删除文件夹成功!"
+                Dim hParent As HTREEITEM = TreeView.GetParent(CurrentNode)
                 TreeView.DeleteItem CurrentNode
-                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+                If hParent <> 0 Then
+                    CurrentNode = hParent
+                    TreeView.Selection = hParent
+                    GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+                    lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+                    SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+                End If
             Else
                 ShowErrorBox "删除文件夹失败!"
             End If
+
         Case FrmMain_mnuFolder_mnuForceDeleteFolder ' 强制删除
-            Dim strFolder As LPWSTR = Allocate(MAX_PATH * SizeOf(WString))
-            If (strFolder = NULL) Then
+            If Not IsDriverLoaded Then
+                ShowErrorBox "驱动未加载,无法强制删除!"
                 Exit Sub
             End If
-            *strFolder = "\??\" & CurrentPath
-            If IsDriverLoaded Then
-                IoControl hDrv, IOCTL_DeleteFileByXCB, strFolder, MAX_PATH * SizeOf(Wstring)
-                DeleteFile strFolder
-            End If
+            Dim ntPath As StringW = "\??\" & CurrentPath
+            Dim cbPath As DWORD = (LenW(ntPath) + 1) * SizeOf(WString)
+            Dim strFolder As LPWSTR = Allocate(cbPath)
+            If strFolder = NULL Then Exit Sub
+            *strFolder = ntPath
+            IoControl hDrv, IOCTL_DeleteFileByXCB, strFolder, cbPath
+            RemoveDirectory CurrentPath          ' 删目录用 RemoveDirectory,DeleteFile 删不了目录
             Deallocate strFolder
+
+            Dim hParent As HTREEITEM = TreeView.GetParent(CurrentNode)
             TreeView.DeleteItem CurrentNode
-            SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+            If hParent <> 0 Then
+                CurrentNode = hParent
+                TreeView.Selection = hParent
+                GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+                lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+                SaveCurrentTreeViewState TreeView, CurrentInformation.intType
+            End If
             ShowInfoBox "删除成功!"
+
         Case FrmMain_mnuFolder_mnuEnablePhysicalAnalyze ' 是否物理磁盘分析
             SetMenuCheckState mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze, Not GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+            ' 切换后立即刷新
+            lblNum.Caption = "正在刷新..."
+            GetFileList CurrentNode, TreeView, ListView1, True, True, GetMenuCheckState(mnuFolder, FrmMain_mnuFolder_mnuEnablePhysicalAnalyze)
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
     End Select
 End Sub
 

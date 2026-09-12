@@ -2,7 +2,7 @@
 NumObjects=50
 ProjectName=SnowSword
 CompilationMode=0
-CompilationDebug=-1
+CompilationDebug=0
 ProjectType=GUI
 UseGDIPlus=1
 ShowConsole=-1
@@ -25,7 +25,7 @@ Build=0
 FileMajor=1
 FileMinor=0
 FileRevision=1
-FileBuild=5551
+FileBuild=5556
 AutoIncrement=1
 DefaultCompiler=64
 Comments=
@@ -37,11 +37,11 @@ ProductName=SnowSword
 
 [Objects]
 Module=.\modules\ModProcess.Inc|1558|62015||Yes|
-Form=.\forms\FrmMain.frm|541|18757|Startup|Yes|
+Form=.\forms\FrmMain.frm|2907|142510|Startup|Yes|
 Module=.\modules\ModHive.Inc|190|5015||Yes|
 Module=.\modules\ModModule.Inc|702|24946||Yes|
 Module=.\modules\ModThread.Inc|1252|61072||Yes|
-Form=.\forms\FrmListView.Frm|890|51577||Yes|
+Form=.\forms\FrmListView.Frm|36|2021||Yes|
 Module=.\modules\ModKernel.Inc|1069|44976||Yes|
 Module=.\modules\ModFile.Inc|1664|68707||Yes|
 Module=.\modules\ModLoadDriver.Inc|232|11393||Yes|
@@ -84,16 +84,17 @@ Module=.\modules\ModFAT32.Inc|918|37984||Yes|
 Module=.\modules\ModInlineHook.Inc|431|18388||Yes|
 Form=.\forms\FrmFileEditor.Frm|0|0||Yes|
 
+TopTab=.\forms\FrmMain.frm|False|0|2790|134771
+TopTab=.\forms\FrmListView.Frm|True|0|1600|93820
 TopTab=.\modules\ModProcess.Inc|False|0|1558|62015
-TopTab=.\forms\FrmListView.Frm|False|0|890|51577
 TopTab=.\modules\ModThread.Inc|False|0|1252|61072
-TopTab=.\forms\FrmMain.frm|False|1|541|18757
-TopTab=.\modules\ModListView.Inc|True|0|1438|52677
+TopTab=.\modules\ModListView.Inc|False|0|1447|52677
 TopTab=.\modules\ModCUI.Inc|False|0|2979|123324
 TopTab=.\modules\ModKernel.Inc|False|0|1069|44976
 TopTab=.\modules\ModWindow.Inc|False|0|316|11605
 TopTab=.\modules\ModNetstat.Inc|False|0|74|2501
 TopTab=.\modules\ModReg.Inc|False|0|206|8524
+TopTab=.\modules\ModFile.Inc|False|0|806|32673
 #END_MAIN_PROPERTIES#
 
 

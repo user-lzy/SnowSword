@@ -4,6 +4,12 @@
 
 **English** | [简体中文](README.md)
 
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
+![Architecture](https://img.shields.io/badge/architecture-x64-lightgrey)
+![Ring0](https://img.shields.io/badge/Ring0-C%20%2F%20WDK-blue)
+![Ring3](https://img.shields.io/badge/Ring3-VisualFreeBasic-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 SnowSword is a Windows kernel analysis and Anti-Rootkit toolkit built around a **Ring0 kernel driver** and a **Ring3 GUI/CLI**. It is intended for Windows kernel development, security research, rootkit detection, reverse engineering and low-level system analysis.
 
 The project covers hidden process/driver detection, kernel callbacks, SSDT / Shadow SSDT, IDT / GDT, inline hooks, Minifilter, WFP, NTFS / FAT32, process memory and other Windows Internals topics.
@@ -83,6 +89,26 @@ Use the CLI/Agent Shell to load the driver and query SSDT data, with help output
 
 ![SnowSword CLI and SSDT query](docs/images/cli-ssdt.jpg)
 
+## Quick Start
+
+### Option 1: Prebuilt release (recommended)
+
+1. Download the latest `SnowSword-vX.Y.Z-x64.zip` (or `.7z`) from [Releases](https://github.com/user-lzy/SnowSword/releases) and extract it.
+2. Make sure `SnowSword.exe`, `SnowSword.sys` and the bundled `dbghelp.dll` / `symsrv.dll` are in the same directory.
+3. Run `SnowSword.exe` **as administrator** and load the driver when prompted to use the kernel-related features.
+
+### Option 2: Build from source
+
+See [Build Environment](#build-environment) below to build the Ring0 driver and the Ring3 GUI.
+
+### Driver loading notes
+
+- The project uses a kernel driver, so administrator privileges are required. Loading an unsigned or test-signed driver usually requires disabling Secure Boot and enabling test signing (`bcdedit /set testsigning on`), or providing a valid digital signature, depending on your system policy.
+- Run it inside a **VM with snapshots** or on a dedicated test machine rather than a production system.
+- Unload the driver when you are done, and reboot if necessary.
+
+> ⚠️ Use it only in **authorized environments** for Windows kernel development, security research and system diagnostics.
+
 ## Compatibility
 
 | Windows version | Status |
@@ -124,18 +150,35 @@ SnowSword.exe --agent-pipe <name>
 
 The CLI interface is still under active development, so available commands may change.
 
+## Releases
+
+The latest build is available on the [Releases](https://github.com/user-lzy/SnowSword/releases) page. Gitee is the client update source and GitHub is a mirror; both platforms keep the same tags and assets.
+
+A release package (`SnowSword-vX.Y.Z-x64.zip` / `.7z`) typically contains:
+
+- `SnowSword.exe`
+- `SnowSword.sys`
+- `dbghelp.dll`
+- `symsrv.dll`
+- `SHA256SUMS.txt`
+
+The client update check reads [`version.json`](version.json) in the repository root (version, `exe_url` / `sys_url` and update log). The source repository does not keep `bin/`, build artifacts or release-sync scripts; build and verify both components before uploading assets to the matching Release on Gitee and GitHub.
+
 ## Project Structure
 
 ```text
 SnowSword/
 ├─ ring0/                 # Windows kernel driver (C / WDK)
 │  ├─ include/
-│  └─ sources/
+│  ├─ sources/
+│  └─ SnowSword.sln
 ├─ ring3/                 # GUI / CLI (VisualFreeBasic)
 │  ├─ forms/
 │  ├─ modules/
+│  ├─ TreeList/
 │  └─ images/
 ├─ docs/images/           # README screenshots
+├─ version.json           # client update metadata
 ├─ README.md
 ├─ README_EN.md
 └─ LICENSE
@@ -160,6 +203,8 @@ SnowSword may be useful as a reference if you are working on:
 ## Project Status
 
 SnowSword is under active development and refactoring. Some functionality touches undocumented kernel behavior, so compatibility can vary between Windows builds.
+
+> **UI language:** The GUI / CLI is currently **Simplified Chinese only**. English UI support is requested in [Issue #1](https://github.com/user-lzy/SnowSword/issues/1) and is not scheduled yet. English documentation is available in [README_EN.md](README_EN.md).
 
 When reporting a problem, please include the Windows version and full build number, SnowSword version or commit SHA, the affected module, relevant error codes/logs/WinDbg output, and minimal reproduction steps.
 

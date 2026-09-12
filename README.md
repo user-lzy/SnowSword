@@ -91,6 +91,26 @@ SnowSword 是一款面向 **Windows 10/11 x64** 的内核分析与 Anti-Rootkit 
 
 ![SnowSword CLI 与 SSDT 查询](docs/images/cli-ssdt.jpg)
 
+## 快速开始
+
+### 方式一：使用发行包（推荐）
+
+1. 在 [Releases](https://github.com/user-lzy/SnowSword/releases) 下载最新的 `SnowSword-vX.Y.Z-x64.zip`（或 `.7z`）并解压。
+2. 确认 `SnowSword.exe`、`SnowSword.sys` 及随包的 `dbghelp.dll` / `symsrv.dll` 位于同一目录。
+3. 以**管理员身份**运行 `SnowSword.exe`，按界面提示加载驱动后即可使用内核相关功能。
+
+### 方式二：从源码编译
+
+请参考下方[编译环境](#编译环境)分别构建 Ring0 驱动与 Ring3 GUI。
+
+### 驱动加载说明
+
+- 项目涉及内核驱动，运行需要管理员权限；加载未签名 / 测试签名驱动通常需要目标系统关闭 Secure Boot 并开启测试签名（`bcdedit /set testsigning on`），或为其配置有效的数字签名，具体取决于系统策略。
+- 建议在**虚拟机 + 快照**或独立测试机中运行，避免在生产环境直接操作内核级功能。
+- 不需要时请先卸载驱动，必要时重启系统。
+
+> ⚠️ 请仅在**已授权的环境**中用于内核开发学习、安全研究与系统诊断。
+
 ## 功能详情
 
 ### 进程与线程
@@ -155,32 +175,19 @@ SnowSword.exe --agent-pipe <name>
 
 > CLI 接口仍在持续完善，具体可用命令以当前版本为准。
 
-### 构建 Ring0 驱动
-1. 用 Visual Studio 打开 `ring0/SnowSword.sln`
-2. 选择 `x64 / Debug` 或 `x64 / Release` 配置
-3. Build → 生成 `SnowSword.sys`
+## 发布与更新
 
-### 构建 Ring3 GUI
-1. 用 VisualFreeBasic 5.9.7 打开 `ring3/SnowSword.ffp`
-2. 选择 64 位编译配置
-3. Build → 生成 `SnowSword.exe`
+最新版本见 [Releases](https://github.com/user-lzy/SnowSword/releases)。Gitee 作为客户端更新源，GitHub 为同步镜像，两个平台的 Release 保持相同标签与资产。
 
-> 使用时需将 `SnowSword.sys` 与 `SnowSword.exe` 放在同一目录下运行。
-
-## v1.0.2 发布资产
-
-正式发行版本使用 `v1.0.2` 标签。Gitee 是客户端更新源，GitHub 用于同步镜像；两个平台的 Release 应保持相同标签和资产。
-
-发行包包含：
+发行包（`SnowSword-vX.Y.Z-x64.zip` / `.7z`）通常包含：
 
 - `SnowSword.exe`
 - `SnowSword.sys`
 - `dbghelp.dll`
 - `symsrv.dll`
 - `SHA256SUMS.txt`
-- `SnowSword-v1.0.2-x64.zip`
 
-源码仓库不再保存 `bin/`、编译产物或发布同步脚本。发布前请分别在 VisualFreeBasic 和 Visual Studio 中完成编译及目标系统验证，再将上述资产上传到 Gitee 与 GitHub 的 `v1.0.2` Release。
+客户端更新检查读取仓库根目录的 [`version.json`](version.json)（版本号、`exe_url` / `sys_url` 与更新日志）。源码仓库不保存 `bin/`、编译产物或发布同步脚本；发布前请分别在 VisualFreeBasic 与 Visual Studio 中完成编译及目标系统验证，再将资产上传到 Gitee 与 GitHub 的对应 Release。
 
 ## 系统兼容性
 
@@ -220,7 +227,7 @@ SnowSword.exe --agent-pipe <name>
 2. 选择 64 位编译配置
 3. Build 生成 `SnowSword.exe`
 
-运行时需确保 `SnowSword.exe` 与 `SnowSword.sys` 位于正确的部署位置，并以满足驱动加载要求的权限和签名环境运行。
+运行时需确保 `SnowSword.exe` 与 `SnowSword.sys` 位于同一目录，并以满足驱动加载要求的权限和签名环境运行。
 
 ## 项目结构
 
@@ -228,12 +235,15 @@ SnowSword.exe --agent-pipe <name>
 SnowSword/
 ├─ ring0/                 # Windows kernel driver (C / WDK)
 │  ├─ include/
-│  └─ sources/
+│  ├─ sources/
+│  └─ SnowSword.sln
 ├─ ring3/                 # GUI / CLI (VisualFreeBasic)
 │  ├─ forms/
 │  ├─ modules/
+│  ├─ TreeList/
 │  └─ images/
 ├─ docs/images/           # README screenshots
+├─ version.json           # 客户端更新信息
 ├─ README.md
 ├─ README_EN.md
 └─ LICENSE
@@ -258,6 +268,8 @@ SnowSword/
 ## 状态与反馈
 
 SnowSword 仍处于持续开发和重构阶段。部分功能涉及 Windows 内核未文档化实现，不同系统版本上的行为可能存在差异。
+
+> **界面语言：** 当前 GUI / CLI 界面为**简体中文**；英文界面的需求见 [Issue #1](https://github.com/user-lzy/SnowSword/issues/1)，暂未排期。英文项目文档见 [README_EN.md](README_EN.md)。
 
 如果遇到问题，建议在 Issue 中提供：
 

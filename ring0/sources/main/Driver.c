@@ -17,7 +17,6 @@
 #include "SSDT.h"
 #include "Symbol.h"
 #include "Thread.h"
-//#include "Test.h"
 #include "Window.h"
 
 typedef struct _EProcessInfo {
@@ -72,9 +71,6 @@ NTSTATUS CreateSymbolDevice(PDRIVER_OBJECT DriverObject)
         return status;
     }
 
-    //
-    // 只给 Symbol 设备绑定 Symbol 的派遣函数
-    //
     DriverObject->MajorFunction[IRP_MJ_CREATE] =
         DriverObject->MajorFunction[IRP_MJ_CLOSE] =
         DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] =
@@ -345,8 +341,6 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
 
-    
-
     return STATUS_SUCCESS;
 }
 
@@ -357,8 +351,7 @@ NTSTATUS DispatchRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     switch (irpStack->MajorFunction)
     {
     case IRP_MJ_CLOSE:
-        //DbgPrint("Dispatch: 收到 IRP_MJ_CLOSE\n");
-        return DispatchClose_Symbol(DeviceObject, Irp);  // ⚠️ 直接 return
+        return DispatchClose_Symbol(DeviceObject, Irp);
 
     default:
         break;
@@ -407,23 +400,11 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 DbgPrint("Kill Process %p Failed!\n", dwProcessId);
             }
         }
-        //if (pOutputData != NULL && OutputDataLength >= strlen("Hello-World") + 1)
-        //{
-        //    memcpy(pOutputData, "Hello-World", strlen("Hello-World") + 1);
-        //    status = STATUS_SUCCESS;
-        //    Information = strlen("Hello-World") + 1;
-        //}
-        //else
-        //{
-        //    status = STATUS_INSUFFICIENT_RESOURCES;   //内存不够
-        //    Information = 0;
-        //}
         break;
     case IOCTL_MemKillProcess:
         if (pInputData != NULL && InputDataLength > 0)
         {
             dwProcessId = *(PHANDLE)pInputData;
-            //DbgPrint("接收到PID:%p", dwProcessId);
             MemKillProcess(dwProcessId);
         }
         break;
@@ -431,7 +412,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0)
         {
             dwProcessId = *(PHANDLE)pInputData;
-            //DbgPrint("接收到PID:%p", dwProcessId);
             ForceKillProcess(dwProcessId);
         }
         break;
@@ -439,7 +419,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0)
         {
             dwThreadId = *(PHANDLE)pInputData;
-            //DbgPrint("接收到TID:%p", dwThreadId);
             status = ForceKillThread(dwThreadId);
             if (!NT_SUCCESS(status))
                 DbgPrint("ForceKillThread %lld Failed!status:%x\n", (ULONG_PTR)dwThreadId, status);
@@ -452,7 +431,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             dwProcessId = *(PHANDLE)pInputData;
             PEPROCESS pEProcess = NULL;
             status = GetEProcess(dwProcessId, &pEProcess);
-            //ULONG64 pEProcessAddr = (ULONG64)pEProcess;
 			EProcessInfo.EProcess = (ULONG64)pEProcess;
 			EProcessInfo.bExited = (status == STATUS_PROCESS_IS_TERMINATING);
             memcpy(pOutputData, &EProcessInfo, sizeof(EProcessInfo));
@@ -478,8 +456,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             dwProcessId = *(PHANDLE)pInputData;
             HANDLE hProcess = NULL;
             status = OpenProcess(dwProcessId, &hProcess);
-            //if (!NT_SUCCESS(status))
-            //    DbgPrint("OpenProcess Failed!");
             memcpy(pOutputData, &hProcess, sizeof(HANDLE));
             Information = sizeof(HANDLE);
         }
@@ -501,7 +477,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         {
             dwProcessId = *(PHANDLE)pInputData;
 
-            // 声明一个 LPWSTR 用于存储进程路径
             LPWSTR pProcessPath;
             UNICODE_STRING usImage;
 
@@ -627,8 +602,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0) {
 			//使用RtlStringCbCopyW获取输入的文件路径
 			RtlStringCbCopyW(ustrFileName, sizeof(WCHAR) * 260, (PWSTR)pInputData);
-            //RtlInitUnicodeString(&ustrFileName, L"\\??\\C:\\Users\\21607\\Desktop\\新建文件夹1\\TestMessageBox7.exe");
-			DbgPrint("接收到文件路径:%ws", ustrFileName);
+            DbgPrint("接收到文件路径:%ws", ustrFileName);
 			UNICODE_STRING unicodeFileName;
 			RtlInitUnicodeString(&unicodeFileName, ustrFileName);
             status = DeleteFileByXCBFunction(&unicodeFileName);
@@ -645,7 +619,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0) {
             //使用RtlStringCbCopyW获取输入的文件路径
             RtlStringCbCopyW(ustrFileName, sizeof(WCHAR) * 260, (PWSTR)pInputData);
-            //RtlInitUnicodeString(&ustrFileName, L"\\??\\C:\\Users\\21607\\Desktop\\新建文件夹1\\TestMessageBox7.exe");
             DbgPrint("接收到文件路径:%ws", ustrFileName);
             UNICODE_STRING unicodeFileName;
             RtlInitUnicodeString(&unicodeFileName, ustrFileName);
@@ -668,7 +641,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 //使用RtlStringCbCopyW获取输入的文件路径
                 RtlStringCbCopyW(sourcePath, sizeof(WCHAR) * 260, (PWSTR)stCopyPath.SourcePath);
                 RtlStringCbCopyW(destPath, sizeof(WCHAR) * 260, (PWSTR)stCopyPath.TargetPath);
-                //RtlInitUnicodeString(&ustrFileName, L"\\??\\C:\\Users\\21607\\Desktop\\新建文件夹1\\TestMessageBox7.exe");
                 DbgPrint("接收到文件路径:%ws %ws", sourcePath, destPath);
                 UNICODE_STRING uniSourcePath, uniDestPath;
                 RtlInitUnicodeString(&uniSourcePath, sourcePath);
@@ -685,24 +657,22 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     case IOCTL_DenyCreateProcess:
         if (pInputData != NULL && InputDataLength > 0)
         {
-            //GetHotkeyInfo();
-            //break;
             MyAdvancedOptions.DenyCreateProcess = *(PBOOLEAN)pInputData;
             SetProcessMonitorStatus(MyAdvancedOptions.DenyCreateProcess);
         }
         break;
-    case IOCTL_DenyAccessRegistry:
+    case IOCTL_DenyCreateRegistry:
         if (pInputData != NULL && InputDataLength > 0)
         {
-            MyAdvancedOptions.DenyAccessRegistry = *(PBOOLEAN)pInputData;
-            SetRegMonitorStatus(pDeviceObject->DriverObject, MyAdvancedOptions.DenyAccessRegistry);
+            MyAdvancedOptions.DenyCreateRegistry = *(PBOOLEAN)pInputData;
+            SetRegMonitorStatus(pDeviceObject->DriverObject, MyAdvancedOptions.DenyCreateRegistry);
         }
         break;
     case IOCTL_DenyLoadDriver:
         if (pInputData != NULL && InputDataLength > 0)
         {
             MyAdvancedOptions.DenyLoadDriver = *(PBOOLEAN)pInputData;
-            SetImageMonitorStatus(MyAdvancedOptions.DenyLoadDriver);
+            if (!MyAdvancedOptions.DenyLoadDll) SetImageMonitorStatus(MyAdvancedOptions.DenyLoadDriver);
         }
         break;
 	case IOCTL_DenyRemoteThread:
@@ -712,29 +682,32 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 			SetThreadMonitorStatus(MyAdvancedOptions.DenyRemoteThread);
 		}
 		break;
+    case IOCTL_DenyLoadDll:
+        if (pInputData != NULL && InputDataLength > 0)
+        {
+            MyAdvancedOptions.DenyLoadDll = *(PBOOLEAN)pInputData;
+            if (!MyAdvancedOptions.DenyLoadDriver) SetImageMonitorStatus(MyAdvancedOptions.DenyLoadDll);
+        }
+        break;
     case IOCTL_ReadProcessMemory:
         __try {
             stMemory = *(PMemoryStruct)pInputData;
-            //ProbeForRead((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
             status = ReadProcessMemory(stMemory.dwProcessId, (PVOID)stMemory.Addr, stMemory.pData, stMemory.Size, &BytesTransferred);
             Information = BytesTransferred;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             status = GetExceptionCode();
         }
-        //DbgPrint("status=%X, Information=%lld", status, Information);
         break;
     case IOCTL_WriteProcessMemory:
         __try {
             stMemory = *(PMemoryStruct)pInputData;
-            //ProbeForWrite((PVOID)stMemory.Addr, stMemory.Size, sizeof(ULONG));
             status = WriteProcessMemory(stMemory.dwProcessId, stMemory.pData, (PVOID)stMemory.Addr, stMemory.Size, &BytesTransferred);
             Information = BytesTransferred;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             status = GetExceptionCode();
         }
-        //DbgPrint("status=%X, Information=%lld", status, Information);
         break;
     case IOCTL_ScanKernelMemory:
         if (pInputData != NULL && InputDataLength > 0) {
@@ -764,11 +737,9 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
         if (pOutputData != NULL && OutputDataLength >= sizeof(CallbackInfo) * num)
         {
-            //memset(Callbacks, 0, sizeof(Callbacks));
             Information = sizeof(CallbackInfo) * num;
             memcpy(pOutputData, pCallbacks, Information);
             if (pCallbacks != NULL) ExFreePoolWithTag(pCallbacks, 'cbin');
-            //DbgPrint("GetHotkeyInfo status = %X", GetHotkeyInfo());
             status = STATUS_SUCCESS;
         }
         else
@@ -843,7 +814,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 break;
             }
             GetDriverInfo(DriverBase, pDriverInfo);
-			//DbgPrint("GetDriverInfo Success!");
             memcpy(pOutputData, pDriverInfo, sizeof(DRIVER_INFO));
             Information = sizeof(DRIVER_INFO);
             status = STATUS_SUCCESS;
@@ -855,7 +825,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 			PVOID CallbackAddr = *(PVOID*)pInputData;
 			UCHAR OldCode[2] = { 0 };
             ControlCallback(CallbackAddr, OldCode, FALSE);
-			//将旧代码返回给用户
             if (OutputDataLength >= sizeof(OldCode))
             {
                 memcpy(pOutputData, OldCode, sizeof(OldCode));
@@ -897,7 +866,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             &HandleInfo->Object
         );
 		Information = sizeof(HANDLE_INFO);
-        //memcpy(pOutputData, HandleInfo, sizeof(HANDLE_INFO));
 		break;
     case IOCTL_QueryFileObject:
         if (pInputData == NULL ||
@@ -917,7 +885,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         status = QueryFileObject(FileInfo->dwProcessId, FileInfo->Handle, 
             FileInfo->Name, MAX_PATH);
         Information = sizeof(FILE_HANDLE_INFO);
-        //memcpy(pOutputData, FileInfo, sizeof(FILE_HANDLE_INFO));
         break;
     case IOCTL_QueryFileObjects:
     {
@@ -1062,7 +1029,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 			status = GetProcessHandleCount(ProcessId, &HandleCount);
 			if (!NT_SUCCESS(status))
 				DbgPrint("GetProcessHandleCount %Iu Failed!status:%x\n", (ULONG_PTR)ProcessId, status);
-            //if (ProcessId == (HANDLE)4) DbgPrint("System Has %d Handles.", HandleCount);
             memcpy(pOutputData, &HandleCount, sizeof(HandleCount));
             Information = sizeof(HandleCount);
 		}
@@ -1275,11 +1241,9 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
         if (pOutputData != NULL && OutputDataLength >= sizeof(GDT_INFO) * num3)
         {
-            //memset(Callbacks, 0, sizeof(Callbacks));
             Information = sizeof(GDT_INFO) * num3;
             memcpy(pOutputData, pGdtInfo, Information);
             if (pGdtInfo != NULL) ExFreePoolWithTag(pGdtInfo, 'gdti');
-            //DbgPrint("GetHotkeyInfo status = %X", GetHotkeyInfo());
             status = STATUS_SUCCESS;
         }
         else
@@ -1301,11 +1265,9 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
         if (pOutputData != NULL && OutputDataLength >= sizeof(IDT_INFO) * num4)
         {
-            //memset(Callbacks, 0, sizeof(Callbacks));
             Information = sizeof(IDT_INFO) * num4;
             memcpy(pOutputData, pIdtInfo, Information);
             if (pIdtInfo != NULL) ExFreePoolWithTag(pIdtInfo, 'idti');
-            //DbgPrint("GetHotkeyInfo status = %X", GetHotkeyInfo());
             status = STATUS_SUCCESS;
         }
         else
@@ -1482,7 +1444,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
             // 清零（确保无效页填充0）
             RtlZeroMemory(pKernelBuffer, stMemory.Size);
-            //DbgPrint("IRQL at entry: %d\n", KeGetCurrentIrql());
             // 调用内核DUMP函数（只传内核缓冲区）
             status = DumpKernelModule(
                 (PVOID)stMemory.Addr,   // 目标内核模块基址
@@ -1531,7 +1492,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     // 注意:如果设置了错误码会导致设置的Information被忽略
     case IOCTL_EnumWfpCallouts:
     {
-        // 静态缓存（保留你的需求）
+        // 静态缓存
         static PWFP_CALLOUT_INFO pCalloutCache = NULL;
         static ULONG calloutCount = 0;
         // 总数据大小
@@ -1544,7 +1505,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         // ===================== 第一步：无缓存 → 重新枚举生成缓存 =====================
         if (pCalloutCache == NULL || calloutCount == 0)
         {
-            // 释放旧缓存（防御性代码）
+            // 释放旧缓存
             if (pCalloutCache)
             {
                 ExFreePoolWithTag(pCalloutCache, 'WfpE');
@@ -1552,7 +1513,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
                 calloutCount = 0;
             }
 
-            // 枚举Callout（你的正常逻辑）
+            // 枚举Callout
             status = EnumWfpCallouts(&pCalloutCache, &calloutCount);
             if (!NT_SUCCESS(status))
             {
@@ -1587,7 +1548,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             DbgPrint("[IOCTL] 拷贝数据成功，第一个Callout地址: 0x%llx\n",
                 pCalloutCache[0].ClassifyFn);
 
-            // 释放缓存（一次性使用，符合你的逻辑）
+            // 释放缓存
             ExFreePoolWithTag(pCalloutCache, 'WfpE');
             pCalloutCache = NULL;
             calloutCount = 0;
@@ -1737,8 +1698,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         status = NdisEnumMiniportsAlloc(&pEntries, &entryCount);
         if (!NT_SUCCESS(status))
         {
-            // 如果内部失败（如锁获取失败、未找到模块等），直接返回错误码
-            // entryCount 此时可能无效，统一设 Information = 0
             Information = 0;
             break;
         }
@@ -1772,26 +1731,69 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     }
+    case IOCTL_QuerySymbolLinkCallback:
+    {
+        PWCHAR requestStr = NULL;
+        SYMLINK_CALLBACK_INFO info = { 0 };
 
-  //  case IOCTL_EnumNdisMiniport:
-  //  {
-  //      // 第一次调用：获取数量
-		//ULONG needed = OutputDataLength / sizeof(NDIS_MINIPORT_ENUM_ENTRY);
-  //      ULONG actual = 0;
-		//DbgPrint("pOutputData=%p, OutputDataLength=%d, needed=%d\n", pOutputData, OutputDataLength, needed);
-  //      status = NdisEnumMiniports(pOutputData, sizeof(NDIS_MINIPORT_ENUM_ENTRY), needed, &needed, &actual);
-		//DbgPrint("needed=%d, actual=%d, status=0x%X", needed, actual, status);
-  //      if (status == STATUS_BUFFER_TOO_SMALL && needed == 0) {
-		//	DbgPrint("Buffer too small. Needed entries: %lu\n", needed);
-		//	Information = needed * sizeof(NDIS_MINIPORT_ENUM_ENTRY);
-  //          break;
-  //      }
-  //      
-		//Information = actual * sizeof(NDIS_MINIPORT_ENUM_ENTRY);
-		//DbgPrint("Enumerated %lu miniports, total size: %lu bytes\n", actual, Information);
-  //      break;
-  //  }
+        Information = 0;
 
+        __try
+        {
+            //
+            // ============================
+            // 参数长度检查
+            // ============================
+            //
+            if (pInputData == NULL ||
+                InputDataLength < sizeof(WCHAR) * MAX_PATH)
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            if (pOutputData == NULL ||
+                OutputDataLength < sizeof(SYMLINK_CALLBACK_INFO))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            requestStr = (PWCHAR)pInputData;
+
+            requestStr[MAX_PATH - 1] = L'\0';
+
+            if (requestStr[0] == L'\0')
+            {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            //
+            // Object Manager absolute path
+            // 正常应该以 '\' 开头。
+            //
+            if (requestStr[0] != L'\\')
+            {
+                status = STATUS_OBJECT_PATH_SYNTAX_BAD;
+                break;
+            }
+
+            status = QuerySymbolicLinkCallback(requestStr, &info);
+
+            if (!NT_SUCCESS(status)) break;
+
+            RtlCopyMemory(pOutputData, &info, sizeof(info));
+
+            Information = sizeof(info);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            status = GetExceptionCode();
+            Information = 0;
+        }
+        break;
+    }
     // ====================== 消息钩子枚举 IOCTL ======================
     case IOCTL_EnumMsgHook:
     {
@@ -1817,7 +1819,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
 
             // 枚举消息钩子
-            //status = EnumerateMsgHook(&pMsgHookCache, &msgHookCount);
             status = EnumMsgHook(&pMsgHookCache, &msgHookCount);
             DbgPrint("[IOCTL] EnumMsgHook 状态: %08X，枚举数量: %lu\n", status, msgHookCount);
 
@@ -1885,7 +1886,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
             // 枚举事件钩子
             status = EnumEventHook(&pEventHookCache, &eventHookCount);
-            //status = EnumerateEventHook(&pEventHookCache, &eventHookCount);
             DbgPrint("[IOCTL] EnumWinEventHook 状态: %08X，枚举数量: %lu\n", status, eventHookCount);
 
             if (!NT_SUCCESS(status))
@@ -2021,7 +2021,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         break;
     }
     
-    //Cleanup:
     pIrp->IoStatus.Status = status;             //Ring3 GetLastError();
 	pIrp->IoStatus.Information = Information;   //Ring3 lpBytesReturned
     IoCompleteRequest(pIrp, IO_NO_INCREMENT);  //将Irp返回给Io管理器
@@ -2036,26 +2035,10 @@ VOID DriverUnload(PDRIVER_OBJECT pDriverObject)
 
 	if (MyAdvancedOptions.DenyCreateProcess) SetProcessMonitorStatus(FALSE);
 	if (MyAdvancedOptions.DenyLoadDriver) SetImageMonitorStatus(FALSE);
-	if (MyAdvancedOptions.DenyAccessRegistry) SetRegMonitorStatus(pDriverObject, FALSE);
+	if (MyAdvancedOptions.DenyCreateRegistry) SetRegMonitorStatus(pDriverObject, FALSE);
 	if (MyAdvancedOptions.DenyRemoteThread) SetThreadMonitorStatus(FALSE);
     if (MyAdvancedOptions.IsProtectProcess) SetProcessProtectionStatus(FALSE);
     if (MyAdvancedOptions.IsProtectThread) SetThreadProtectionStatus(FALSE);
-    //UnhookDiskWriteDispatch();
-    //UnhookNtfsDispatch();
-    //UnregisterMiniFilter();
-	//InterlockedExchangePointer((PUCHAR volatile*)Notepad_EProcess + 0x440, (HANDLE)30256);
-
-    /*UNICODE_STRING targetDeviceName = {0};
-    RtlInitUnicodeString(&targetDeviceName, L"\\Device\\Harddisk0\\DR0");
-    PDEVICE_OBJECT targetDeviceObject = NULL;
-    PFILE_OBJECT fileobject = NULL;
-    status = IoGetDeviceObjectPointer(&targetDeviceName, FILE_READ_ACCESS | FILE_WRITE_ACCESS, &fileobject, &targetDeviceObject);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("IoGetDeviceObjectPointer Failed!NTSTATUS = %X", status);
-    }
-    else {
-        IoDetachDevice(targetDeviceObject);
-    }*/
 
     RtlInitUnicodeString(&DeviceLinkName, DEVICE_LINK_NAME);
     IoDeleteSymbolicLink(&DeviceLinkName);
@@ -2072,5 +2055,4 @@ VOID DriverUnload(PDRIVER_OBJECT pDriverObject)
         pDeleteDeviceObject = v1;
     }
     DbgPrint("Driver is unloaded!");
-    //FltUnregisterFilter(hFilter);
 }

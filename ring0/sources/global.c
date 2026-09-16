@@ -253,7 +253,7 @@ VOID MyExEnumHandleTable(
  */
 PVOID FindExportedFunctionByName(
     _In_ PVOID DllBase,
-    _In_ PCHAR FunctionName
+    _In_ PCSTR FunctionName
 )
 {
     // 基础参数校验

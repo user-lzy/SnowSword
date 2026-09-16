@@ -15,6 +15,146 @@ NTKERNELAPI NTSTATUS ObReferenceObjectByName(
 	OUT PVOID* Object
 );
 
+typedef struct _SYMLINK_OFFSETS
+{
+	ULONG Callback;
+	ULONG CallbackContext;
+	ULONG DosDeviceDriveIndex;
+	ULONG Flags;
+	ULONG AccessMask;
+
+} SYMLINK_OFFSETS;
+
+// Win10 x64 常见布局。
+// 正式跨版本时建议由 PDB/版本表提供。
+static SYMLINK_OFFSETS g_SymbolicLinkOffsets =
+{
+	0x08,   // Callback / LinkTarget union
+	0x10,   // CallbackContext
+	0x18,   // DosDeviceDriveIndex
+	0x1C,   // Flags
+	0x20    // AccessMask
+};
+
+#define OBJECT_SYMBOLIC_LINK_USE_CALLBACK 0x10
+
+NTSTATUS
+QuerySymbolicLinkCallback(
+	_In_ PCWSTR SymbolicLinkPath,
+	_Out_ PSYMLINK_CALLBACK_INFO Info
+)
+{
+	NTSTATUS status;
+	UNICODE_STRING usPath;
+	OBJECT_ATTRIBUTES oa;
+
+	HANDLE hLink = NULL;
+	PVOID object = NULL;
+
+	if (!SymbolicLinkPath || !Info) 
+		return STATUS_INVALID_PARAMETER;
+
+	RtlZeroMemory(Info, sizeof(*Info));
+
+	RtlInitUnicodeString(
+		&usPath,
+		SymbolicLinkPath
+	);
+
+	InitializeObjectAttributes(
+		&oa,
+		&usPath,
+		OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+		NULL,
+		NULL
+	);
+
+	status = ZwOpenSymbolicLinkObject(
+		&hLink,
+		SYMBOLIC_LINK_QUERY,
+		&oa
+	);
+
+	if (!NT_SUCCESS(status)) return status;
+
+	status = ObReferenceObjectByHandle(
+		hLink,
+		0,
+		NULL,
+		KernelMode,
+		&object,
+		NULL
+	);
+
+	DbgPrint(
+		"[SymLink] ObReferenceObjectByHandle -> 0x%08X Object=%p\n",
+		status,
+		object
+	);
+
+	if (!NT_SUCCESS(status))
+	{
+		ZwClose(hLink);
+		return status;
+	}
+
+	__try
+	{
+		PUCHAR base = (PUCHAR)object;
+
+		Info->ObjectAddress =
+			object;
+
+		Info->Flags =
+			*(volatile ULONG*)
+			(base + g_SymbolicLinkOffsets.Flags);
+
+		Info->DosDeviceDriveIndex =
+			*(volatile ULONG*)
+			(base + g_SymbolicLinkOffsets.DosDeviceDriveIndex);
+
+		Info->AccessMask =
+			*(volatile ULONG*)
+			(base + g_SymbolicLinkOffsets.AccessMask);
+
+		if (Info->Flags &
+			OBJECT_SYMBOLIC_LINK_USE_CALLBACK)
+		{
+			Info->IsDynamic = TRUE;
+
+			Info->Callback =
+				(*(PVOID volatile*)
+					(base + g_SymbolicLinkOffsets.Callback));
+
+			Info->CallbackContext =
+				(*(PVOID volatile*)
+					(base + g_SymbolicLinkOffsets.CallbackContext));
+		}
+		else
+		{
+			Info->IsDynamic = FALSE;
+			Info->Callback = 0;
+			Info->CallbackContext = 0;
+		}
+
+		status = STATUS_SUCCESS;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		status = GetExceptionCode();
+
+		DbgPrint(
+			"[SymLink] Exception: 0x%08X\n",
+			status
+		);
+	}
+
+	ObDereferenceObject(object);
+	ZwClose(hLink);
+
+	return status;
+}
+
 NTSTATUS QueryObject(HANDLE dwProcessId, HANDLE Handle, LPWSTR Type, ULONG TypeLength, LPWSTR Name, ULONG NameLength, PVOID* pObject)
 {
 	PEPROCESS hProcess = NULL;

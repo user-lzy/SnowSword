@@ -271,6 +271,15 @@ Left=690
 Top=160
 Tag=
 
+[PopupMenu]
+Name=mnuSymbolLinkCallback
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuSymbolLinkCallback_mnuRefresh0-10显示全部FrmListView_mnuSymbolLinkCallback_mnuViewAll0-10
+Left=730
+Top=160
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -734,6 +743,16 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             End If
             Unlock_File ListView
             Me.Caption = "文件占用查看小工具"
+        Case SymbolLinkCallback
+            If Not IsDriverLoaded Then 
+                If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
+            If GetSymbolLinkCallbackList(False, CurrentInfo->SymbolLink, ListView) = -1 Then ShowErrorBox "枚举失败!"
+            Me.Caption = "动态符号链接列表"
         Case IOFunction
             If CurrentInfo->CurrentDriver.DriverObject <> 0 Then
                 GetDriverIOFunctionList ListView, CurrentInfo->CurrentDriver.DriverPath, CurrentInfo->CurrentDriver.DriverObject
@@ -825,6 +844,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case KernelThread
             mnuKernelThread.hWndForm = hWndForm
             PopupMenu hWndForm, mnuKernelThread.HMENU
+        Case SymbolLinkCallback
+            mnuSymbolLinkCallback.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuSymbolLinkCallback.HMENU
         Case FileStream
             mnuFileStream.hWndForm = hWndForm
             PopupMenu hWndForm, mnuFileStream.HMENU
@@ -2018,4 +2040,36 @@ Sub FrmListView_mnuModuleProcess_WM_Command(hWndForm As hWnd, wID As ULong)
 
    End Select
 End Sub
+
+'[FrmListView.mnuSymbolLinkCallback]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuSymbolLinkCallback_WM_Command(hWndForm As hWnd, wID As ULong)
+    Me.hWndForm = hWndForm
+    Me.ListView.hWndForm = hWndForm
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Dim CurrentSymbolLink As StringW = CurrentInfo->SymbolLink
+    Select Case wID
+        Case FrmListView_mnuSymbolLinkCallback_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetSymbolLinkCallbackList GetMenuCheckState(mnuSymbolLinkCallback, FrmListView_mnuSymbolLinkCallback_mnuViewAll), CurrentSymbolLink, ListView
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuSymbolLinkCallback_mnuViewAll ' 显示全部
+            lblNum.Caption = "正在刷新..."
+            If Not IsDriverLoaded Then 
+                If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+                    If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
+                Else
+                    Return
+                End If
+            End If
+            Dim bGlobal As Boolean = GetMenuCheckState(mnuSymbolLinkCallback, FrmListView_mnuSymbolLinkCallback_mnuViewAll)
+            Me.Caption = "动态符号链接列表"
+            GetSymbolLinkCallbackList Not bGlobal, CurrentSymbolLink, ListView
+            SetMenuCheckState mnuSymbolLinkCallback, FrmListView_mnuSymbolLinkCallback_mnuViewAll, Not bGlobal
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+    End Select
+End Sub
+
 

@@ -16,8 +16,8 @@ Enabled=True
 Repeat=False
 Left=0
 Top=0
-Width=754
-Height=516
+Width=755
+Height=510
 TopMost=False
 Child=False
 MdiChild=False
@@ -68,8 +68,8 @@ Default=False
 OwnDraw=False
 MultiLine=False
 Font=微软雅黑,9,0
-Left=330
-Top=160
+Left=550
+Top=50
 Width=100
 Height=30
 Layout=0 - 不锚定
@@ -129,8 +129,8 @@ Help=
 Icon=SnowSword.ico
 CallMsg=400
 Tips=SnowSword - lzy
-Left=430
-Top=180
+Left=260
+Top=340
 Tag=
 
 [TextBox]
@@ -175,34 +175,7 @@ Name=Check9
 Help=
 Index=-1
 Style=0 - 标准
-Caption=自我保护(应用层)
-TextAlign=3 - 中左对齐
-Alignment=0 - 文本在左边
-Value=0 - 未选择
-Multiline=True
-Enabled=False
-Visible=True
-ForeColor=SYS,8
-BackColor=SYS,25
-Font=微软雅黑,9,0
-Left=500
-Top=50
-Width=100
-Height=30
-Layout=0 - 不锚定
-MousePointer=0 - 默认
-Tag=
-Tab=True
-ToolTip=
-ToolTipBalloon=False
-AcceptFiles=False
-
-[CheckBox]
-Name=Check8
-Help=
-Index=-1
-Style=0 - 标准
-Caption=自我保护(内核层)
+Caption=自我保护
 TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
@@ -212,8 +185,8 @@ Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
-Left=220
-Top=160
+Left=330
+Top=50
 Width=100
 Height=30
 Layout=0 - 不锚定
@@ -239,8 +212,8 @@ Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
-Left=560
-Top=120
+Left=590
+Top=90
 Width=100
 Height=30
 Layout=0 - 不锚定
@@ -266,7 +239,7 @@ Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
-Left=400
+Left=220
 Top=50
 Width=90
 Height=30
@@ -283,7 +256,7 @@ Name=Check5
 Help=
 Index=-1
 Style=0 - 标准
-Caption=禁止操作注册表
+Caption=禁止创建注册表项(值)
 TextAlign=3 - 中左对齐
 Alignment=0 - 文本在左边
 Value=0 - 未选择
@@ -294,8 +267,8 @@ ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
 Left=440
-Top=120
-Width=110
+Top=90
+Width=140
 Height=30
 Layout=0 - 不锚定
 MousePointer=0 - 默认
@@ -321,7 +294,7 @@ ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
 Left=330
-Top=120
+Top=90
 Width=100
 Height=30
 Layout=0 - 不锚定
@@ -348,7 +321,7 @@ ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
 Left=220
-Top=120
+Top=90
 Width=100
 Height=30
 Layout=0 - 不锚定
@@ -368,80 +341,28 @@ SizeW=16
 SizeH=16
 DPI=True
 BackColor=SYS,15
-Left=580
-Top=180
+Left=340
+Top=340
 Tag=
 
-[Frame]
-Name=Frame3
+[CheckBox]
+Name=Check11
 Help=
 Index=-1
-Caption=Ring0设置
-Frame=True
-TextAlign=0 - 左对齐
-Fillet=5
-BorderWidth=1
-BorderColor=SYS,16
-ForeColor=SYS,8
-BackColor=SYS,25
+Style=0 - 标准
+Caption=禁止加载模块
+TextAlign=3 - 中左对齐
+Alignment=0 - 文本在左边
+Value=0 - 未选择
+Multiline=True
 Enabled=True
-Visible=True
-Font=微软雅黑,9,0
-Left=210
-Top=100
-Width=520
-Height=110
-Layout=0 - 不锚定
-MousePointer=0 - 默认
-Tag=
-ToolTip=
-ToolTipBalloon=False
-
-[CheckBox]
-Name=Check2
-Help=
-Index=-1
-Style=0 - 标准
-Caption=屏蔽消息钩子
-TextAlign=3 - 中左对齐
-Alignment=0 - 文本在左边
-Value=0 - 未选择
-Multiline=True
-Enabled=False
-Visible=True
-ForeColor=SYS,8
-BackColor=SYS,25
-Font=微软雅黑,9,0
-Left=300
-Top=50
-Width=90
-Height=30
-Layout=0 - 不锚定
-MousePointer=0 - 默认
-Tag=
-Tab=True
-ToolTip=
-ToolTipBalloon=False
-AcceptFiles=False
-
-[CheckBox]
-Name=Check1
-Help=
-Index=-1
-Style=0 - 标准
-Caption=禁止注销
-TextAlign=3 - 中左对齐
-Alignment=0 - 文本在左边
-Value=0 - 未选择
-Multiline=True
-Enabled=False
 Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
 Left=220
-Top=50
-Width=70
+Top=130
+Width=100
 Height=30
 Layout=0 - 不锚定
 MousePointer=0 - 默认
@@ -466,7 +387,7 @@ Visible=True
 ForeColor=SYS,8
 BackColor=SYS,25
 Font=微软雅黑,9,0
-Left=610
+Left=440
 Top=50
 Width=90
 Height=30
@@ -486,31 +407,6 @@ Menu=刷新FrmMain_mnuFilterDriver_mnmuRefresh0-10-FrmMain_mnuFilterDriv
 Left=260
 Top=220
 Tag=
-
-[Frame]
-Name=Frame2
-Help=
-Index=-1
-Caption=Ring3设置
-Frame=True
-TextAlign=0 - 左对齐
-Fillet=5
-BorderWidth=1
-BorderColor=SYS,16
-ForeColor=SYS,8
-BackColor=SYS,25
-Enabled=True
-Visible=True
-Font=微软雅黑,9,0
-Left=210
-Top=30
-Width=520
-Height=60
-Layout=0 - 不锚定
-MousePointer=0 - 默认
-Tag=
-ToolTip=
-ToolTipBalloon=False
 
 [Line]
 Name=Line1
@@ -610,8 +506,8 @@ Tag=
 [VEH]
 Name=VEH1
 Help=
-Left=510
-Top=170
+Left=300
+Top=340
 Tag=
 
 [mCtrlTreeList]
@@ -774,6 +670,24 @@ Left=500
 Top=280
 Tag=
 
+[PopupMenu]
+Name=mnuObject
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuObject_mnuRefresh0-10-FrmMain_mnuObject_mnuStep10-10查看动态符号链接FrmMain_mnuObject_mnuViewSymbolicLinkCallback0-10查看详细属性FrmMain_mnuObject_mnuViewAttribute0-10
+Left=580
+Top=280
+Tag=
+
+[PopupMenu]
+Name=mnuObjectDirectory
+Help=
+Index=-1
+Menu=刷新FrmMain_mnuObjectDirectory_mnuRefresh0-10
+Left=540
+Top=280
+Tag=
+
 [Frame]
 Name=FmeAdvance
 Help=
@@ -814,14 +728,14 @@ Help=
 Index=-1
 Interval=1
 Enabled=False
-Left=610
-Top=60
+Left=220
+Top=340
 Tag=
 
 [TopMenu]
 Name=TopMenu1
 Help=
-Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10创建进程FrmMain_TopMenu1_mnuCreateProcess0-10}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10检测更新FrmMain_TopMenu1_mnuCheckUpdate0-10}
+Menu=文件FrmMain_TopMenu1_mnuFile0-10{查看文件占用FrmMain_TopMenu1_mnuUnlockFile0-10创建进程FrmMain_TopMenu1_mnuCreateProcess0-10}高级FrmMain_TopMenu1_mnuAdvanced0-10{显示日志FrmMain_TopMenu1_mnuViewLog0-10检测更新FrmMain_TopMenu1_mnuCheckUpdate0-10退出FrmMain_TopMenu1_mnuExit0-10}
 Tag=
 
 [TreeView]
@@ -1029,6 +943,7 @@ Dim Shared gLayoutMode As UI_LAYOUT_MODE
 Dim Shared gMainView As UI_MAIN_VIEW
 
 Dim Shared g_BlockMainWindowShow As Boolean = False
+Dim Shared g_bSelfProtected As Boolean = False
 
 Const MAX_LEN = 200
 Const GWL_WNDPROC = -4
@@ -1496,11 +1411,9 @@ Private Sub DrawTreeView()
     treMain.AddItem treOther, "服务"
     treMain.AddItem treOther, "启动项"
     treMain.AddItem treOther, "Etw"
-    treMain.AddItem treOther, "Etw Provider"
     treMain.AddItem treOther, "Winsock SPI"
     treMain.AddItem treOther, "任务计划"
     Dim treAdvance As HTREEITEM = treMain.AddItem(NULL, "高级")
-    treMain.AddItem treAdvance, "暴力检测"
     treMain.AddItem treAdvance, "设置"
 End Sub
 
@@ -1530,6 +1443,7 @@ Sub FrmMain_WM_Create(hWndForm As hWnd,UserData As Integer)
 End Sub
 
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
+    'ShowInfoBox WStr(SizeOf(SYMLINK_CALLBACK_INFO))
     GetCurrentDirectory MAX_PATH, g_cwd
     Dim hr As HRESULT
 
@@ -1758,6 +1672,10 @@ Sub FrmMain_ListView1_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, xPos
             PopupMenu hWndForm, mnuWfpCallout.HMENU
         Case WfpFilter
             PopupMenu hWndForm, mnuWfpFilter.HMENU
+        Case Ndis
+            PopupMenu hWndForm, mnuNdis.HMENU
+        Case ObjectDirectory
+            PopupMenu hWndForm, mnuObject.HMENU
         Case Registry
             PopupMenu hWndForm, mnuRegValue.HMENU
         Case Service
@@ -2424,6 +2342,8 @@ Function FrmMain_TreeView_NM_RCLICK(hWndForm As hWnd, hWndControl As hWnd) As LR
         
         ' 只在点击到节点时才弹出菜单
         Select Case CurrentInformation.intType
+            Case ObjectDirectory
+                PopupMenu hWndForm, mnuObjectDirectory.HMENU
             Case File
                 PopupMenu hWndForm, mnuFolder.HMENU
             Case Registry
@@ -2444,7 +2364,7 @@ Sub FrmMain_Check3_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             Return
         End If
     End If
-    Dim isStatus As BOOLEAN = Check3.Value, ret As Long, lpRet As DWORD
+    Dim isStatus As Boolean = Check3.Value
     IoControl hDrv, IOCTL_DenyCreateProcess, @isStatus, SizeOf(BOOLEAN)
 End Sub
 
@@ -2460,7 +2380,9 @@ Sub FrmMain_Check6_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         Check3.Value = False
         Check4.Value = False
         Check5.Value = False
-        Check8.Value = False
+        Check7.Value = False
+        Check9.Value = False
+        Check11.Value = False
     End If
 End Sub
 
@@ -2473,8 +2395,8 @@ Sub FrmMain_Check5_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
     Else
         Return
     End If
-    Dim isStatus As BOOLEAN = Check5.Value, ret As Long, lpRet As DWORD
-    IoControl hDrv, IOCTL_DenyAccessRegistry, @isStatus, SizeOf(BOOLEAN)
+    Dim isStatus As Boolean = Check5.Value
+    IoControl hDrv, IOCTL_DenyCreateRegistry, @isStatus, SizeOf(Boolean)
 End Sub
 
 '[FrmMain.Check7]事件 : 单击
@@ -2488,30 +2410,8 @@ Sub FrmMain_Check7_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
             Return
         End If
     End If
-    Dim isStatus As BOOLEAN = Check7.Value, ret As Long, lpRet As DWORD
+    Dim isStatus As Boolean = Check7.Value
     IoControl hDrv, IOCTL_DenyLoadDriver, @isStatus, SizeOf(BOOLEAN)
-End Sub
-
-'[FrmMain.Check8]事件 : 单击
-'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
-'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
-Sub FrmMain_Check8_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
-    If Not IsDriverLoaded Then 
-        If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
-            If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
-        Else
-            Return
-        End If
-    End If
-    Dim dwProcessId As DWORD = GetCurrentProcessId, ret As Long, bStatus As BOOLEAN = Check8.Value
-    If (Check8.Value) Then
-        IoControl hDrv, IOCTL_SetProcessProtectStatus, @bStatus, SizeOf(Boolean)
-        IoControl hDrv, IOCTL_AddProtectedProcess, @dwProcessId, SizeOf(DWORD)
-        IoControl hDrv, IOCTL_SetThreadProtectStatus, @bStatus, SizeOf(BOOLEAN)
-    Else
-        IoControl hDrv, IOCTL_SetProcessProtectStatus, @bStatus, SizeOf(Boolean)
-        IoControl hDrv, IOCTL_SetThreadProtectStatus, @bStatus, SizeOf(BOOLEAN)
-    End If
 End Sub
 
 '[FrmMain.TopMenu1]事件 : 点击了菜单项
@@ -2530,6 +2430,8 @@ Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
             FrmLog.Show
         Case FrmMain_TopMenu1_mnuCheckUpdate ' 检测更新
             CheckUpdate
+        Case FrmMain_topMenu1_mnuExit ' 退出
+            FrmMain_WM_Close hWndForm
    End Select
 End Sub
 
@@ -2899,7 +2801,7 @@ Sub FrmMain_Check4_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
         End If
     End If
     Dim bStatus As BOOLEAN = Check4.Value
-    IoControl hDrv, IOCTL_DenyRemoteThread, @bStatus, SizeOf(BOOLEAN)
+    IoControl hDrv, IOCTL_DenyRemoteThread, @bStatus, SizeOf(Boolean)
 End Sub
 
 '[FrmMain.ListView1]事件 : 双击鼠标左键
@@ -3449,7 +3351,12 @@ Function WndProc(ByVal hWnd As HWND, ByVal uMsg As UINT, ByVal wParam As WPARAM,
             End If
         Case WM_WINDOWPOSCHANGED
             Dim pwp As WINDOWPOS Ptr = Cast(WINDOWPOS Ptr, lParam)
+        Case WM_CLOSE, WM_QUIT, WM_NCDESTROY
+            If g_bSelfProtected Then Return 0
     End Select
+    /'If uMsg = WM_SYSCOMMAND AndAlso wParam = SC_CLOSE Then
+        Return 0
+    End If'/
     Return CallWindowProc(Cast(WndProc, prevFrmMainProc), hWnd, uMsg, wParam, lParam)
 End Function
 
@@ -4653,3 +4560,87 @@ Sub FrmMain_mnuNdis_WM_Command(hWndForm As hWnd,wID As ULong)
             FrmMemoryEditor.Show,, Cast(Integer, MemoryInfo)
    End Select
 End Sub
+
+'[FrmMain.mnuObjectDirectory]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuObjectDirectory_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim CurrentNode As HTREEITEM = TreeView.Selection
+    Select Case wID
+        Case FrmMain_mnuObjectDirectory_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetObjectList CurrentNode, TreeView, ListView1, True, True
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+    End Select
+End Sub
+
+'[FrmMain.mnuObject]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmMain_mnuObject_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim CurrentNode As HTREEITEM = TreeView.Selection
+    Dim CurrentPath As StringW
+    GetPathByNodeW CurrentNode, TreeView, CurrentPath
+    If CurrentPath <> "\" Then CurrentPath = RightW(CurrentPath, LenW(CurrentPath) - 1)
+    Select Case wID
+        Case FrmMain_mnuObject_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetObjectList CurrentNode, TreeView, ListView1, False, True
+            lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
+        Case FrmMain_mnuObject_mnuViewSymbolicLinkCallback ' 查看动态符号链接
+            If ListView1.SelectedItem < 0 Then Exit Sub
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo->SymbolLink = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
+            CurrentInfo->intType = SymbolLinkCallback
+            FrmListView.Show,, Cast(Integer, CurrentInfo)
+        Case FrmMain_mnuObject_mnuViewAttribute ' 查看详细属性
+
+    End Select
+End Sub
+
+'[FrmMain.Check9]事件 : 单击
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+Sub FrmMain_Check9_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
+    If Not IsDriverLoaded Then 
+        If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
+        Else
+            Return
+        End If
+    End If
+    Dim dwProcessId As DWORD = GetCurrentProcessId, ret As Long, bStatus As Boolean = Check9.Value
+    If (bStatus) Then
+        IoControl hDrv, IOCTL_SetProcessProtectStatus, @bStatus, SizeOf(Boolean)
+        IoControl hDrv, IOCTL_AddProtectedProcess, @dwProcessId, SizeOf(DWORD)
+        IoControl hDrv, IOCTL_SetThreadProtectStatus, @bStatus, SizeOf(BOOLEAN)
+    Else
+        IoControl hDrv, IOCTL_SetProcessProtectStatus, @bStatus, SizeOf(Boolean)
+        IoControl hDrv, IOCTL_SetThreadProtectStatus, @bStatus, SizeOf(BOOLEAN)
+    End If
+    g_bSelfProtected = Check9.Value
+    If Check9.value Then ShowInfoBox "注意:为阻止rootkit攻击本工具窗口,现在只能通过 高级->退出 来关闭本工具窗口"
+End Sub
+
+'[FrmMain.Check11]事件 : 单击
+'hWndForm    当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+'hWndControl 当前控件的句柄(也是窗口句柄，如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 )
+Sub FrmMain_Check11_BN_Clicked(hWndForm As hWnd, hWndControl As hWnd)
+    If Not IsDriverLoaded Then 
+        If ShowMsgBox("驱动尚未加载,是否加载?",, MB_YESNO) = IDYES Then
+            If InitDriver Then ShowInfoBox "加载成功!" Else ShowErrorBox "加载失败!" : Return
+        Else
+            Return
+        End If
+    End If
+    Dim bStatus As Boolean = Check11.Value
+    IoControl hDrv, IOCTL_DenyLoadDll, @bStatus, SizeOf(bStatus)
+End Sub
+
+
+
+
+
+

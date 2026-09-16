@@ -179,6 +179,21 @@ typedef struct _OBJECT_INFORMATION {
 	PVOID Procedure[8];
 }OBJECT_INFORMATION, * POBJECT_INFORMATION;
 
+typedef struct _SYMLINK_CALLBACK_INFO
+{
+	BOOLEAN IsDynamic;
+	UCHAR Reserved[7];
+
+	PVOID ObjectAddress;
+	PVOID Callback;
+	PVOID CallbackContext;
+
+	ULONG Flags;
+	ULONG DosDeviceDriveIndex;
+	ULONG AccessMask;
+
+} SYMLINK_CALLBACK_INFO, * PSYMLINK_CALLBACK_INFO;
+
 NTKERNELAPI NTSTATUS ObSetHandleAttributes(HANDLE Handle, POBJECT_HANDLE_FLAG_INFORMATION HandleFlags, KPROCESSOR_MODE PreviousMode);
 
 #define ObjectNameInformation 1
@@ -191,6 +206,11 @@ NTKERNELAPI NTSTATUS ObSetHandleAttributes(HANDLE Handle, POBJECT_HANDLE_FLAG_IN
 #define MyDbgPrint(Format, ...) \
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, Format, ##__VA_ARGS__)
 
+NTSTATUS
+QuerySymbolicLinkCallback(
+	_In_ PCWSTR SymbolicLinkPath,
+	_Out_ PSYMLINK_CALLBACK_INFO Info
+);
 NTSTATUS QueryObject(
 	HANDLE dwProcessId, 
 	HANDLE Handle, 

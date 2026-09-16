@@ -213,3 +213,25 @@ End Sub
 Function IsNumeric(str1 As StringW) As Boolean
     Return (str1 = "0") OrElse (ValUInt(str1) <> 0)
 End Function
+
+' 大小写不敏感的宽字符串查找（返回匹配起始位置指针，未找到返回 0）
+Function wcsistr( _
+    ByVal haystack As WString Ptr, _
+    ByVal needle As WString Ptr _
+) As WString Ptr
+
+    If haystack = 0 OrElse needle = 0 Then Return 0
+
+    Dim As ULong nLen = wcslen(needle)
+
+    If nLen = 0 Then Return haystack
+
+    While *haystack <> 0
+        If _wcsnicmp(haystack, needle, nLen) = 0 Then
+            Return haystack
+        End If
+        haystack += 1
+    Wend
+
+    Return 0
+End Function

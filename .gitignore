@@ -67,4 +67,6 @@ release/
 
 # 原始截图保留在本地；README 使用整理后的稳定英文文件名
 docs/images/360截图*.jpg
+_probe_tmp.txt
+Codex 图像 *.png
 

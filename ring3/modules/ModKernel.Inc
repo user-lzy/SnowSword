@@ -848,7 +848,7 @@ Public Function GetWString(ByVal SourceString As String) As LPWSTR
     Return pStr
 End Function
 
-Function GetDriverPathByAddr(ByVal Addr As Integer) As String
+Function GetDriverPathByAddr(ByVal Addr As UInteger) As String
     Dim st As NTSTATUS
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)

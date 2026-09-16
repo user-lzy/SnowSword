@@ -557,6 +557,9 @@ VOID ThreadCreateNotifyRoutine(
 ) {
 	UNREFERENCED_PARAMETER(ThreadId);
     if (Create) {
+        if (MyAdvancedOptions.DenyCreateThread) {
+			DenyCreateThread(ThreadId);
+        }
         PEPROCESS eprocess = NULL;
         NTSTATUS status = PsLookupProcessByProcessId(ProcessId, &eprocess);
         if (NT_SUCCESS(status)) {

@@ -24,6 +24,19 @@ Type SYSTEM_TIMER
     uContext As ULONG64
 End Type
 
+Type SYMLINK_CALLBACK_INFO Field = 8
+    IsDynamic As Boolean
+    Reserved(6) As Byte
+
+    ObjectAddress As ULONG64
+    Callback As ULONG64
+    CallbackContext As ULONG64
+
+    dwFlags As ULong
+    DosDeviceDriveIndex As ULong
+    AccessMask As ULong
+End Type
+
 ' WFP_CALLOUT_INFO 结构体（与驱动一致）
 Type WFP_CALLOUT_INFO Field = 8
     CalloutGuid As GUID
@@ -284,6 +297,584 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
     End If
     CommitListViewView lvwKernelTimer
 End Sub
+
+Function QuerySymbolLinkCallback(strSymbolLink As StringW, ByRef Info As SYMLINK_CALLBACK_INFO) As Boolean
+    Dim RequestStr As WString * MAX_PATH = ""
+    Dim dwReturned As DWORD = 0
+
+    ZeroMemory(@Info, SizeOf(Info))
+
+    ' ==============================
+    ' 检查路径
+    ' ==============================
+    If LenW(strSymbolLink) = 0 Then Return False
+    If LenW(strSymbolLink) >= MAX_PATH Then Return False
+
+    ' ==============================
+    ' 拷贝 WCHAR 路径
+    ' ==============================
+    /'Dim pSrc As WString Ptr = strSymbolLink
+
+    For i As Integer = 0 To LenW(strSymbolLink) - 1
+        Request.wszPath(i) = pSrc[i]
+    Next
+
+    Request.wszPath[LenW(strSymbolLink)] = 0 '/
+    RequestStr = strSymbolLink
+    
+    ' ==============================
+    ' 调用驱动
+    ' ==============================
+    Dim bRet As BOOL = IoControl( _
+        hDrv, _
+        IOCTL_QuerySymbolLinkCallback, _
+        @RequestStr, _
+        SizeOf(Wstring) * MAX_PATH, _
+        @Info, _
+        SizeOf(Info), _
+        @dwReturned _
+    )
+
+    If bRet = False Then
+        MyLog.PrintWin32Error "QuerySymbolLinkCallback", "IOCTL_QuerySymbolLinkCallback", "strSymbolLink:" & strSymbolLink
+        Return False
+    End If
+
+    If dwReturned < SizeOf(SYMLINK_CALLBACK_INFO) Then
+        MyLog.PrintWin32Error "QuerySymbolLinkCallback", "IOCTL_QuerySymbolLinkCallback", "dwReturned:" & dwReturned
+        Return False
+    End If
+    
+    /'MyLog.PrintInfo "GetSymbolLinkCallbackList", "Debug", _
+        "Size=" & SizeOf(SYMLINK_CALLBACK_INFO) & _
+        " IsDynamic=" & Info.IsDynamic & _
+        " Object=0x" & WHex(Info.ObjectAddress, 16) & _
+        " Callback=0x" & WHex(Info.Callback, 16) & _
+        " Context=0x" & WHex(Info.CallbackContext, 16) & _
+        " Flags=0x" & WHex(Info.dwFlags, 8)'/
+
+    Return True
+End Function
+
+Function GetSymbolLinkCallbackList( _
+    ByVal bGlobal As Boolean, _
+    strSymbolLink As StringW, _
+    lvwSymbolLinkCallback As Class_ListView _
+) As Integer
+    ' ============================================================
+    ' 清空 ListView
+    ' ============================================================
+    InitListViewData lvwSymbolLinkCallback
+
+    ' ============================================================
+    ' 单个 SymbolicLink 查询模式
+    ' ============================================================
+    If Not bGlobal Then
+        If lvwSymbolLinkCallback.ColumnText(0) = "符号链接路径" Then lvwSymbolLinkCallback.DeleteColumn 0
+        Dim Info As SYMLINK_CALLBACK_INFO
+
+        If QuerySymbolLinkCallback(strSymbolLink, Info) = False Then
+            Return -1
+        End If
+
+        '
+        ' 普通静态 SymbolicLink 不显示
+        '
+        If Info.IsDynamic = 0 Then
+            CommitListViewView lvwSymbolLinkCallback
+            Return 0
+        End If
+
+
+        Dim strCallback As StringW
+        Dim strContext As StringW
+        Dim strObject As StringW
+        Dim strFlags As StringW
+
+        strObject   = "0x" & WHex(Info.ObjectAddress, 16)
+        strCallback = "0x" & WHex(Info.Callback, 16)
+        strContext  = "0x" & WHex(Info.CallbackContext, 16)
+        strFlags    = "0x" & WHex(Info.dwFlags, 8)
+
+        '
+        ' 单对象模式：
+        '
+        ' Object | Callback | Context | Flags
+        '
+        AddItemColListEx _
+            lvwSymbolLinkCallback, _
+            5, _
+            , _
+            , _
+            WStr(strObject), _
+            WStr(strCallback), _
+            WStr(GetDriverPathByAddr(Info.Callback)), _
+            WStr(strContext), _
+            WStr(strFlags)
+
+        CommitListViewView lvwSymbolLinkCallback
+
+        Return 1
+    End If
+    lvwSymbolLinkCallback.InsertColumn 0, "符号链接路径",, 300
+
+    ' ============================================================
+    ' strSymbolLink = ""
+    '
+    ' 全局扫描模式：
+    '
+    ' 从 Object Manager 根目录 "\" 开始，
+    ' 使用显式栈模拟递归遍历所有 Directory。
+    '
+    ' 只显示动态 SymbolicLink。
+    '
+    ' Path | Object | Callback | Context | Flags
+    ' ============================================================
+
+
+    Dim hNtDll As HMODULE
+
+    Dim pNtOpenDirectoryObject As Function( _
+        ByRef hDirectory As HANDLE, _
+        ByVal AccessMask As ACCESS_MASK, _
+        ByRef ObjectAttributes As OBJECT_ATTRIBUTES _
+    ) As NTSTATUS
+
+    Dim pNtQueryDirectoryObject As Function( _
+        ByVal hDirectory As HANDLE, _
+        ByVal Buffer As PVOID, _
+        ByVal Length As ULONG, _
+        ByVal ReturnSingleEntry As BOOLEAN, _
+        ByVal RestartScan As BOOLEAN, _
+        ByRef Context As ULONG, _
+        ByRef ReturnLength As ULONG _
+    ) As NTSTATUS
+
+    Dim pRtlInitUnicodeString As Sub( _
+        ByRef DestinationString As UNICODE_STRING, _
+        ByVal SourceString As PCWSTR _
+    )
+
+    Dim pNtClose As Function( _
+        ByVal hObject As HANDLE _
+    ) As NTSTATUS
+
+
+    ' ============================================================
+    ' 获取 ntdll API
+    ' ============================================================
+    hNtDll = GetModuleHandleW("ntdll.dll")
+
+    If hNtDll = NULL Then
+        MyLog.PrintLog _
+            LOG_ERROR, _
+            "GetSymbolLinkCallbackList", _
+            "GetModuleHandleW(ntdll.dll)"
+
+        Return -1
+    End If
+
+
+    pNtOpenDirectoryObject = Cast(PVOID, _
+        GetProcAddress(hNtDll, "NtOpenDirectoryObject"))
+
+    pNtQueryDirectoryObject = Cast(PVOID, _
+        GetProcAddress(hNtDll, "NtQueryDirectoryObject"))
+
+    pRtlInitUnicodeString = Cast(PVOID, _
+        GetProcAddress(hNtDll, "RtlInitUnicodeString"))
+
+    pNtClose = Cast(PVOID, _
+        GetProcAddress(hNtDll, "NtClose"))
+
+
+    If pNtOpenDirectoryObject = NULL OrElse _
+       pNtQueryDirectoryObject = NULL OrElse _
+       pRtlInitUnicodeString = NULL OrElse _
+       pNtClose = NULL Then
+
+        MyLog.PrintLog _
+            LOG_ERROR, _
+            "GetSymbolLinkCallbackList", _
+            "GetProcAddress"
+
+        Return -1
+    End If
+
+
+    ' ============================================================
+    ' 枚举缓冲区
+    ' ============================================================
+    #define SYMLINK_ENUM_BUFFER_SIZE 65536
+
+    Dim pBuffer As Byte Ptr
+
+    pBuffer = CAllocate(SYMLINK_ENUM_BUFFER_SIZE)
+
+    If pBuffer = NULL Then
+        Return -1
+    End If
+
+
+    ' ============================================================
+    ' 显式栈
+    '
+    ' 不使用函数递归，避免 Object Manager 目录层级导致
+    ' 调用栈递归。
+    ' ============================================================
+    Dim dirStack() As StringW
+
+    Dim stackCount As Long = 1
+
+    ReDim dirStack(0 To 63) As StringW
+
+    '
+    ' Object Manager 根目录
+    '
+    dirStack(0) = "\"
+
+
+    Dim foundCount As Long = 0
+
+
+    ' ============================================================
+    ' DFS
+    ' ============================================================
+    While stackCount > 0
+
+        '
+        ' Pop
+        '
+        stackCount -= 1
+
+        Dim currentDirectory As StringW
+
+        currentDirectory = dirStack(stackCount)
+
+
+        ' ========================================================
+        ' 打开当前 Directory
+        ' ========================================================
+        Dim usDirectory As UNICODE_STRING
+        Dim oa As OBJECT_ATTRIBUTES
+        Dim hDirectory As HANDLE = NULL
+
+        RtlInitUnicodeString _
+            @usDirectory, _
+            currentDirectory
+
+        InitializeObjectAttributes( _
+            @oa, _
+            @usDirectory, _
+            0 _
+        )
+
+
+        Dim status As NTSTATUS
+
+        status = pNtOpenDirectoryObject( _
+            hDirectory, _
+            DIRECTORY_QUERY Or DIRECTORY_TRAVERSE, _
+            oa _
+        )
+
+
+        If status <> STATUS_SUCCESS Then
+
+            '
+            ' 某些目录可能因为权限等原因打不开。
+            ' 全局扫描时没有必要因此终止整个枚举。
+            '
+            MyLog.PrintNtError _
+                "GetSymbolLinkCallbackList", _
+                "NtOpenDirectoryObject", _
+                status, _
+                "路径:" & currentDirectory
+
+            Continue While
+        End If
+
+
+        ' ========================================================
+        ' 枚举当前 Directory
+        ' ========================================================
+        Dim ctx As ULONG = 0
+        Dim returnLength As ULONG = 0
+        Dim restartScan As BOOLEAN = TRUE
+
+
+        Do
+
+            ZeroMemory( _
+                pBuffer, _
+                SYMLINK_ENUM_BUFFER_SIZE _
+            )
+
+
+            returnLength = 0
+
+
+            status = pNtQueryDirectoryObject( _
+                hDirectory, _
+                pBuffer, _
+                SYMLINK_ENUM_BUFFER_SIZE, _
+                FALSE, _
+                restartScan, _
+                ctx, _
+                returnLength _
+            )
+
+
+            If status <> STATUS_SUCCESS AndAlso _
+               status <> STATUS_MORE_ENTRIES Then
+
+                Exit Do
+            End If
+
+
+            restartScan = FALSE
+
+
+            Dim pInfo As OBJECT_DIRECTORY_INFORMATION Ptr
+
+            pInfo = Cast( _
+                OBJECT_DIRECTORY_INFORMATION Ptr, _
+                pBuffer _
+            )
+
+
+            Dim i As ULONG = 0
+
+
+            Do
+
+                '
+                ' NtQueryDirectoryObject 的批量结果最后存在
+                ' 一个空 OBJECT_DIRECTORY_INFORMATION。
+                '
+                If pInfo[i].Name.Buffer = NULL AndAlso _
+                   pInfo[i].TypeName.Buffer = NULL Then
+
+                    Exit Do
+                End If
+
+
+                Dim objectName As StringW = ""
+                Dim objectType As StringW = ""
+
+
+                ' =================================================
+                ' Name
+                ' =================================================
+                If pInfo[i].Name.Buffer <> NULL AndAlso _
+                   pInfo[i].Name.Length <> 0 Then
+
+                    '
+                    ' Buffer 通常有结尾 NUL，但严格来说
+                    ' UNICODE_STRING 并不保证。
+                    '
+                    ' Object Manager 返回这里可以直接使用，
+                    ' 与 GetObjectList 当前实现保持一致。
+                    '
+                    objectName = _
+                        *Cast(WString Ptr, pInfo[i].Name.Buffer)
+
+                End If
+
+
+                ' =================================================
+                ' TypeName
+                ' =================================================
+                If pInfo[i].TypeName.Buffer <> NULL AndAlso _
+                   pInfo[i].TypeName.Length <> 0 Then
+
+                    objectType = _
+                        *Cast(WString Ptr, pInfo[i].TypeName.Buffer)
+
+                End If
+
+
+                If LenW(objectName) <> 0 Then
+
+                    ' =============================================
+                    ' 构造完整 Object Manager 路径
+                    ' =============================================
+                    Dim fullPath As StringW
+
+                    If currentDirectory = "\" Then
+
+                        fullPath = "\" & objectName
+
+                    Else
+
+                        fullPath = _
+                            currentDirectory & "\" & objectName
+
+                    End If
+
+
+                    ' =============================================
+                    ' Directory
+                    '
+                    ' Push 到显式栈，稍后继续枚举。
+                    ' =============================================
+                    If LCaseW(objectType) = "directory" Then
+
+                        '
+                        ' 扩容
+                        '
+                        If stackCount > UBound(dirStack) Then
+
+                            ReDim Preserve _
+                                dirStack( _
+                                    0 To UBound(dirStack) + 64 _
+                                ) As StringW
+
+                        End If
+
+
+                        dirStack(stackCount) = fullPath
+
+                        stackCount += 1
+
+
+                    ' =============================================
+                    ' SymbolicLink
+                    ' =============================================
+                    ElseIf LCaseW(objectType) = _
+                           "symboliclink" Then
+
+                        Dim Info As SYMLINK_CALLBACK_INFO
+
+
+                        If QuerySymbolLinkCallback( _
+                            fullPath, _
+                            Info _
+                        ) Then
+
+                            '
+                            ' 只显示动态 SymbolicLink
+                            '
+                            If Info.IsDynamic <> 0 Then
+
+                                Dim strObject As StringW
+                                Dim strCallback As StringW
+                                Dim strContext As StringW
+                                Dim strFlags As StringW
+
+
+                                strObject = _
+                                    "0x" & _
+                                    WHex( _
+                                        Info.ObjectAddress, _
+                                        16 _
+                                    )
+
+                                strCallback = _
+                                    "0x" & _
+                                    WHex( _
+                                        Info.Callback, _
+                                        16 _
+                                    )
+
+                                strContext = _
+                                    "0x" & _
+                                    WHex( _
+                                        Info.CallbackContext, _
+                                        16 _
+                                    )
+
+                                strFlags = _
+                                    "0x" & _
+                                    WHex( _
+                                        Info.dwFlags, _
+                                        8 _
+                                    )
+
+
+                                '
+                                ' 全局模式增加第一列 Path：
+                                '
+                                ' Path
+                                ' Object
+                                ' Callback
+                                ' Context
+                                ' Flags
+                                '
+                                AddItemColListEx _
+                                    lvwSymbolLinkCallback, _
+                                    6, _
+                                    , _
+                                    , _
+                                    WStr(fullPath), _
+                                    WStr(strObject), _
+                                    WStr(strCallback), _
+                                    WStr(GetDriverPathByAddr(Info.Callback)), _
+                                    WStr(strContext), _
+                                    WStr(strFlags)
+
+
+                                foundCount += 1
+
+                            End If
+
+                        End If
+
+                    End If
+
+                End If
+
+
+                i += 1
+
+            Loop
+
+
+            '
+            ' STATUS_SUCCESS：
+            ' 本轮已经枚举完毕。
+            '
+            ' STATUS_MORE_ENTRIES：
+            ' 继续调用取得下一批。
+            '
+            If status <> STATUS_MORE_ENTRIES Then
+                Exit Do
+            End If
+
+
+            FF_DoEvents
+
+        Loop
+
+
+        pNtClose(hDirectory)
+
+
+        '
+        ' 防止长时间遍历时 UI 完全无响应
+        '
+        FF_DoEvents
+
+    Wend
+
+
+    ' ============================================================
+    ' 清理
+    ' ============================================================
+    Deallocate(pBuffer)
+
+    Erase dirStack
+
+
+    ' ============================================================
+    ' 一次性提交 ListView
+    ' ============================================================
+    CommitListViewView lvwSymbolLinkCallback
+
+
+    Return foundCount
+
+End Function
 
 ' 将 GUID 转换为字符串
 Private Function GuidToString(g As GUID) As String

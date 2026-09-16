@@ -68,12 +68,6 @@ void SetLoadImageNotifyRoutine(
 	_In_ PIMAGE_INFO ImageInfo
 )
 {
-	//DbgPrint("进程%d正在加载模块%wZ", ProcessId, FullImageName);
-
-	// 拒绝加载指定模块
-	//if (NULL != wcsstr(FullImageName->Buffer, L"DriverTest.sys") ||
-	//	NULL != wcsstr(FullImageName->Buffer, L"Test.dll"))
-	//Driver
 	if (0 == ProcessId)
 	{
 		if (MyAdvancedOptions.DenyLoadDriver)
@@ -82,11 +76,13 @@ void SetLoadImageNotifyRoutine(
 			DenyLoadDriver(ImageInfo->ImageBase);
 		}
 	}
-	//Dll
 	else
 	{
-		//DbgPrint("Deny Load DLL\n");
-		//DenyLoadDll(ImageInfo->ImageBase);
+		if (MyAdvancedOptions.DenyLoadDll)
+		{
+			DbgPrint("进程%lld尝试加载模块%wZ,已拒绝", (ULONG64)PsGetCurrentProcessId(), FullImageName);
+			DenyLoadDll(ImageInfo->ImageBase);
+		}
 	}
 }
 

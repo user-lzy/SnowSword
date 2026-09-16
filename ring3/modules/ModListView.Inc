@@ -24,6 +24,7 @@ Enum Interface
     KernelThread
     WorkItemThread
     ObjectDirectory
+    SymbolLinkCallback
     
     File
     FileStream
@@ -79,6 +80,7 @@ Type CURRENT_INFORMATION
     CurrentModule As CurrentModuleInfo
     CurrentDriver As CurrentDriverInfo
     FilePath As Wstring * MAX_PATH
+    SymbolLink As Wstring * MAX_PATH
 End Type
 
 Type TempTextNode
@@ -475,6 +477,12 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "名称",, 300
                 .AddColumn "类型",, 200
                 .AddColumn "符号链接路径",, 500
+            Case SymbolLinkCallback
+                .AddColumn "对象地址",, 250
+                .AddColumn "回调函数",, 250
+                .AddColumn "所属模块",, 500
+                .AddColumn "回调函数上下文",, 300
+                .AddColumn "标志",, 200
             Case SSDT
                 .AddColumn "序号",, 100
                 .AddColumn "索引",, 100
@@ -2601,8 +2609,11 @@ Sub CommitListViewView(ListView As Class_ListView)
     ' 每次刷新数据时，仅执行1次列类型校验（性能无损耗）
     CacheColumnTypes(ctx)
 
-    ReDim ctx->VisibleIndex(-1)
     ctx->VisibleCount = 0
+
+    If ctx->Snap->RowCount > 0 Then
+        ReDim ctx->VisibleIndex(ctx->Snap->RowCount - 1)
+    End If
 
     For i As Long = 0 To ctx->Snap->RowCount - 1
         Dim r As LVRow Ptr = ctx->Snap->Rows[i]
@@ -2611,7 +2622,7 @@ Sub CommitListViewView(ListView As Class_ListView)
         If Not hit Then
             For c As Long = 0 To r->ColCount - 1
                 If r->Cols[c] <> 0 AndAlso IsBadReadPtr(r->Cols[c], 2) = 0 Then
-                    If wcsstr(r->Cols[c], ctx->Filter) <> 0 Then
+                    If wcsistr(r->Cols[c], ctx->Filter) <> 0 Then
                         hit = TRUE
                         Exit For
                     End If
@@ -2620,9 +2631,8 @@ Sub CommitListViewView(ListView As Class_ListView)
         End If
 
         If hit Then
+            ctx->VisibleIndex(ctx->VisibleCount) = i
             ctx->VisibleCount += 1
-            ReDim Preserve ctx->VisibleIndex(ctx->VisibleCount - 1)
-            ctx->VisibleIndex(ctx->VisibleCount - 1) = i
         End If
     Next
 

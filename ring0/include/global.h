@@ -24,7 +24,7 @@ struct AdvancedOptions {
 	BOOLEAN DenyRemoteThread;
 	BOOLEAN DenyLoadDriver;
 	BOOLEAN DenyLoadDll;
-	BOOLEAN DenyAccessRegistry;
+	BOOLEAN DenyCreateRegistry;
 	BOOLEAN IsProtectProcess;
 	BOOLEAN IsProtectThread;
 };

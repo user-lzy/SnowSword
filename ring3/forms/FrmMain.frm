@@ -109,7 +109,7 @@ ToolTipBalloon=False
 Name=mnuKernelModule
 Help=
 Index=-1
-Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10检测隐藏驱动FrmMain_mnuKernelModule_mnuCheckHideDriver0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10查看驱动线程FrmMain_mnuKernelModule_mnuViewKernelThread0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10查看/编辑内存FrmMain_mnuKernelModule_mnuEditMemory0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(文件管理器)FrmMain_mnuKernelModule_mnuLocateFile0-10定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFileByExplorer0-10
+Menu=刷新FrmMain_mnuKernelModule_mnuRefresh0-10检测隐藏驱动FrmMain_mnuKernelModule_mnuCheckHideDriver0-10卸载驱动FrmMain_mnuKernelModule_mnuUnloadDriver0-10-FrmMain_mnuKernelModule_Step10-10查看设备列表FrmMain_mnuKernelModule_mnuViewDevice0-10查看IO派遣函数FrmMain_mnuKernelModule_mnuViewIOFunction0-10查看驱动线程FrmMain_mnuKernelModule_mnuViewKernelThread0-10-FrmMain_mnuKernelModule_Step20-10dump到文件FrmMain_mnuKernelModule_mnuDumpToFile0-10查看/编辑内存FrmMain_mnuKernelModule_mnuEditMemory0-10复制FrmMain_mnuKernelModule_mnuCopy0-10{复制单格数据FrmMain_mnuKernelModule_mnuLittleCopy0-10}定位文件位置(文件管理器)FrmMain_mnuKernelModule_mnuLocateFile0-10定位文件位置(资源浏览器)FrmMain_mnuKernelModule_mnuLocateFileByExplorer0-10
 Left=500
 Top=220
 Tag=
@@ -1443,7 +1443,7 @@ Sub FrmMain_WM_Create(hWndForm As hWnd,UserData As Integer)
 End Sub
 
 Sub FrmMain_Shown(hWndForm As hWnd, UserData As Integer)
-    'ShowInfoBox WStr(SizeOf(SYMLINK_CALLBACK_INFO))
+    'ShowInfoBox WStr(SizeOf(KMDF_SYMBOL_OFFSETS) & SizeOf(KMDF_SYMBOL_LAYOUT))
     GetCurrentDirectory MAX_PATH, g_cwd
     Dim hr As HRESULT
 
@@ -2421,7 +2421,7 @@ End Sub
 Sub FrmMain_TopMenu1_WM_Command(hWndForm As hWnd, wID As ULong)
    Select Case wID
         Case FrmMain_TopMenu1_mnuUnlockFile ' 解锁文件
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = UnlockTheFile
             FrmListView.Show,, Cast(Integer, CurrentInfo)
         Case FrmMain_TopMenu1_mnuCreateProcess ' 创建进程
@@ -2472,6 +2472,9 @@ Sub FrmMain_WM_NcActivate(hWndForm As hWnd, fActive As Long)
         CurrentInformationArray(0).CurrentDriver.DriverObject = CurrentInformation.CurrentDriver.DriverObject
         CurrentInformationArray(0).CurrentDriver.DriverName = CurrentInformation.CurrentDriver.DriverName
         CurrentInformationArray(0).CurrentDriver.DriverPath = CurrentInformation.CurrentDriver.DriverPath
+        
+        CurrentInformationArray(0).CurrentDevice.DeviceObject = CurrentInformation.CurrentDevice.DeviceObject
+        CurrentInformationArray(0).CurrentDevice.DeviceName = CurrentInformation.CurrentDevice.DeviceName
     Else
         If CurrentIndex = -1 Then Exit Sub
         CurrentInformation.intType = CurrentInformationArray(0).intType
@@ -2486,6 +2489,9 @@ Sub FrmMain_WM_NcActivate(hWndForm As hWnd, fActive As Long)
         CurrentInformation.CurrentDriver.DriverObject = CurrentInformationArray(0).CurrentDriver.DriverObject
         CurrentInformation.CurrentDriver.DriverName = CurrentInformationArray(0).CurrentDriver.DriverName
         CurrentInformation.CurrentDriver.DriverPath = CurrentInformationArray(0).CurrentDriver.DriverPath
+        
+        CurrentInformation.CurrentDevice.DeviceObject = CurrentInformationArray(0).CurrentDevice.DeviceObject
+        CurrentInformation.CurrentDevice.DeviceName = CurrentInformationArray(0).CurrentDevice.DeviceName
     End If
 End Sub
 
@@ -2710,15 +2716,22 @@ Sub FrmMain_mnuKernelModule_WM_Command(hWndForm As hWnd,wID As ULong)
             Else
                 ShowInfoBox "卸载成功!"
             End If
+        Case FrmMain_mnuKernelModule_mnuViewDevice ' 查看设备列表
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
+            CurrentInfo->intType = DriverDevice
+            CurrentInfo->CurrentDriver.DriverObject = ValLng("&H" & RightW(ListView1.GetItemText(ListView1.SelectedItem, 5), LenW(ListView1.GetItemText(ListView1.SelectedItem, 5)) - 2))
+            CurrentInfo->CurrentDriver.DriverName = ListView1.GetItemText(ListView1.SelectedItem, 1)
+            CurrentInfo->CurrentDriver.DriverPath = ListView1.GetItemText(ListView1.SelectedItem, 4)
+            FrmListView.Show,, Cast(Integer, CurrentInfo)
         Case FrmMain_mnuKernelModule_mnuViewIOFunction ' 查看IO派遣函数
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = IOFunction
             CurrentInfo->CurrentDriver.DriverObject = ValLng("&H" & RightW(ListView1.GetItemText(ListView1.SelectedItem, 5), LenW(ListView1.GetItemText(ListView1.SelectedItem, 5)) - 2))
             CurrentInfo->CurrentDriver.DriverName = ListView1.GetItemText(ListView1.SelectedItem, 1)
             CurrentInfo->CurrentDriver.DriverPath = ListView1.GetItemText(ListView1.SelectedItem, 4)
             FrmListView.Show,, Cast(Integer, CurrentInfo)
         Case FrmMain_mnuKernelModule_mnuViewKernelThread ' 查看驱动线程
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = KernelThread
             CurrentInfo->CurrentDriver.DriverName = ListView1.GetItemText(ListView1.SelectedItem, 1)
             CurrentInfo->CurrentDriver.DriverPath = ListView1.GetItemText(ListView1.SelectedItem, 4)
@@ -2819,6 +2832,24 @@ Sub FrmMain_ListView1_WM_LButtonDblclk(hWndForm As hWnd, hWndControl As hWnd, Mo
             GetPathByNodeW TreeView.Selection, TreeView, CurrentPath ' 获取当前文件路径
             CurrentPath = CurrentPath & ListView1.GetItemText(SelectIndex, 0)
             ShellExecute NULL, NULL, CurrentPath, NULL, NULL, 1 ' 以默认方式打开文件
+        Case KernelModule
+            Dim DriverObject As UInteger = ValULng(FF_Replace(ListView1.GetItemText(SelectIndex, 5), "0x", "&H"))
+            Dim info As KMDF_DRIVER_INFO
+            memset @info, 0, SizeOf(info)
+            QueryKmdfDriverInfo DriverObject, info
+            memset @info, 0, SizeOf(info)
+            If QueryKmdfDriverInfo(DriverObject, info) Then
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "IsKmdf=" & info.IsKmdf
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "DriverInitFlags=" & info.DriverInitFlags
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "OwnsDispatch=" & info.OwnsDispatch
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "DispatchPolicyKnown=" & info.DispatchPolicyKnown
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "DispatchPolicy=" & info.DispatchPolicy
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "FxDriver=0x" & WHex(info.FxDriver)
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "Dispatch=0x" & WHex(info.Dispatch)
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "DispatchWithLock=0x" & WHex(info.DispatchWithLock)
+            Else
+                MyLog.PrintInfo "FrmMain_ListView1_WM_LButtonDblclk", "QueryKmdfDriverInfo", "failed"
+            End If
     End Select
 End Sub
 
@@ -3458,7 +3489,7 @@ End Sub
 ''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码
 'wID      菜单项命令ID
 Sub FrmMain_mnuProcess_WM_Command(hWndForm As hWnd, wID As ULong)
-    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
     CurrentInfo->ProcessId = ValULng(GetViewItemTextEx(ListView1, ListView1.SelectedItem, 0))
     Select Case wID
         Case FrmMain_mnuProcess_mnuRefresh ' 刷新
@@ -4025,7 +4056,7 @@ Sub FrmMain_mnuKernelThread_WM_Command(hWndForm As hWnd, wID As ULong)
                 ShowErrorBox "恢复线程失败!"
             End If
         Case FrmMain_mnuKernelThread_mnuViewThreadStack ' 查看线程栈
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->ProcessId = 4
             CurrentInfo_New->ThreadId = ValUInt(ListView1.GetItemText(ListView1.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadCallStack
@@ -4086,7 +4117,7 @@ Sub FrmMain_mnuMinifilter_WM_Command(hWndForm As hWnd,wID As ULong)
             lblNum.Caption = "数量:" & WStr(GetTreeListVisibleItemCount(mCtrlTreeList1))
         Case FrmMain_mnuMinifilter_mnuViewInstance ' 查看绑定实例
             Dim FilterName As WString * MAX_PATH = mCtrlTreeList1.GetItemText(LastSelectItem, 0)
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->intType = MinifilterInstances
             CurrentInfo->CurrentDriver.DriverName = FilterName
             FrmListView.Show,, Cast(Integer, CurrentInfo)
@@ -4235,7 +4266,7 @@ Sub FrmMain_mnuFile_WM_Command(hWndForm As hWnd, wID As ULong)
 
         Case FrmMain_mnuFile_mnuViewFileStream ' 查看文件流
             If ListView1.SelectedItem < 0 Then Exit Sub
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->FilePath = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
             CurrentInfo->intType = FileStream
             FrmListView.Show,, Cast(Integer, CurrentInfo)
@@ -4591,7 +4622,7 @@ Sub FrmMain_mnuObject_WM_Command(hWndForm As hWnd, wID As ULong)
             lblNum.Caption = "数量:" & WStr(ListView1.ItemCount)
         Case FrmMain_mnuObject_mnuViewSymbolicLinkCallback ' 查看动态符号链接
             If ListView1.SelectedItem < 0 Then Exit Sub
-            Dim CurrentInfo As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo->SymbolLink = CurrentPath & ListView1.GetItemText(ListView1.SelectedItem, 0)
             CurrentInfo->intType = SymbolLinkCallback
             FrmListView.Show,, Cast(Integer, CurrentInfo)

@@ -26,7 +26,7 @@ ULONG g_AddedDeviceCount = 0;
 #define MAX_PATH 260
 
 VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
-	//PDRIVER_INFO pDriverInfo = (PDRIVER_INFO)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
+	//PDRIVER_INFO pDriverInfo = (PDRIVER_INFO)KernelAlloc_NonPagedPoolNx(sizeof(DRIVER_INFO), 'pdio');
 	if (!pDriverInfo) return;
 	RtlZeroMemory(pDriverInfo, sizeof(DRIVER_INFO));
 	pDriverInfo->DriverObjectAddr = pDriverObject;
@@ -48,6 +48,225 @@ VOID GetDriverInfo(PDRIVER_OBJECT pDriverObject, PDRIVER_INFO pDriverInfo) {
             pDriverInfo->FastIOFunctionAddr[i] = *(PVOID*)((PUCHAR)pDriverObject->FastIoDispatch + sizeof(PVOID) * (i + 1));
         }
     }
+}
+
+static VOID QueryDeviceObjectName(PDEVICE_OBJECT DeviceObject, PWCHAR Buffer, ULONG BufferCch)
+{
+    NTSTATUS status;
+    ULONG required = 0;
+    POBJECT_NAME_INFORMATION nameInfo = NULL;
+
+    if (!Buffer || BufferCch == 0) return;
+    Buffer[0] = L'\0';
+
+    status = ObQueryNameString(DeviceObject, NULL, 0, &required);
+    if (status != STATUS_INFO_LENGTH_MISMATCH && status != STATUS_BUFFER_TOO_SMALL) return;
+    if (required < sizeof(OBJECT_NAME_INFORMATION)) return;
+
+    nameInfo = (POBJECT_NAME_INFORMATION)KernelAlloc_NonPagedPoolNx(required, 'nDvS');
+    if (!nameInfo) return;
+
+    status = ObQueryNameString(DeviceObject, nameInfo, required, &required);
+    if (NT_SUCCESS(status) && nameInfo->Name.Buffer && nameInfo->Name.Length) {
+        ULONG copyBytes = nameInfo->Name.Length;
+        ULONG maxBytes = (BufferCch - 1) * sizeof(WCHAR);
+        if (copyBytes > maxBytes) copyBytes = maxBytes;
+        RtlCopyMemory(Buffer, nameInfo->Name.Buffer, copyBytes);
+        Buffer[copyBytes / sizeof(WCHAR)] = L'\0';
+    }
+
+    ExFreePoolWithTag(nameInfo, 'nDvS');
+}
+
+static VOID FillDriverDeviceInfo(PDEVICE_OBJECT DeviceObject, PDRIVER_DEVICE_INFO Info)
+{
+    PDEVICE_OBJECT lowerDevice = NULL;
+    PDEVICE_OBJECT topDevice = NULL;
+    PDEVICE_OBJECT baseDevice = NULL;
+
+    if (!DeviceObject || !Info) return;
+
+    RtlZeroMemory(Info, sizeof(*Info));
+
+    __try {
+        Info->DeviceObject = (ULONG64)DeviceObject;
+        Info->DriverObject = (ULONG64)DeviceObject->DriverObject;
+        Info->NextDevice = (ULONG64)DeviceObject->NextDevice;
+        Info->AttachedDevice = (ULONG64)DeviceObject->AttachedDevice;
+        Info->CurrentIrp = (ULONG64)DeviceObject->CurrentIrp;
+        Info->Timer = (ULONG64)DeviceObject->Timer;
+        Info->Vpb = (ULONG64)DeviceObject->Vpb;
+        Info->DeviceExtension = (ULONG64)DeviceObject->DeviceExtension;
+        Info->DeviceObjectExtension = (ULONG64)DeviceObject->DeviceObjectExtension;
+        Info->SecurityDescriptor = (ULONG64)DeviceObject->SecurityDescriptor;
+
+        Info->ReferenceCount = DeviceObject->ReferenceCount;
+        Info->DeviceType = DeviceObject->DeviceType;
+        Info->Characteristics = DeviceObject->Characteristics;
+        Info->Flags = DeviceObject->Flags;
+        Info->AlignmentRequirement = DeviceObject->AlignmentRequirement;
+        Info->ActiveThreadCount = DeviceObject->ActiveThreadCount;
+        Info->SectorSize = DeviceObject->SectorSize;
+        Info->StackSize = DeviceObject->StackSize;
+
+        if (DeviceObject->Vpb) {
+            Info->VpbDeviceObject = (ULONG64)DeviceObject->Vpb->DeviceObject;
+            Info->VpbRealDevice = (ULONG64)DeviceObject->Vpb->RealDevice;
+            Info->VpbFlags = DeviceObject->Vpb->Flags;
+            Info->VpbReferenceCount = DeviceObject->Vpb->ReferenceCount;
+            Info->VpbSerialNumber = DeviceObject->Vpb->SerialNumber;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+
+    lowerDevice = IoGetLowerDeviceObject(DeviceObject);
+    if (lowerDevice) {
+        Info->LowerDevice = (ULONG64)lowerDevice;
+        ObDereferenceObject(lowerDevice);
+    }
+
+    topDevice = IoGetAttachedDeviceReference(DeviceObject);
+    if (topDevice) {
+        Info->TopDevice = (ULONG64)topDevice;
+        ObDereferenceObject(topDevice);
+    }
+
+    baseDevice = IoGetDeviceAttachmentBaseRef(DeviceObject);
+    if (baseDevice) {
+        Info->BaseDevice = (ULONG64)baseDevice;
+        ObDereferenceObject(baseDevice);
+    }
+
+    QueryDeviceObjectName(DeviceObject, Info->DeviceName, RTL_NUMBER_OF(Info->DeviceName));
+}
+
+static NTSTATUS CaptureDriverDeviceObjectList(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT** DeviceList, PULONG DeviceCount)
+{
+    NTSTATUS status;
+    ULONG requiredCount = 0;
+    ULONG actualCount = 0;
+    PDEVICE_OBJECT* list = NULL;
+
+    if (!DriverObject || !DeviceList || !DeviceCount) return STATUS_INVALID_PARAMETER;
+
+    *DeviceList = NULL;
+    *DeviceCount = 0;
+
+    status = IoEnumerateDeviceObjectList(DriverObject, NULL, 0, &requiredCount);
+    if (NT_SUCCESS(status) && requiredCount == 0) return STATUS_SUCCESS;
+    if (status != STATUS_BUFFER_TOO_SMALL && !NT_SUCCESS(status)) return status;
+
+    for (ULONG attempt = 0; attempt < 4; attempt++) {
+        if (requiredCount == 0) return STATUS_SUCCESS;
+        if (requiredCount > MAXULONG / sizeof(PDEVICE_OBJECT)) return STATUS_INTEGER_OVERFLOW;
+
+        list = (PDEVICE_OBJECT*)KernelAlloc_NonPagedPoolNx(requiredCount * sizeof(PDEVICE_OBJECT), 'lDvS');
+        if (!list) return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlZeroMemory(list, requiredCount * sizeof(PDEVICE_OBJECT));
+        actualCount = 0;
+
+        status = IoEnumerateDeviceObjectList(DriverObject, list, requiredCount * sizeof(PDEVICE_OBJECT), &actualCount);
+
+        if (status == STATUS_BUFFER_TOO_SMALL) {
+            ExFreePoolWithTag(list, 'lDvS');
+            list = NULL;
+            requiredCount = actualCount;
+            continue;
+        }
+
+        if (!NT_SUCCESS(status)) {
+            ExFreePoolWithTag(list, 'lDvS');
+            return status;
+        }
+
+        *DeviceList = list;
+        *DeviceCount = actualCount;
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_BUFFER_TOO_SMALL;
+}
+
+static NTSTATUS ReferenceDriverObjectByAddress(ULONG64 Address, PDRIVER_OBJECT* DriverObject)
+{
+    NTSTATUS status;
+    PDRIVER_OBJECT object;
+
+    if (!DriverObject) return STATUS_INVALID_PARAMETER;
+    *DriverObject = NULL;
+
+    if (!Address || !IoDriverObjectType || !*IoDriverObjectType) return STATUS_INVALID_PARAMETER;
+
+    object = (PDRIVER_OBJECT)(ULONG_PTR)Address;
+    if (!MmIsAddressValid(object)) return STATUS_INVALID_PARAMETER;
+
+    __try {
+        status = ObReferenceObjectByPointer(object, 0, *IoDriverObjectType, UserMode);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+
+    if (!NT_SUCCESS(status)) return status;
+
+    *DriverObject = object;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS EnumDriverDeviceObjects(ULONG64 DriverObjectAddress, PVOID OutputBuffer, ULONG OutputLength, PULONG_PTR BytesReturned)
+{
+    NTSTATUS status;
+    PDRIVER_OBJECT driverObject = NULL;
+    PDEVICE_OBJECT* deviceList = NULL;
+    ULONG deviceCount = 0;
+    ULONG capacity;
+    ULONG returnCount;
+    ULONG resultSize;
+    PDRIVER_DEVICE_LIST_HEADER header;
+    PDRIVER_DEVICE_INFO info;
+
+    if (!OutputBuffer || !BytesReturned) return STATUS_INVALID_PARAMETER;
+    *BytesReturned = 0;
+
+    if (OutputLength < sizeof(DRIVER_DEVICE_LIST_HEADER)) return STATUS_BUFFER_TOO_SMALL;
+
+    status = ReferenceDriverObjectByAddress(DriverObjectAddress, &driverObject);
+    if (!NT_SUCCESS(status)) return status;
+
+    status = CaptureDriverDeviceObjectList(driverObject, &deviceList, &deviceCount);
+    if (!NT_SUCCESS(status)) {
+        ObDereferenceObject(driverObject);
+        return status;
+    }
+
+    capacity = (OutputLength - sizeof(DRIVER_DEVICE_LIST_HEADER)) / sizeof(DRIVER_DEVICE_INFO);
+    returnCount = deviceCount < capacity ? deviceCount : capacity;
+    resultSize = sizeof(DRIVER_DEVICE_LIST_HEADER) + returnCount * sizeof(DRIVER_DEVICE_INFO);
+
+    RtlZeroMemory(OutputBuffer, resultSize);
+
+    header = (PDRIVER_DEVICE_LIST_HEADER)OutputBuffer;
+    header->Count = returnCount;
+    header->TotalCount = deviceCount;
+
+    info = (PDRIVER_DEVICE_INFO)((PUCHAR)OutputBuffer + sizeof(DRIVER_DEVICE_LIST_HEADER));
+
+    for (ULONG i = 0; i < returnCount; i++)
+        FillDriverDeviceInfo(deviceList[i], &info[i]);
+
+    if (deviceList) {
+        for (ULONG i = 0; i < deviceCount; i++) {
+            if (deviceList[i]) ObDereferenceObject(deviceList[i]);
+        }
+        ExFreePoolWithTag(deviceList, 'lDvS');
+    }
+
+    ObDereferenceObject(driverObject);
+
+    *BytesReturned = resultSize;
+    return STATUS_SUCCESS;
 }
 
 // 辅助函数：安全获取对象类型（避免直接访问对象头）
@@ -226,7 +445,6 @@ NTSTATUS GetDeviceObjectName(
 
     // 分配缓冲区
     nameInfo = (POBJECT_NAME_INFORMATION)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         returnLength,
         MAP_POOL_TAG
     );
@@ -427,7 +645,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
 
             if (buffer) ExFreePoolWithTag(buffer, MAP_POOL_TAG);
             bufferSize = max(bufferSize, sizeof(DIRECTORY_BASIC_INFORMATION) + 0x200);
-            buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, MAP_POOL_TAG);
+            buffer = KernelAlloc_NonPagedPoolNx(bufferSize, MAP_POOL_TAG);
             if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; break; }
 
             status = ZwQueryDirectoryObject(hDriverDir, buffer, bufferSize, TRUE, restartScan, &context, &bufferSize);
@@ -468,8 +686,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
                 // ==============================================
                 // 【修复1】标记根设备 = 原始设备
                 // ==============================================
-                PDEVICE_ATTACHMENT_ENTRY pRootEntry = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
-                    sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
+                PDEVICE_ATTACHMENT_ENTRY pRootEntry = KernelAlloc_NonPagedPoolNx(                    sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
                 if (pRootEntry)
                 {
                     RtlZeroMemory(pRootEntry, sizeof(DEVICE_ATTACHMENT_ENTRY));
@@ -514,8 +731,7 @@ NTSTATUS BuildGlobalDeviceAttachmentMap(void)
                     }
 
                     // 录入过滤设备（fltmgr在这里）
-                    PDEVICE_ATTACHMENT_ENTRY pFilterEntry = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
-                        sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
+                    PDEVICE_ATTACHMENT_ENTRY pFilterEntry = KernelAlloc_NonPagedPoolNx(                        sizeof(DEVICE_ATTACHMENT_ENTRY), MAP_POOL_TAG);
                     if (pFilterEntry)
                     {
                         RtlZeroMemory(pFilterEntry, sizeof(DEVICE_ATTACHMENT_ENTRY));
@@ -662,7 +878,7 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
     // ==============================================
     // 【修复2】第二步：分配临时节点内存 (统计后再分配！)
     // ==============================================
-    tempNodes = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, totalEntries * sizeof(TEMP_NODE), MAP_POOL_TAG);
+    tempNodes = KernelAlloc_NonPagedPoolNx(totalEntries * sizeof(TEMP_NODE), MAP_POOL_TAG);
     if (!tempNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(tempNodes, totalEntries * sizeof(TEMP_NODE));
 
@@ -711,7 +927,7 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
             }
         }
         if (!found) {
-            PDRV_INFO newInfos = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, (drvCount + 1) * sizeof(DRV_INFO), MAP_POOL_TAG);
+            PDRV_INFO newInfos = KernelAlloc_NonPagedPoolNx((drvCount + 1) * sizeof(DRV_INFO), MAP_POOL_TAG);
             if (!newInfos) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
             if (drvInfos) {
                 RtlCopyMemory(newInfos, drvInfos, drvCount * sizeof(DRV_INFO));
@@ -727,17 +943,17 @@ NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pByte
     }
 
     // 分配驱动节点索引
-    drvNodes = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvCount * sizeof(DRV_NODES), MAP_POOL_TAG);
+    drvNodes = KernelAlloc_NonPagedPoolNx(drvCount * sizeof(DRV_NODES), MAP_POOL_TAG);
     if (!drvNodes) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(drvNodes, drvCount * sizeof(DRV_NODES));
 
     for (d = 0; d < drvCount; d++) {
         drvNodes[d].Count = drvInfos[d].DeviceCount;
-        drvNodes[d].Indices = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvInfos[d].DeviceCount * sizeof(ULONG), MAP_POOL_TAG);
+        drvNodes[d].Indices = KernelAlloc_NonPagedPoolNx(drvInfos[d].DeviceCount * sizeof(ULONG), MAP_POOL_TAG);
         if (!drvNodes[d].Indices) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     }
 
-    counters = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, drvCount * sizeof(ULONG), MAP_POOL_TAG);
+    counters = KernelAlloc_NonPagedPoolNx(drvCount * sizeof(ULONG), MAP_POOL_TAG);
     if (!counters) { status = STATUS_INSUFFICIENT_RESOURCES; goto cleanup; }
     RtlZeroMemory(counters, drvCount * sizeof(ULONG));
 

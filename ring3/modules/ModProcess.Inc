@@ -291,7 +291,7 @@ Declare Function ZwQueryInformationProcess Lib "ntdll.dll" Alias "ZwQueryInforma
     ByVal ProcessInformation As LPVOID, ByVal ProcessInformationLength As DWORD, ByRef ReturnLength As DWORD) As NTSTATUS
 Declare Function _IsProcessCritical Lib "kernel32" Alias "IsProcessCritical"(ByVal hProcess As HANDLE, ByVal Critical As PBOOLEAN) As Boolean
 Declare Function GetProcessIdOfThread Lib "kernel32" Alias "GetProcessIdOfThread"(ByVal Thread As HANDLE) As DWORD
-Declare Function ConvertSidToStringSid Lib "advapi32.dll" Alias "ConvertSidToStringSidA" (ByVal SID As PSID, ByRef StringSid As LPSTR) As BOOL
+Declare Function ConvertSidToStringSid Lib "advapi32.dll" Alias "ConvertSidToStringSidW" (ByVal SID As PSID, ByRef StringSid As LPWSTR) As BOOL
 
 CONST OBJ_KERNEL_HANDLE = &H00000200
 #define SYSTEM_CALL_OPENPROCESS &H26
@@ -579,7 +579,8 @@ End Function
 
 Private Function GetEProcess(ByVal ProcessId As DWORD) As EProcessInfo
     Dim EProcessInfo As EProcessInfo, lpRet As DWORD
-    IoControl hDrv, IOCTL_GetEProcess, @ProcessId, SizeOf(DWORD), @EProcessInfo, SizeOf(EProcessInfo), @lpRet
+    Dim PID As HANDLE = Cast(HANDLE, Cast(ULONG_PTR, ProcessId))
+    IoControl hDrv, IOCTL_GetEProcess, @PID, SizeOf(PID), @EProcessInfo, SizeOf(EProcessInfo), @lpRet
     Return EProcessInfo
 End Function
 
@@ -1051,13 +1052,13 @@ End Function
 
 ' 辅助:SID转字符串Key,用作缓存匹配（已修复宽字符接收）
 Private Function SidToCacheKey(pSid As PVOID) As StringW
-    Dim pStringSid As WString Ptr = NULL
-    
-    If ConvertSidToStringSid(pSid, CPtr(LPWSTR Ptr, @pStringSid)) = 0 Then
+    Dim pStringSid As LPWSTR = NULL
+
+    If ConvertSidToStringSid(CPtr(pSid, pSid), pStringSid) = 0 Then
         Return ""
     End If
-    
-    Dim result As StringW = *pStringSid
+
+    Dim result As StringW = *CPtr(WString Ptr, pStringSid)
     LocalFree(pStringSid)
     Return result
 End Function

@@ -235,3 +235,10 @@ Function wcsistr( _
 
     Return 0
 End Function
+
+Function GetIndexByName(ListView As Class_ListView, ColumnText As StringW) As Integer
+    For i As Integer = 0 To ListView.ColumnCount - 1
+        If ListView.ColumnText(i) = ColumnText Then Return i
+    Next
+    Return -1
+End Function

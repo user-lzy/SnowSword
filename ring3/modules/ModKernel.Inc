@@ -1,36 +1,5 @@
 ﻿#include Once "win/psapi.bi"
 
-#define IRP_MJ_CREATE                   &H00
-#define IRP_MJ_CREATE_NAMED_PIPE        &H01
-#define IRP_MJ_CLOSE                    &H02
-#define IRP_MJ_READ                     &H03
-#define IRP_MJ_WRITE                    &H04
-#define IRP_MJ_QUERY_INFORMATION        &H05
-#define IRP_MJ_SET_INFORMATION          &H06
-#define IRP_MJ_QUERY_EA                 &H07
-#define IRP_MJ_SET_EA                   &H08
-#define IRP_MJ_FLUSH_BUFFERS            0x09
-#define IRP_MJ_QUERY_VOLUME_INFORMATION &H0A
-#define IRP_MJ_SET_VOLUME_INFORMATION   &H0B
-#define IRP_MJ_DIRECTORY_CONTROL        &H0C
-#define IRP_MJ_FILE_SYSTEM_CONTROL      &H0D
-#define IRP_MJ_DEVICE_CONTROL           &H0E
-#define IRP_MJ_INTERNAL_DEVICE_CONTROL  &H0F
-#define IRP_MJ_SHUTDOWN                 &H10
-#define IRP_MJ_LOCK_CONTROL             &H11
-#define IRP_MJ_CLEANUP                  &H12
-#define IRP_MJ_CREATE_MAILSLOT          &H13
-#define IRP_MJ_QUERY_SECURITY           &H14
-#define IRP_MJ_SET_SECURITY             &H15
-#define IRP_MJ_POWER                    &H16
-#define IRP_MJ_SYSTEM_CONTROL           &H17
-#define IRP_MJ_DEVICE_CHANGE            &H18
-#define IRP_MJ_QUERY_QUOTA              &H19
-#define IRP_MJ_SET_QUOTA                &H1A
-#define IRP_MJ_PNP                      &H1B
-'#define IRP_MJ_PNP_POWER                IRP_MJ_PNP      // Obsolete....
-#define IRP_MJ_MAXIMUM_FUNCTION         &H1B
-
 Enum SYSTEM_INFORMATION_CLASS
     SystemBasicInformation,               ' 0 Y N
     SystemProcessorInformation            ' 1 Y N
@@ -222,6 +191,239 @@ Type DRIVER_INFO
     FastIOFunctionAddr(26) As UInteger
 End Type
 
+Type ENUM_DRIVER_DEVICES_INPUT
+    DriverObject As ULongInt
+End Type
+
+Type DRIVER_DEVICE_LIST_HEADER
+    Count As ULong
+    TotalCount As ULong
+End Type
+
+Type DRIVER_DEVICE_INFO
+    DeviceObject As ULongInt
+    DriverObject As ULongInt
+    NextDevice As ULongInt
+    AttachedDevice As ULongInt
+    LowerDevice As ULongInt
+    TopDevice As ULongInt
+    BaseDevice As ULongInt
+    CurrentIrp As ULongInt
+    Timer As ULongInt
+    Vpb As ULongInt
+    VpbDeviceObject As ULongInt
+    VpbRealDevice As ULongInt
+    DeviceExtension As ULongInt
+    DeviceObjectExtension As ULongInt
+    SecurityDescriptor As ULongInt
+
+    ReferenceCount As Long
+    DeviceType As ULong
+    Characteristics As ULong
+    dwFlags As ULong
+    AlignmentRequirement As ULong
+    ActiveThreadCount As ULong
+    VpbFlags As ULong
+    VpbReferenceCount As ULong
+    VpbSerialNumber As ULong
+    SectorSize As UShort
+    StackSize As UByte
+    Reserved0 As UByte
+
+    DeviceName As WString * 260
+End Type
+
+#define KMDF_MAX_CALLBACKS 128
+
+Type KMDF_CALLBACK_INFO Field = 8
+    Id As ULong
+    ContainerType As ULong
+    Address As ULongInt
+    ContainerObject As ULongInt
+End Type
+
+Type KMDF_CALLBACK_ENUM_REQUEST Field = 8
+    DeviceObject As ULongInt
+End Type
+
+Type KMDF_CALLBACK_ENUM_RESULT Field = 8
+    Count As ULong
+    OffsetSource As ULong
+    FxDevice As ULongInt
+    FxDriver As ULongInt
+    FxPkgPnp As ULongInt
+    FxSelfManagedIoMachine As ULongInt
+    Callbacks(0 To KMDF_MAX_CALLBACKS - 1) As KMDF_CALLBACK_INFO
+End Type
+
+#define KMDF_SYMBOL_LAYOUT_VERSION 4
+
+#define KMDF_LAYOUT_SOURCE_NONE     0
+#define KMDF_LAYOUT_SOURCE_SYMBOL   1
+#define KMDF_LAYOUT_SOURCE_FALLBACK 2
+
+Enum KMDF_CALLBACK_ID
+    KmdfEvtDriverDeviceAdd = 1
+    KmdfEvtDriverUnload
+
+    KmdfEvtDeviceUsageNotification
+    KmdfEvtDeviceUsageNotificationEx
+    KmdfEvtDeviceRelationsQuery
+
+    KmdfEvtDeviceD0Entry
+    KmdfEvtDeviceD0EntryPostInterruptsEnabled
+    KmdfEvtDeviceD0ExitPreInterruptsDisabled
+    KmdfEvtDeviceD0Exit
+
+    KmdfEvtDevicePrepareHardware
+    KmdfEvtDeviceReleaseHardware
+    KmdfEvtDeviceQueryStop
+    KmdfEvtDeviceQueryRemove
+    KmdfEvtDeviceSurpriseRemoval
+
+    KmdfEvtDeviceSelfManagedIoCleanup
+    KmdfEvtDeviceSelfManagedIoFlush
+    KmdfEvtDeviceSelfManagedIoInit
+    KmdfEvtDeviceSelfManagedIoSuspend
+    KmdfEvtDeviceSelfManagedIoRestart
+    
+    KmdfEvtDeviceFileCreate
+    KmdfEvtFileCleanup
+    KmdfEvtFileClose
+End Enum
+
+Enum KMDF_CALLBACK_CONTAINER
+    KmdfContainerFxDriver = 1
+    KmdfContainerFxPkgPnp
+    KmdfContainerFxSelfManagedIoMachine
+    KmdfContainerFxFileObjectInfo
+End Enum
+
+Type KMDF_SYMBOL_OFFSETS Field = 4
+    FxContextHeader_Object As Long
+    FxContextHeader_Context As Long
+
+    FxDevice_Driver As Long
+    FxDevice_DeviceObject As Long
+    MxDeviceObject_DeviceObject As Long
+    FxDevice_PkgPnp As Long
+    FxDevice_PkgGeneral As Long
+
+    FxPkgGeneral_FileObjectInfoHeadList As Long
+
+    FxFileObjectInfo_ListEntry As Long
+    FxFileObjectInfo_EvtFileCreate As Long
+    FxFileObjectInfo_EvtFileCleanup As Long
+    FxFileObjectInfo_EvtFileClose As Long
+    FxFileObjectInfo_ClassExtension As Long
+
+    FxFileObjectFileCreate_Method As Long
+    FxFileObjectFileCleanup_Method As Long
+    FxFileObjectFileClose_Method As Long
+
+    FxDriver_DriverDeviceAdd As Long
+    FxDriver_DriverUnload As Long
+    FxDriverDeviceAdd_Method As Long
+    FxDriverUnload_Method As Long
+
+    FxPkgPnp_SelfManagedIoMachine As Long
+
+    FxPkgPnp_DeviceUsageNotification As Long
+    FxPkgPnp_DeviceUsageNotificationEx As Long
+    FxPkgPnp_DeviceRelationsQuery As Long
+    FxPkgPnp_DeviceD0Entry As Long
+    FxPkgPnp_DeviceD0EntryPostInterruptsEnabled As Long
+    FxPkgPnp_DeviceD0ExitPreInterruptsDisabled As Long
+    FxPkgPnp_DeviceD0Exit As Long
+    FxPkgPnp_DevicePrepareHardware As Long
+    FxPkgPnp_DeviceReleaseHardware As Long
+    FxPkgPnp_DeviceQueryStop As Long
+    FxPkgPnp_DeviceQueryRemove As Long
+    FxPkgPnp_DeviceSurpriseRemoval As Long
+
+    FxPnpDeviceUsageNotification_Method As Long
+    FxPnpDeviceUsageNotificationEx_Method As Long
+    FxPnpDeviceRelationsQuery_Method As Long
+    FxPnpDeviceD0Entry_Method As Long
+    FxPnpDeviceD0EntryPostInterruptsEnabled_Method As Long
+    FxPnpDeviceD0ExitPreInterruptsDisabled_Method As Long
+    FxPnpDeviceD0Exit_Method As Long
+    FxPnpDevicePrepareHardware_Method As Long
+    FxPnpDeviceReleaseHardware_Method As Long
+    FxPnpDeviceQueryStop_Method As Long
+    FxPnpDeviceQueryRemove_Method As Long
+    FxPnpDeviceSurpriseRemoval_Method As Long
+
+    FxSelfManagedIoMachine_DeviceSelfManagedIoCleanup As Long
+    FxSelfManagedIoMachine_DeviceSelfManagedIoFlush As Long
+    FxSelfManagedIoMachine_DeviceSelfManagedIoInit As Long
+    FxSelfManagedIoMachine_DeviceSelfManagedIoSuspend As Long
+    FxSelfManagedIoMachine_DeviceSelfManagedIoRestart As Long
+
+    FxPnpDeviceSelfManagedIoCleanup_Method As Long
+    FxPnpDeviceSelfManagedIoFlush_Method As Long
+    FxPnpDeviceSelfManagedIoInit_Method As Long
+    FxPnpDeviceSelfManagedIoSuspend_Method As Long
+    FxPnpDeviceSelfManagedIoRestart_Method As Long
+
+    FxDriver_DriverObject As Long
+    MxDriverObject_DriverObject As Long
+    FxDriver_Config As Long
+    FxDriver_GetFxDriver_AddressLow As ULong
+    FxDriver_GetFxDriver_AddressHigh As ULong
+    FxDevice_Dispatch_AddressLow As ULong
+    FxDevice_Dispatch_AddressHigh As ULong
+    FxDevice_DispatchWithLock_AddressLow As ULong
+    FxDevice_DispatchWithLock_AddressHigh As ULong
+End Type
+
+Type KMDF_SYMBOL_LAYOUT Field = 4
+    Version As ULong
+    Size As ULong
+    Source As ULong
+    Reserved As ULong
+    DispatchPolicyKnown As ULong
+    DispatchPolicy As ULong
+    Offsets As KMDF_SYMBOL_OFFSETS
+End Type
+
+Enum KMDF_DISPATCH_POLICY
+    KmdfDispatchPolicyUnknown = 0
+    KmdfDispatchPolicyAllDispatch
+    KmdfDispatchPolicyAllDispatchWithLock
+    KmdfDispatchPolicyMixed
+End Enum
+
+Type WDF_MODULE_IDENTITY Field = 4
+    PdbGuid As GUID
+    PdbAge As ULong
+    ImageSize As ULong
+    TimeDateStamp As ULong
+End Type
+
+Type KMDF_DISPATCH_PROFILE Field = 4
+    PdbGuid As GUID
+    PdbAge As ULong
+    Policy As ULong
+End Type
+
+Type KMDF_DRIVER_INFO_REQUEST Field = 4
+    DriverObject As ULONG64
+End Type
+
+Type KMDF_DRIVER_INFO Field = 4
+    IsKmdf As UByte
+    OwnsDispatch As UByte
+    DispatchPolicyKnown As UByte
+    Reserved As UByte
+    DriverInitFlags As ULong
+    DispatchPolicy As ULong
+    Reserved2 As ULong
+    FxDriver As ULONG64
+    Dispatch As ULONG64
+    DispatchWithLock As ULONG64
+End Type
+
 Type GDT_ITEM
     Limit As ULong
     SEL_Base As ULONG64
@@ -282,6 +484,9 @@ Const PAGE_SIZE As DWORD = &H1000
 ' 全局扫描结果数组（线程共享）
 Dim Shared g_ScanResults() As KernelModuleInfo
 Dim Shared g_ScanResultCount As Integer = 0
+
+Dim Shared g_KmdfSymbolResolveStarted As Boolean = False
+Dim Shared g_KmdfSymbolLayoutReady As Boolean = False
 
 Const STATUS_INFO_LENGTH_MISMATCH = Cast(NTSTATUS, &HC0000004)
 Const STATUS_SUCCESS = Cast(NTSTATUS, &H00000000)
@@ -430,58 +635,927 @@ Private Function GetCorrectPathW(strPath As StringW) As StringW
     Return strPath
 End Function
 
-Private Function GetDriverObjectAddr(ByVal DriverBaseAddr As PVOID) As Integer
-    Dim pDriverObject As Integer, DriverBase As PVOID = DriverBaseAddr
+Private Function GetDriverObjectAddr(ByVal DriverBaseAddr As PVOID) As UInteger
+    Dim pDriverObject As UInteger, DriverBase As PVOID = DriverBaseAddr
     IoControl hDrv, IOCTL_GetDriverObjectByBaseAddress, @DriverBase, SizeOf(DriverBase), @pDriverObject, SizeOf(pDriverObject)
     Return pDriverObject
 End Function
-' Dim bCheck As Boolean = (LCaseW(CurrentDriver_Info.DriverName) = "ntfs.sys") OrElse (LCaseW(CurrentDriver_Info.DriverName) = "exfat.sys") OrElse (LCaseW(CurrentDriver_Info.DriverName) = "fastfat.sys")
-Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath As StringW, DriverObject As Integer)
-    Dim pDriverObject As Integer = DriverObject
+
+Public Sub GetDriverIOFunctionList(lvwIOFunction As Class_ListView, DriverPath As StringW, DriverObject As UInteger)
+    Dim pDriverObject As UInteger = DriverObject
     Dim DriverInfo As DRIVER_INFO
     Dim OriginalDriverInfo As DRIVER_INFO
+
     InitListViewData lvwIOFunction
-    
-    SetLastError 0
+
     If IoControl(hDrv, IOCTL_GetDriverInfo, @pDriverObject, SizeOf(pDriverObject), @DriverInfo, SizeOf(DriverInfo)) = 0 Then
         MyLog.PrintWin32Error "GetDriverIOFunctionList", "IOCTL_GetDriverInfo"
         Return
     End If
-    GetOriginalDispatchFunctionAddr(DriverPath, OriginalDriverInfo)
+
+    Dim RecoveryStatus As ORIGINAL_DRIVER_RECOVERY_STATUS = _
+        GetOriginalDispatchFunctionAddr(DriverPath, DriverInfo, OriginalDriverInfo)
+
+    If RecoveryStatus = OriginalRecoveryFatal Then
+        MyLog.PrintLog LOG_WARN, "GetDriverIOFunctionList",, "原始派遣函数恢复失败"
+    ElseIf (RecoveryStatus And OriginalRecoveryDispatchDefaultOnly) <> 0 Then
+        MyLog.PrintInfo "GetDriverIOFunctionList", "", "驱动 MajorFunction 全部保持系统默认值"
+    ElseIf (RecoveryStatus And OriginalRecoveryDispatchUnresolved) <> 0 Then
+        MyLog.PrintLog LOG_WARN, "GetDriverIOFunctionList",, "当前存在非默认 MajorFunction，但静态恢复器未能恢复"
+    ElseIf (RecoveryStatus And OriginalRecoveryDispatchPartial) <> 0 Then
+        MyLog.PrintLog LOG_WARN, "GetDriverIOFunctionList",, "MajorFunction 仅部分恢复"
+    End If
+
     AddItemColListEx lvwIOFunction, 5,,, WStr("DriverInit"), WStr("0x" & WHex(DriverInfo.DriverInitAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverInitAddr)), _
-    WStr("-"), WStr("无")
+        WStr("-"), WStr("无")
+
     AddItemColListEx lvwIOFunction, 5,,, WStr("DriverStartIo"), WStr("0x" & WHex(DriverInfo.DriverStartIoAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverStartIoAddr)), _
-    WStr("-"), WStr("无")
+        WStr("-"), WStr("无")
+
     AddItemColListEx lvwIOFunction, 5,,, WStr("DriverUnload"), WStr("0x" & WHex(DriverInfo.DriverUnloadAddr)), WStr(GetDriverPathByAddr(DriverInfo.DriverUnloadAddr)), _
-    WStr("-"), WStr("无")
+        WStr("-"), WStr("无")
+
     For i As Integer = 0 To IRP_MJ_MAXIMUM_FUNCTION
-        'If i = &H20 Then Continue For ' 这里有什么用?
-        'Print "0x" & WHex(DriverInfo.MajorFunctionAddr(i))
-        Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(IRP_MJ_ToString(i)), WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))), _
-        IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.MajorFunctionAddr(i))), _
-        IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.MajorFunctionAddr(i)))))
-        If (OriginalDriverInfo.MajorFunctionAddr(i) <> NULL) AndAlso (DriverInfo.MajorFunctionAddr(i) <> OriginalDriverInfo.MajorFunctionAddr(i)) Then
+        Dim ItemIndex As Long = AddItemColListEx( _
+            lvwIOFunction, _
+            5,,, _
+            WStr(IRP_MJ_ToString(i)), _
+            WStr("0x" & WHex(DriverInfo.MajorFunctionAddr(i))), _
+            WStr(GetDriverPathByAddr(DriverInfo.MajorFunctionAddr(i))), _
+            IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("-"), WStr("0x" & WHex(OriginalDriverInfo.MajorFunctionAddr(i)))), _
+            IIf(OriginalDriverInfo.MajorFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.MajorFunctionAddr(i)))))
+
+        If OriginalDriverInfo.MajorFunctionAddr(i) <> NULL AndAlso _
+           DriverInfo.MajorFunctionAddr(i) <> OriginalDriverInfo.MajorFunctionAddr(i) Then
+
             SetItemColor lvwIOFunction, ItemIndex, FB_Red, FB_White
         End If
+
         FF_DoEvents
     Next
-    
+
     AddItemColListEx lvwIOFunction, 5,,, WStr("FastIoDispatch"), WStr("0x" & WHex(DriverInfo.FastIoDispatchAddr)), WStr(GetDriverPathByAddr(DriverInfo.FastIoDispatchAddr)), _
-    WStr("-"), WStr("无")
+        WStr("-"), WStr("无")
+
     If DriverInfo.FastIoDispatchAddr <> NULL Then
         For i As Integer = 0 To FAST_IO_MAX_COUNT - 1
-            Dim ItemIndex As Long = AddItemColListEx(lvwIOFunction, 5,,, WStr(FastIoIndexToName(i)), WStr("0x" & WHex(DriverInfo.FastIOFunctionAddr(i))), WStr(GetDriverPathByAddr(DriverInfo.FastIOFunctionAddr(i))), _
-            IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("-"), "0x" & WHex(OriginalDriverInfo.FastIOFunctionAddr(i))), _
-            IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.FastIOFunctionAddr(i)))))
-            If (OriginalDriverInfo.FastIOFunctionAddr(i) <> NULL) AndAlso (DriverInfo.FastIOFunctionAddr(i) <> OriginalDriverInfo.FastIOFunctionAddr(i)) Then
+            Dim ItemIndex As Long = AddItemColListEx( _
+                lvwIOFunction, _
+                5,,, _
+                WStr(FastIoIndexToName(i)), _
+                WStr("0x" & WHex(DriverInfo.FastIOFunctionAddr(i))), _
+                WStr(GetDriverPathByAddr(DriverInfo.FastIOFunctionAddr(i))), _
+                IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("-"), WStr("0x" & WHex(OriginalDriverInfo.FastIOFunctionAddr(i)))), _
+                IIf(OriginalDriverInfo.FastIOFunctionAddr(i) = NULL, WStr("无"), WStr(GetDriverPathByAddr(OriginalDriverInfo.FastIOFunctionAddr(i)))))
+
+            If OriginalDriverInfo.FastIOFunctionAddr(i) <> NULL AndAlso _
+               DriverInfo.FastIOFunctionAddr(i) <> OriginalDriverInfo.FastIOFunctionAddr(i) Then
+
                 SetItemColor lvwIOFunction, ItemIndex, FB_Red, FB_White
             End If
+
             FF_DoEvents
         Next
     End If
-        
+
     CommitListViewView lvwIOFunction
 End Sub
+
+Private Function DeviceTypeToString(ByVal DeviceType As ULong) As String
+    Select Case DeviceType
+        Case &H02: Return "CD_ROM"
+        Case &H03: Return "CD_ROM_FILE_SYSTEM"
+        Case &H04: Return "CONTROLLER"
+        Case &H07: Return "DISK"
+        Case &H08: Return "DISK_FILE_SYSTEM"
+        Case &H09: Return "FILE_SYSTEM"
+        Case &H0B: Return "KEYBOARD"
+        Case &H0C: Return "MAILSLOT"
+        Case &H0F: Return "MOUSE"
+        Case &H11: Return "NAMED_PIPE"
+        Case &H12: Return "NETWORK"
+        Case &H14: Return "NETWORK_FILE_SYSTEM"
+        Case &H15: Return "NULL"
+        Case &H16: Return "PARALLEL_PORT"
+        Case &H17: Return "PHYSICAL_NETCARD"
+        Case &H18: Return "PRINTER"
+        Case &H1B: Return "SERIAL_PORT"
+        Case &H1F: Return "TAPE"
+        Case &H21: Return "TRANSPORT"
+        Case &H22: Return "UNKNOWN"
+        Case &H23: Return "VIDEO"
+        Case &H24: Return "VIRTUAL_DISK"
+        Case Else: Return "0x" & Hex(DeviceType)
+    End Select
+End Function
+
+Public Sub GetDriverDeviceList(lvwDevice As Class_ListView, ByVal DriverObject As UInteger)
+    Dim enum_Input As ENUM_DRIVER_DEVICES_INPUT
+    Dim capacity As ULong = 32
+
+    InitListViewData lvwDevice
+
+    enum_Input.DriverObject = DriverObject
+    If enum_Input.DriverObject = 0 Then
+        CommitListViewView lvwDevice
+        Exit Sub
+    End If
+
+    For attempt As Integer = 0 To 4
+        Dim bufferSize As DWORD = SizeOf(DRIVER_DEVICE_LIST_HEADER) + capacity * SizeOf(DRIVER_DEVICE_INFO)
+        Dim pBuffer As UByte Ptr = Callocate(bufferSize)
+        If pBuffer = NULL Then
+            MyLog.PrintLog LOG_ERROR, "GetDriverDeviceList", "Callocate failed. Size=" & Str(bufferSize)
+            Exit Sub
+        End If
+
+        Dim bytesReturned As DWORD
+        SetLastError 0
+
+        If IoControl(hDrv, IOCTL_EnumDriverDevices, @enum_Input, SizeOf(enum_Input), pBuffer, bufferSize, @bytesReturned) = 0 Then
+            MyLog.PrintWin32Error "GetDriverDeviceList", "IOCTL_EnumDriverDevices"
+            Deallocate pBuffer
+            Exit Sub
+        End If
+
+        Dim pHeader As DRIVER_DEVICE_LIST_HEADER Ptr = Cast(DRIVER_DEVICE_LIST_HEADER Ptr, pBuffer)
+
+        If pHeader->TotalCount > capacity Then
+            capacity = pHeader->TotalCount
+            Deallocate pBuffer
+            Continue For
+        End If
+
+        Dim pInfo As DRIVER_DEVICE_INFO Ptr = Cast(DRIVER_DEVICE_INFO Ptr, pBuffer + SizeOf(DRIVER_DEVICE_LIST_HEADER))
+        If pHeader->Count = 0 Then
+            Deallocate pBuffer
+            CommitListViewView lvwDevice
+            Exit Sub
+        End If
+        For i As ULong = 0 To pHeader->Count - 1
+            Dim DeviceName As StringW = pInfo[i].DeviceName
+            If LenW(DeviceName) = 0 Then DeviceName = "(未命名)"
+
+            Dim ItemIndex As Long = AddItemColListEx(lvwDevice, 6,,, _
+                WStr(DeviceName), _
+                WStr("0x" & WHex(pInfo[i].DeviceObject)), _
+                WStr(DeviceTypeToString(pInfo[i].DeviceType) & " (0x" & Hex(pInfo[i].DeviceType) & ")"), _
+                WStr("0x" & WHex(pInfo[i].AttachedDevice)), _
+                WStr("0x" & WHex(pInfo[i].LowerDevice)), _
+                WStr("0x" & Hex(pInfo[i].dwFlags)))
+
+            If pInfo[i].DriverObject <> enum_Input.DriverObject Then
+                SetItemColor lvwDevice, ItemIndex, FB_Red, FB_White
+            End If
+        Next
+
+        Deallocate pBuffer
+        CommitListViewView lvwDevice
+        Exit Sub
+    Next
+
+    MyLog.PrintLog LOG_ERROR, "GetDriverDeviceList", "设备数量持续变化，枚举重试次数已耗尽"
+End Sub
+
+Function KmdfLoadWdfSymbols(ByVal ModulePath As WString Ptr) As Boolean
+    Dim pReq As SYMBOL_REQUEST Ptr
+
+    pReq = SymbolActor_SubmitRequest( _
+        REQ_LOAD_MODULE, _
+        ModulePath)
+
+    If pReq = 0 Then Return False
+
+    If Not SymbolActor_WaitRequest(pReq) Then
+        MyLog.PrintLog LOG_WARN, "KmdfLoadWdfSymbols",, "WDF 符号请求超时"
+        SymbolActor_ReleaseRequest(pReq)
+        Return False
+    End If
+
+    Dim success As Boolean = _
+        (pReq->ResultStatus = STATUS_SUCCESS)
+
+    SymbolActor_ReleaseRequest(pReq)
+
+    Return success
+End Function
+
+Function KmdfResolveRequired( _
+    ByVal ModulePath As WString Ptr, _
+    ByVal TypeName As WString Ptr, _
+    ByVal MemberName As WString Ptr, _
+    ByRef Value As Long _
+) As Boolean
+
+    If Not KmdfQueryStructOffset(ModulePath, TypeName, MemberName, Value) Then
+        MyLog.PrintLog LOG_ERROR, "BuildKmdfSymbolLayout",, _
+            *TypeName & "." & *MemberName & " 解析失败"
+        Return False
+    End If
+
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+        *TypeName & "." & *MemberName & "=0x" & Hex(Value)
+
+    Return True
+End Function
+
+Function KmdfResolveOptional( _
+    ByVal ModulePath As WString Ptr, _
+    ByVal TypeName As WString Ptr, _
+    ByVal MemberName As Wstring Ptr, _
+    ByRef Value As Long _
+) As Boolean
+
+    Value = -1
+
+    If Not KmdfQueryStructOffset(ModulePath, TypeName, MemberName, Value) Then
+        MyLog.PrintLog LOG_WARN, "BuildKmdfSymbolLayout",, _
+            *TypeName & "." & *MemberName & " 不可用"
+        Value = -1
+        Return False
+    End If
+
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+        *TypeName & "." & *MemberName & "=0x" & Hex(Value)
+
+    Return True
+End Function
+
+Function KmdfResolveFunctionAddress( _
+    ByVal ModulePath As WString Ptr, _
+    ByVal SymbolName As WString Ptr, _
+    ByRef Address As ULONG64 _
+) As Boolean
+    Dim pReq As SYMBOL_REQUEST Ptr
+    Dim imageSize As ULong
+    Dim moduleBase As ULONG64
+
+    Address = 0
+    pReq = SymbolActor_SubmitRequest(REQ_SYMBOL_TO_ADDR, ModulePath, SymbolName)
+    If pReq = 0 Then Return False
+    If Not SymbolActor_WaitRequest(pReq) Then
+        MyLog.PrintLog LOG_WARN, "KmdfResolveFunctionAddress",, _
+            *SymbolName & " 符号请求超时"
+        SymbolActor_ReleaseRequest(pReq)
+        Return False
+    End If
+
+    If pReq->ResultStatus <> STATUS_SUCCESS Then
+        SymbolActor_ReleaseRequest(pReq)
+        Return False
+    End If
+
+    moduleBase = Cast(ULONG64, GetKernelModuleBase(WStr("Wdf01000.sys"), imageSize))
+    If moduleBase <> 0 Then Address = moduleBase + pReq->ResultAddress
+    SymbolActor_ReleaseRequest(pReq)
+    Return Address <> 0
+End Function
+
+Function KmdfFormatGuid(ByRef Value As GUID) As String
+    Dim result As String = "{" & Hex(Value.Data1, 8) & "-" & Hex(Value.Data2, 4) & "-" & Hex(Value.Data3, 4) & "-"
+    result &= Hex(Value.Data4(0), 2) & Hex(Value.Data4(1), 2) & "-"
+    For i As Integer = 2 To 7
+        result &= Hex(Value.Data4(i), 2)
+    Next
+    Return result & "}"
+End Function
+
+Function LookupKmdfDispatchPolicy(ByRef Identity As WDF_MODULE_IDENTITY, ByRef Policy As KMDF_DISPATCH_POLICY) As Boolean
+    Dim profiles(0 To 0) As KMDF_DISPATCH_PROFILE
+    Policy = KmdfDispatchPolicyUnknown
+
+    ' Win10 22H2 target profile: PDB identity only; PE metadata is diagnostic.
+    profiles(0).PdbGuid.Data1 = Cast(ULong, &HCCF30DF6ULL)
+    profiles(0).PdbGuid.Data2 = &H86C8
+    profiles(0).PdbGuid.Data3 = &H7755
+    profiles(0).PdbGuid.Data4(0) = &HB0
+    profiles(0).PdbGuid.Data4(1) = &H1C
+    profiles(0).PdbGuid.Data4(2) = &H27
+    profiles(0).PdbGuid.Data4(3) = &H76
+    profiles(0).PdbGuid.Data4(4) = &H9D
+    profiles(0).PdbGuid.Data4(5) = &H6D
+    profiles(0).PdbGuid.Data4(6) = &H70
+    profiles(0).PdbGuid.Data4(7) = &HFE
+    profiles(0).PdbAge = 1
+    profiles(0).Policy = KmdfDispatchPolicyAllDispatchWithLock
+
+    For i As Integer = 0 To UBound(profiles)
+        If Identity.PdbGuid.Data1 <> profiles(i).PdbGuid.Data1 OrElse _
+           Identity.PdbGuid.Data2 <> profiles(i).PdbGuid.Data2 OrElse _
+           Identity.PdbGuid.Data3 <> profiles(i).PdbGuid.Data3 OrElse _
+           Identity.PdbAge <> profiles(i).PdbAge Then Continue For
+
+        Dim guidMatches As Boolean = True
+        For j As Integer = 0 To 7
+            If Identity.PdbGuid.Data4(j) <> profiles(i).PdbGuid.Data4(j) Then
+                guidMatches = False
+                Exit For
+            End If
+        Next
+        If guidMatches Then
+            Policy = profiles(i).Policy
+            Return True
+        End If
+    Next
+    Return False
+End Function
+
+Function BuildKmdfSymbolLayout( _
+    ByRef Layout As KMDF_SYMBOL_LAYOUT _
+) As Boolean
+
+    If SizeOf(KMDF_SYMBOL_OFFSETS) <> 256 OrElse _
+       SizeOf(KMDF_SYMBOL_LAYOUT) <> 280 OrElse _
+       SizeOf(KMDF_DRIVER_INFO) <> 40 OrElse _
+       (Cast(ULongInt, @Layout.Offsets) - Cast(ULongInt, @Layout)) <> 24 Then
+        MyLog.PrintLog LOG_ERROR, "BuildKmdfSymbolLayout",, "KMDF ABI size mismatch"
+        Return False
+    End If
+
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+    "sizeof offsets=" & SizeOf(KMDF_SYMBOL_OFFSETS) & _
+    " layout=" & SizeOf(KMDF_SYMBOL_LAYOUT)
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+    "ABI PkgPnp=" & _
+    (Cast(ULongInt, @Layout.Offsets.FxDevice_PkgPnp) - Cast(ULongInt, @Layout.Offsets)) & _
+    " PkgGeneral=" & _
+    (Cast(ULongInt, @Layout.Offsets.FxDevice_PkgGeneral) - Cast(ULongInt, @Layout.Offsets)) & _
+    " DriverAdd=" & _
+    (Cast(ULongInt, @Layout.Offsets.FxDriver_DriverDeviceAdd) - Cast(ULongInt, @Layout.Offsets))
+    
+    Dim ModuleName As WString * 64 = "Wdf01000.sys"
+    Dim ModulePath As WString * MAX_PATH
+
+    memset(@Layout, &HFF, SizeOf(Layout))
+
+    Layout.Version = KMDF_SYMBOL_LAYOUT_VERSION
+    Layout.SIZE = SizeOf(KMDF_SYMBOL_LAYOUT)
+    Layout.Source = KMDF_LAYOUT_SOURCE_SYMBOL
+    Layout.Reserved = 0
+    Layout.DispatchPolicyKnown = 0
+    Layout.DispatchPolicy = KmdfDispatchPolicyUnknown
+    Layout.Offsets.FxDriver_GetFxDriver_AddressLow = 0
+    Layout.Offsets.FxDriver_GetFxDriver_AddressHigh = 0
+    Layout.Offsets.FxDevice_Dispatch_AddressLow = 0
+    Layout.Offsets.FxDevice_Dispatch_AddressHigh = 0
+    Layout.Offsets.FxDevice_DispatchWithLock_AddressLow = 0
+    Layout.Offsets.FxDevice_DispatchWithLock_AddressHigh = 0
+
+    If Not GetKernelModulePath(@ModuleName, @ModulePath) Then
+        MyLog.PrintLog LOG_ERROR, "BuildKmdfSymbolLayout",, _
+            "无法获取 Wdf01000.sys 路径"
+        Return False
+    End If
+
+    ModulePath = YF_ReplaceW( _
+        ModulePath, _
+        "\SystemRoot", _
+        WStr(Environ("SystemRoot")))
+
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+        "Wdf01000=" & ModulePath
+
+    If Not KmdfLoadWdfSymbols(@ModulePath) Then
+        MyLog.PrintLog LOG_ERROR, "BuildKmdfSymbolLayout",, _
+            "Wdf01000 符号加载失败"
+        Return False
+    End If
+
+    Dim identity As WDF_MODULE_IDENTITY
+    Dim dispatchPolicy As KMDF_DISPATCH_POLICY = KmdfDispatchPolicyUnknown
+    If KmdfQueryModuleIdentity(@ModulePath, identity) Then
+        MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+            "[KMDF] Wdf01000 identity: PdbGuid=" & KmdfFormatGuid(identity.PdbGuid) & _
+            " Age=" & identity.PdbAge & _
+            " ImageSize=0x" & Hex(identity.ImageSize) & _
+            " TimeDateStamp=0x" & Hex(identity.TimeDateStamp)
+        If LookupKmdfDispatchPolicy(identity, dispatchPolicy) Then
+            Layout.DispatchPolicyKnown = 1
+            Layout.DispatchPolicy = dispatchPolicy
+            MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+                "[KMDF] dispatch profile matched: AllDispatchWithLock"
+        Else
+            MyLog.PrintLog LOG_WARN, "BuildKmdfSymbolLayout",, _
+                "[KMDF] Wdf01000 dispatch profile unknown"
+        End If
+    Else
+        MyLog.PrintLog LOG_WARN, "BuildKmdfSymbolLayout",, _
+            "[KMDF] Wdf01000 dispatch profile unknown"
+    End If
+    
+    ' Core traversal
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxContextHeader"), StrPtrW("Object"), _
+        Layout.Offsets.FxContextHeader_Object) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxContextHeader"), StrPtrW("Context"), _
+        Layout.Offsets.FxContextHeader_Context) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxDevice"), StrPtrW("m_Driver"), _
+        Layout.Offsets.FxDevice_Driver) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxDevice"), StrPtrW("m_DeviceObject"), _
+        Layout.Offsets.FxDevice_DeviceObject) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("MxDeviceObject"), StrPtrW("m_DeviceObject"), _
+        Layout.Offsets.MxDeviceObject_DeviceObject) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxDevice"), StrPtrW("m_PkgPnp"), _
+        Layout.Offsets.FxDevice_PkgPnp) Then Return False
+    
+    ' Driver callback
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxDriver"), StrPtrW("m_DriverDeviceAdd"), _
+        Layout.Offsets.FxDriver_DriverDeviceAdd) Then Return False
+
+    If Not KmdfResolveRequired(@ModulePath, StrPtrW("FxDriverDeviceAdd"), StrPtrW("Method"), _
+        Layout.Offsets.FxDriverDeviceAdd_Method) Then Return False
+    
+    ' Optional
+    KmdfResolveOptional @ModulePath, StrPtrW("FxDriver"), StrPtrW("m_DriverUnload"), _
+        Layout.Offsets.FxDriver_DriverUnload
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxDriver"), StrPtrW("m_DriverObject"), _
+        Layout.Offsets.FxDriver_DriverObject
+
+    KmdfResolveOptional @ModulePath, StrPtrW("MxDriverObject"), StrPtrW("m_DriverObject"), _
+        Layout.Offsets.MxDriverObject_DriverObject
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxDriver"), StrPtrW("m_Config"), _
+        Layout.Offsets.FxDriver_Config
+
+    Dim symbolAddress As ULONG64
+    If KmdfResolveFunctionAddress(@ModulePath, StrPtrW("Wdf01000!FxDriver::GetFxDriver"), symbolAddress) Then
+        Layout.Offsets.FxDriver_GetFxDriver_AddressLow = Cast(ULong, symbolAddress And &HFFFFFFFFULL)
+        Layout.Offsets.FxDriver_GetFxDriver_AddressHigh = Cast(ULong, symbolAddress Shr 32)
+    ElseIf KmdfResolveFunctionAddress(@ModulePath, StrPtrW("FxDriver::GetFxDriver"), symbolAddress) Then
+        Layout.Offsets.FxDriver_GetFxDriver_AddressLow = Cast(ULong, symbolAddress And &HFFFFFFFFULL)
+        Layout.Offsets.FxDriver_GetFxDriver_AddressHigh = Cast(ULong, symbolAddress Shr 32)
+    End If
+
+    If KmdfResolveFunctionAddress(@ModulePath, StrPtrW("Wdf01000!FxDevice::Dispatch"), symbolAddress) OrElse _
+       KmdfResolveFunctionAddress(@ModulePath, StrPtrW("FxDevice::Dispatch"), symbolAddress) Then
+        Layout.Offsets.FxDevice_Dispatch_AddressLow = Cast(ULong, symbolAddress And &HFFFFFFFFULL)
+        Layout.Offsets.FxDevice_Dispatch_AddressHigh = Cast(ULong, symbolAddress Shr 32)
+    End If
+
+    If KmdfResolveFunctionAddress(@ModulePath, StrPtrW("Wdf01000!FxDevice::DispatchWithLock"), symbolAddress) OrElse _
+       KmdfResolveFunctionAddress(@ModulePath, StrPtrW("FxDevice::DispatchWithLock"), symbolAddress) Then
+        Layout.Offsets.FxDevice_DispatchWithLock_AddressLow = Cast(ULong, symbolAddress And &HFFFFFFFFULL)
+        Layout.Offsets.FxDevice_DispatchWithLock_AddressHigh = Cast(ULong, symbolAddress Shr 32)
+    End If
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxDriverUnload"), StrPtrW("Method"), _
+        Layout.Offsets.FxDriverUnload_Method
+    
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxDevice"), _
+        StrPtrW("m_PkgGeneral"), _
+        Layout.Offsets.FxDevice_PkgGeneral
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPkgGeneral"), _
+        StrPtrW("m_FileObjectInfoHeadList"), _
+        Layout.Offsets.FxPkgGeneral_FileObjectInfoHeadList
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectInfo"), _
+        StrPtrW("ListEntry"), _
+        Layout.Offsets.FxFileObjectInfo_ListEntry
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectInfo"), _
+        StrPtrW("EvtFileCreate"), _
+        Layout.Offsets.FxFileObjectInfo_EvtFileCreate
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectInfo"), _
+        StrPtrW("EvtFileCleanup"), _
+        Layout.Offsets.FxFileObjectInfo_EvtFileCleanup
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectInfo"), _
+        StrPtrW("EvtFileClose"), _
+        Layout.Offsets.FxFileObjectInfo_EvtFileClose
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectInfo"), _
+        StrPtrW("ClassExtension"), _
+        Layout.Offsets.FxFileObjectInfo_ClassExtension
+    
+    ' warpper
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectFileCreate"), _
+        StrPtrW("Method"), _
+        Layout.Offsets.FxFileObjectFileCreate_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectFileCleanup"), _
+        StrPtrW("Method"), _
+        Layout.Offsets.FxFileObjectFileCleanup_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxFileObjectFileClose"), _
+        StrPtrW("Method"), _
+        Layout.Offsets.FxFileObjectFileClose_Method
+    
+    ' FxPkgPnp callback
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceD0Entry"), _
+        Layout.Offsets.FxPkgPnp_DeviceD0Entry
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceD0Entry"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceD0Entry_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceD0Exit"), _
+        Layout.Offsets.FxPkgPnp_DeviceD0Exit
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceD0Exit"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceD0Exit_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DevicePrepareHardware"), _
+        Layout.Offsets.FxPkgPnp_DevicePrepareHardware
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDevicePrepareHardware"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDevicePrepareHardware_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceReleaseHardware"), _
+        Layout.Offsets.FxPkgPnp_DeviceReleaseHardware
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceReleaseHardware"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceReleaseHardware_Method
+    
+    ' ============================================================
+    ' Usage / Relations
+    ' ============================================================
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceUsageNotification"), _
+        Layout.Offsets.FxPkgPnp_DeviceUsageNotification
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceUsageNotification"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceUsageNotification_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceUsageNotificationEx"), _
+        Layout.Offsets.FxPkgPnp_DeviceUsageNotificationEx
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceUsageNotificationEx"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceUsageNotificationEx_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceRelationsQuery"), _
+        Layout.Offsets.FxPkgPnp_DeviceRelationsQuery
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceRelationsQuery"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceRelationsQuery_Method
+    
+    ' D0 pre/post
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPkgPnp"), _
+        StrPtrW("m_DeviceD0EntryPostInterruptsEnabled"), _
+        Layout.Offsets.FxPkgPnp_DeviceD0EntryPostInterruptsEnabled
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceD0EntryPostInterruptsEnabled"), _
+        StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceD0EntryPostInterruptsEnabled_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPkgPnp"), _
+        StrPtrW("m_DeviceD0ExitPreInterruptsDisabled"), _
+        Layout.Offsets.FxPkgPnp_DeviceD0ExitPreInterruptsDisabled
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceD0ExitPreInterruptsDisabled"), _
+        StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceD0ExitPreInterruptsDisabled_Method
+    
+    ' QueryStop / QueryRemove / SurpriseRemoval
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceQueryStop"), _
+        Layout.Offsets.FxPkgPnp_DeviceQueryStop
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceQueryStop"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceQueryStop_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceQueryRemove"), _
+        Layout.Offsets.FxPkgPnp_DeviceQueryRemove
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceQueryRemove"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceQueryRemove_Method
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_DeviceSurpriseRemoval"), _
+        Layout.Offsets.FxPkgPnp_DeviceSurpriseRemoval
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPnpDeviceSurpriseRemoval"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSurpriseRemoval_Method
+    
+    ' SelfManagedIo
+    KmdfResolveOptional @ModulePath, StrPtrW("FxPkgPnp"), StrPtrW("m_SelfManagedIoMachine"), _
+        Layout.Offsets.FxPkgPnp_SelfManagedIoMachine
+    
+    KmdfResolveOptional @ModulePath, StrPtrW("FxSelfManagedIoMachine"), _
+        StrPtrW("m_DeviceSelfManagedIoCleanup"), _
+        Layout.Offsets.FxSelfManagedIoMachine_DeviceSelfManagedIoCleanup
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxSelfManagedIoMachine"), _
+        StrPtrW("m_DeviceSelfManagedIoFlush"), _
+        Layout.Offsets.FxSelfManagedIoMachine_DeviceSelfManagedIoFlush
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxSelfManagedIoMachine"), _
+        StrPtrW("m_DeviceSelfManagedIoInit"), _
+        Layout.Offsets.FxSelfManagedIoMachine_DeviceSelfManagedIoInit
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxSelfManagedIoMachine"), _
+        StrPtrW("m_DeviceSelfManagedIoSuspend"), _
+        Layout.Offsets.FxSelfManagedIoMachine_DeviceSelfManagedIoSuspend
+
+    KmdfResolveOptional @ModulePath, StrPtrW("FxSelfManagedIoMachine"), _
+        StrPtrW("m_DeviceSelfManagedIoRestart"), _
+        Layout.Offsets.FxSelfManagedIoMachine_DeviceSelfManagedIoRestart
+    
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceSelfManagedIoCleanup"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSelfManagedIoCleanup_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceSelfManagedIoFlush"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSelfManagedIoFlush_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceSelfManagedIoInit"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSelfManagedIoInit_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceSelfManagedIoSuspend"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSelfManagedIoSuspend_Method
+
+    KmdfResolveOptional @ModulePath, _
+        StrPtrW("FxPnpDeviceSelfManagedIoRestart"), StrPtrW("m_Method"), _
+        Layout.Offsets.FxPnpDeviceSelfManagedIoRestart_Method
+        
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+        "KMDF Symbol Layout 构建完成"
+    Dim resolved As Integer = 0
+    Dim total As Integer = SizeOf(KMDF_SYMBOL_OFFSETS) \ SizeOf(Long)
+
+    Dim p As Long Ptr = Cast(Long Ptr, @Layout.Offsets)
+
+    For i As Integer = 0 To total - 1
+        If p[i] >= 0 Then resolved += 1
+    Next
+
+    MyLog.PrintInfo "BuildKmdfSymbolLayout",, _
+        "Offset resolved=" & resolved & "/" & total
+    Return True
+End Function
+
+Function SendKmdfSymbolLayout( _
+    ByRef Layout As KMDF_SYMBOL_LAYOUT _
+) As Boolean
+
+    Dim bytesRet As DWORD
+
+    If SizeOf(KMDF_SYMBOL_OFFSETS) <> 256 OrElse _
+       SizeOf(KMDF_SYMBOL_LAYOUT) <> 280 Then
+        MyLog.PrintLog LOG_ERROR, "SendKmdfSymbolLayout",, "KMDF ABI size mismatch"
+        Return False
+    End If
+
+    SetLastError 0
+
+    If IoControl( _
+        hDrv, _
+        IOCTL_SetKmdfSymbolLayout, _
+        @Layout, _
+        SizeOf(Layout), _
+        NULL, _
+        0, _
+        @bytesRet) = 0 Then
+
+        MyLog.PrintWin32Error _
+            "SendKmdfSymbolLayout", _
+            "IOCTL_SetKmdfSymbolLayout"
+
+        Return False
+    End If
+
+    MyLog.PrintInfo _
+        "SendKmdfSymbolLayout",, _
+        "KMDF Symbol Layout 已下发"
+
+    Return True
+End Function
+
+Function KmdfSymbolLayoutWorker( _
+    ByVal Parameter As Any Ptr _
+) As DWORD
+
+    Dim layout As KMDF_SYMBOL_LAYOUT
+
+    If BuildKmdfSymbolLayout(layout) Then
+        If SendKmdfSymbolLayout(layout) Then
+            g_KmdfSymbolLayoutReady = True
+
+            MyLog.PrintInfo _
+                "KmdfSymbolLayoutWorker",, _
+                "KMDF offset 已切换到符号模式"
+        End If
+    Else
+        MyLog.PrintLog LOG_WARN, _
+            "KmdfSymbolLayoutWorker",, _
+            "符号解析失败，继续使用 fallback"
+    End If
+
+    Return 0
+End Function
+
+Sub EnsureKmdfSymbolLayoutAsync()
+    If g_KmdfSymbolResolveStarted Then Exit Sub
+
+    g_KmdfSymbolResolveStarted = True
+
+    Dim hThread As HANDLE = CreateThread( _
+        NULL, _
+        0, _
+        @KmdfSymbolLayoutWorker, _
+        NULL, _
+        0, _
+        NULL)
+
+    If hThread Then
+        CloseHandle hThread
+    Else
+        g_KmdfSymbolResolveStarted = False
+    End If
+End Sub
+
+Function QueryKmdfDriverInfo(ByVal DriverObject As ULONG64, ByRef Info As KMDF_DRIVER_INFO) As Boolean
+    Dim request As KMDF_DRIVER_INFO_REQUEST
+    Dim bytesRet As DWORD
+
+    memset(@Info, 0, SizeOf(Info))
+    If DriverObject < &HFFFF800000000000ULL Then Return False
+    If hDrv = NULL OrElse hDrv = INVALID_HANDLE_VALUE Then Return False
+
+    EnsureKmdfSymbolLayoutAsync
+    If Not g_KmdfSymbolLayoutReady Then Return False
+
+    request.DriverObject = DriverObject
+    If IoControl(hDrv, IOCTL_QueryKmdfDriverInfo, @request, SizeOf(request), _
+        @Info, SizeOf(Info), @bytesRet) = 0 Then
+        MyLog.PrintWin32Error "QueryKmdfDriverInfo", "IOCTL_QueryKmdfDriverInfo"
+        memset(@Info, 0, SizeOf(Info))
+        Return False
+    End If
+
+    If bytesRet <> SizeOf(Info) OrElse Info.IsKmdf <> 1 OrElse _
+       Info.DispatchPolicyKnown > 1 OrElse _
+       (Info.DispatchPolicyKnown = 0 AndAlso Info.DispatchPolicy <> KmdfDispatchPolicyUnknown) OrElse _
+       (Info.DispatchPolicyKnown = 1 AndAlso _
+        Info.DispatchPolicy <> KmdfDispatchPolicyAllDispatch AndAlso _
+        Info.DispatchPolicy <> KmdfDispatchPolicyAllDispatchWithLock AndAlso _
+        Info.DispatchPolicy <> KmdfDispatchPolicyMixed) Then
+        MyLog.PrintLog LOG_WARN, "QueryKmdfDriverInfo",, _
+            "[KMDF] invalid driver info response, bytes=" & Str(bytesRet)
+        memset(@Info, 0, SizeOf(Info))
+        Return False
+    End If
+
+    Return True
+End Function
+
+Function KmdfCallbackIdToString(ByVal Id As KMDF_CALLBACK_ID) As String
+    Select Case Id
+        Case KmdfEvtDriverDeviceAdd
+            Return "EvtDriverDeviceAdd"
+        Case KmdfEvtDriverUnload
+            Return "EvtDriverUnload"
+
+        Case KmdfEvtDeviceUsageNotification
+            Return "EvtDeviceUsageNotification"
+        Case KmdfEvtDeviceUsageNotificationEx
+            Return "EvtDeviceUsageNotificationEx"
+        Case KmdfEvtDeviceRelationsQuery
+            Return "EvtDeviceRelationsQuery"
+
+        Case KmdfEvtDeviceD0Entry
+            Return "EvtDeviceD0Entry"
+        Case KmdfEvtDeviceD0EntryPostInterruptsEnabled
+            Return "EvtDeviceD0EntryPostInterruptsEnabled"
+        Case KmdfEvtDeviceD0ExitPreInterruptsDisabled
+            Return "EvtDeviceD0ExitPreInterruptsDisabled"
+        Case KmdfEvtDeviceD0Exit
+            Return "EvtDeviceD0Exit"
+
+        Case KmdfEvtDevicePrepareHardware
+            Return "EvtDevicePrepareHardware"
+        Case KmdfEvtDeviceReleaseHardware
+            Return "EvtDeviceReleaseHardware"
+        Case KmdfEvtDeviceQueryStop
+            Return "EvtDeviceQueryStop"
+        Case KmdfEvtDeviceQueryRemove
+            Return "EvtDeviceQueryRemove"
+        Case KmdfEvtDeviceSurpriseRemoval
+            Return "EvtDeviceSurpriseRemoval"
+
+        Case KmdfEvtDeviceSelfManagedIoCleanup
+            Return "EvtDeviceSelfManagedIoCleanup"
+        Case KmdfEvtDeviceSelfManagedIoFlush
+            Return "EvtDeviceSelfManagedIoFlush"
+        Case KmdfEvtDeviceSelfManagedIoInit
+            Return "EvtDeviceSelfManagedIoInit"
+        Case KmdfEvtDeviceSelfManagedIoSuspend
+            Return "EvtDeviceSelfManagedIoSuspend"
+        Case KmdfEvtDeviceSelfManagedIoRestart
+            Return "EvtDeviceSelfManagedIoRestart"
+            
+        Case KmdfEvtDeviceFileCreate
+            Return "EvtDeviceFileCreate"
+        Case KmdfEvtFileCleanup
+            Return "EvtFileCleanup"
+        Case KmdfEvtFileClose
+            Return "EvtFileClose"
+    End Select
+
+    Return "Unknown"
+End Function
+
+Function KmdfContainerToString(ByVal ContainerType As KMDF_CALLBACK_CONTAINER) As String
+    Select Case ContainerType
+        Case KmdfContainerFxDriver
+            Return "FxDriver"
+        Case KmdfContainerFxPkgPnp
+            Return "FxPkgPnp"
+        Case KmdfContainerFxSelfManagedIoMachine
+            Return "FxSelfManagedIo"
+        Case KmdfContainerFxFileObjectInfo
+            Return "FxFileObjectInfo"
+    End Select
+    Return "Unknown"
+End Function
+
+Function GetKmdfCurrentCallbacks(lvwKmdf As Class_ListView, ByVal DeviceObject As ULongInt) As Boolean
+    Dim req As KMDF_CALLBACK_ENUM_REQUEST
+    Dim result As KMDF_CALLBACK_ENUM_RESULT
+    Dim bytesRet As DWORD
+    Dim NewIndex As Long
+    
+    EnsureKmdfSymbolLayoutAsync
+
+    InitListViewData lvwKmdf
+
+    req.DeviceObject = DeviceObject
+
+    SetLastError 0
+    If IoControl(hDrv, IOCTL_EnumKmdfCurrentCallbacks, @req, SizeOf(req), @result, SizeOf(result), @bytesRet) = 0 Then
+        MyLog.PrintWin32Error "GetKmdfCurrentCallbacks", "IOCTL_EnumKmdfCurrentCallbacks", "DeviceObject=0x" & WHex(DeviceObject)
+        CommitListViewView lvwKmdf
+        Return False
+    End If
+    
+    MyLog.PrintInfo "GetKmdfCurrentCallbacks",, _
+    "bytesRet=" & bytesRet & _
+    " Count=" & result.Count & _
+    " Source=" & result.OffsetSource & _
+    " FxDevice=0x" & Hex(result.FxDevice) & _
+    " FxDriver=0x" & Hex(result.FxDriver) & _
+    " FxPkgPnp=0x" & Hex(result.FxPkgPnp) & _
+    " FxSelfManaged=0x" & Hex(result.FxSelfManagedIoMachine)
+
+    If result.Count > KMDF_MAX_CALLBACKS Then
+        MyLog.PrintLog LOG_ERROR, "GetKmdfCurrentCallbacks",, "返回数量异常:" & WStr(result.Count)
+        CommitListViewView lvwKmdf
+        Return False
+    End If
+    
+    If result.Count = 0 Then
+        MyLog.PrintLog LOG_ERROR, "GetKmdfCurrentCallbacks",, "无返回"
+        CommitListViewView lvwKmdf
+        Return False
+    End If
+
+    For i As ULong = 0 To result.Count - 1
+        Dim CallbackName As String = KmdfCallbackIdToString(result.Callbacks(i).Id)
+        Dim CallbackAddr As ULongInt = result.Callbacks(i).Address
+        Dim ContainerObject As ULongInt = result.Callbacks(i).ContainerObject
+        Dim DriverPath As StringW = ""
+
+        If CallbackAddr <> 0 Then
+            DriverPath = GetDriverPathByAddr(CallbackAddr)
+        End If
+
+        NewIndex = AddItemEx(lvwKmdf, CallbackName)
+        SetItemTextEx lvwKmdf, NewIndex, 1, "0x" & WHex(CallbackAddr)
+        SetItemTextEx lvwKmdf, NewIndex, 2, DriverPath
+        SetItemTextEx lvwKmdf, NewIndex, 3, KmdfContainerToString(result.Callbacks(i).ContainerType)
+        SetItemTextEx lvwKmdf, NewIndex, 4, "0x" & WHex(ContainerObject)
+    Next
+
+    If (result.OffsetSource And &H2) <> 0 Then
+        MyLog.PrintLog LOG_WARN, "GetKmdfCurrentCallbacks",, "部分 KMDF Offset 使用硬编码回退"
+    ElseIf (result.OffsetSource And &H1) <> 0 Then
+        MyLog.PrintInfo "GetKmdfCurrentCallbacks",, "KMDF Offset 全部来自符号解析"
+    End If
+    
+    CommitListViewView lvwKmdf
+
+    Return True
+End Function
 
 ' 线程工作函数 - 扫描内核内存，将结果写入共享数组
 Sub KernelMemoryScanThread(ByVal userdata As Any Ptr)
@@ -783,7 +1857,7 @@ Function GetKernelModuleBase(ByVal ModuleName As WString Ptr, ByRef ModuleSize A
     Return NULL
 End Function
 
-Public Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPath As WString Ptr) As Boolean
+Function GetKernelModulePath(ByVal ModuleName As WString Ptr, ByVal OutPath As WString Ptr) As Boolean
     Dim st As NTSTATUS
     Dim bufferSize As ULong = &H1000
     Dim buffer As PVOID = Allocate(bufferSize)
@@ -877,7 +1951,7 @@ Function GetDriverPathByAddr(ByVal Addr As UInteger) As String
 
     Dim smi As SYSTEM_MODULE_INFORMATION Ptr = CPtr(SYSTEM_MODULE_INFORMATION Ptr, buffer)
     For i As Integer = 0 To smi->Count - 1
-        If (Cast(Integer, smi->Modules(i).dwBase) <= Addr And Cast(Integer, smi->Modules(i).dwBase + smi->Modules(i).dwSize) >= Addr) Then
+        If (Cast(UInteger, smi->Modules(i).dwBase) <= Addr And Cast(UInteger, smi->Modules(i).dwBase + smi->Modules(i).dwSize) >= Addr) Then
             Dim ImageName As String = ""
             ImageName = GetCorrectPath(smi->Modules(i).ImageName)
             Deallocate buffer

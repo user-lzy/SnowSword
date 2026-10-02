@@ -295,7 +295,6 @@ NTSTATUS InternalQuerySymbol(
         return STATUS_INVALID_PARAMETER;
 
     PSYMBOL_JOB job = KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         sizeof(SYMBOL_JOB),
         'jbS');
 
@@ -342,37 +341,39 @@ NTSTATUS InternalQuerySymbol(
         ExReleaseFastMutex(&g_SymbolCtx->Lock);
     }
 
-    //
-    // 等待完成
-    //
+#define SYMBOL_QUERY_TIMEOUT_SECONDS 5
+
     LARGE_INTEGER timeout;
-    timeout.QuadPart = -10 * 1000 * 1000;
+    timeout.QuadPart = -(LONGLONG)SYMBOL_QUERY_TIMEOUT_SECONDS * 10 * 1000 * 1000;
 
     NTSTATUS waitStatus = KeWaitForSingleObject(
         &job->DoneEvent,
         Executive,
         KernelMode,
         FALSE,
-        NULL
+        &timeout
     );
 
     NTSTATUS finalStatus;
 
     ExAcquireFastMutex(&g_SymbolCtx->Lock);
 
-    if (waitStatus == STATUS_TIMEOUT || !job->Completed)
-    {
-        //
-        // ✅【关键修复】必须保证超时不会误用未填充数据
-        //
-        RemoveEntryList(&job->Link);
-        finalStatus = STATUS_TIMEOUT;
-    }
-    else
+    if (job->Completed)
     {
         RtlCopyMemory(Response, &job->Response, sizeof(SYMBOL_QUERY_RESPONSE));
         RemoveEntryList(&job->Link);
         finalStatus = job->Response.Status;
+    }
+    else
+    {
+        RemoveEntryList(&job->Link);
+
+        if (waitStatus == STATUS_TIMEOUT)
+            finalStatus = STATUS_IO_TIMEOUT;
+        else if (!NT_SUCCESS(waitStatus))
+            finalStatus = waitStatus;
+        else
+            finalStatus = STATUS_UNSUCCESSFUL;
     }
 
     ExReleaseFastMutex(&g_SymbolCtx->Lock);
@@ -500,7 +501,6 @@ NTSTATUS GetNtStructOffset(PCWSTR StructName, PCWSTR MemberName, PLONG Offset)
 NTSTATUS InitSymbolContext(PDEVICE_OBJECT deviceObj)
 {
     g_SymbolCtx = KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         sizeof(DEVICE_CONTEXT),
         'SmbS'
     );

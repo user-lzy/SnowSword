@@ -324,64 +324,220 @@ Function SymbolActor_AddrToSymbolInternal(ByVal modulePath As WString Ptr, ByVal
     Return result
 End Function
 
-' 结构体偏移（【修复】内存泄漏 + 全锁保护）
+Private Function SymbolActor_FindMemberOffsetRecursive( _
+    ByVal baseAddr As ULONG64, _
+    ByVal typeId As ULONG, _
+    ByVal memberName As WString Ptr, _
+    ByVal accumulatedOffset As Long, _
+    ByVal depth As ULong, _
+    ByRef resultOffset As Long _
+) As Boolean
+
+    Const SYMTAG_BASECLASS_VALUE As ULONG = 18
+
+    If depth > 16 Then Return False
+
+    Dim numChildren As ULONG = 0
+
+    If SymGetTypeInfo( _
+        g_hSymProcess, _
+        baseAddr, _
+        typeId, _
+        TI_GET_CHILDRENCOUNT, _
+        @numChildren _
+    ) = 0 Then
+        Return False
+    End If
+
+    If numChildren = 0 Then Return False
+
+    Dim bufferSize As ULONG = _
+        SizeOf(TI_FINDCHILDREN_PARAMS) + _
+        (numChildren - 1) * SizeOf(ULONG)
+
+    Dim params As TI_FINDCHILDREN_PARAMS Ptr = CAllocate(bufferSize)
+
+    If params = 0 Then Return False
+
+    params->Count = numChildren
+    params->Start = 0
+
+    If SymGetTypeInfo( _
+        g_hSymProcess, _
+        baseAddr, _
+        typeId, _
+        TI_FINDCHILDREN, _
+        params _
+    ) = 0 Then
+        Deallocate(params)
+        Return False
+    End If
+
+    ' ---------------------------------------------------------
+    ' 第一轮：先找当前类型自己的成员
+    ' ---------------------------------------------------------
+    For i As ULONG = 0 To numChildren - 1
+
+        Dim childId As ULONG = params->ChildId(i)
+        Dim pName As PWCHAR = 0
+
+        If SymGetTypeInfo( _
+            g_hSymProcess, _
+            baseAddr, _
+            childId, _
+            TI_GET_SYMNAME, _
+            @pName _
+        ) Then
+
+            If pName Then
+
+                If wcscmp(pName, memberName) = 0 Then
+
+                    Dim memberOffset As Long = -1
+
+                    If SymGetTypeInfo( _
+                        g_hSymProcess, _
+                        baseAddr, _
+                        childId, _
+                        TI_GET_OFFSET, _
+                        @memberOffset _
+                    ) Then
+
+                        resultOffset = _
+                            accumulatedOffset + memberOffset
+
+                        LocalFree(pName)
+                        Deallocate(params)
+
+                        Return True
+                    End If
+                End If
+
+                LocalFree(pName)
+            End If
+        End If
+    Next
+
+    ' ---------------------------------------------------------
+    ' 第二轮：递归搜索所有基类
+    ' ---------------------------------------------------------
+    For i As ULONG = 0 To numChildren - 1
+
+        Dim childId As ULONG = params->ChildId(i)
+        Dim symTag As ULONG = 0
+
+        If SymGetTypeInfo( _
+            g_hSymProcess, _
+            baseAddr, _
+            childId, _
+            TI_GET_SYMTAG, _
+            @symTag _
+        ) = 0 Then
+            Continue For
+        End If
+
+        If symTag = SYMTAG_BASECLASS_VALUE Then
+
+            Dim baseTypeId As ULONG = 0
+            Dim baseClassOffset As Long = 0
+
+            If SymGetTypeInfo( _
+                g_hSymProcess, _
+                baseAddr, _
+                childId, _
+                TI_GET_TYPEID, _
+                @baseTypeId _
+            ) = 0 Then
+                Continue For
+            End If
+
+            If SymGetTypeInfo( _
+                g_hSymProcess, _
+                baseAddr, _
+                childId, _
+                TI_GET_OFFSET, _
+                @baseClassOffset _
+            ) = 0 Then
+                Continue For
+            End If
+
+            If SymbolActor_FindMemberOffsetRecursive( _
+                baseAddr, _
+                baseTypeId, _
+                memberName, _
+                accumulatedOffset + baseClassOffset, _
+                depth + 1, _
+                resultOffset _
+            ) Then
+
+                Deallocate(params)
+                Return True
+            End If
+        End If
+    Next
+
+    Deallocate(params)
+
+    Return False
+End Function
+
 Function SymbolActor_GetStructOffsetInternal( _
     ByVal modulePath As WString Ptr, _
     ByVal structName As WString Ptr, _
     ByVal memberName As WString Ptr _
 ) As Long
+
     If modulePath = 0 Or structName = 0 Or memberName = 0 Then Return -1
+
     Dim baseAddr As ULONG64 = SymbolActor_LoadModuleInternal(modulePath)
     If baseAddr = 0 Then Return -1
 
-    Dim offset As Long = -1
-    Dim symInfoSize As ULONG = SizeOf(SYMBOL_INFOW) + MAX_SYM_NAME * SizeOf(WCHAR)
-    Dim pSym As PSYMBOL_INFOW = CAllocate(symInfoSize)
-    Dim buffer As Byte Ptr = 0
-    Dim pName As PWCHAR = 0
+    Dim symInfoSize As ULONG = _
+        SizeOf(SYMBOL_INFOW) + _
+        MAX_SYM_NAME * SizeOf(WCHAR)
 
-    If pSym = 0 Then GoTo Cleanup
+    Dim pSym As PSYMBOL_INFOW = CAllocate(symInfoSize)
+
+    If pSym = 0 Then Return -1
 
     pSym->SizeOfStruct = SizeOf(SYMBOL_INFOW)
     pSym->MaxNameLen = MAX_SYM_NAME
 
-    If SymGetTypeFromNameW(g_hSymProcess, baseAddr, structName, pSym) = 0 Then
-        SymGetTypeFromNameW(g_hSymProcess, 0, structName, pSym)
+    If SymGetTypeFromNameW( _
+        g_hSymProcess, _
+        baseAddr, _
+        structName, _
+        pSym _
+    ) = 0 Then
+
+        MyLog.PrintWin32Error _
+            "SymbolActor_GetStructOffsetInternal", _
+            "SymGetTypeFromNameW", _
+            "Type=" & *structName
+
+        Deallocate(pSym)
+        Return -1
     End If
 
-    If SymGetTypeFromNameW(g_hSymProcess, baseAddr, structName, pSym) Then
-        Dim numChildren As ULONG = 0
-        If SymGetTypeInfo(g_hSymProcess, baseAddr, pSym->TypeIndex, TI_GET_CHILDRENCOUNT, @numChildren) Then
-            Dim bufferSize As ULONG = SizeOf(TI_FINDCHILDREN_PARAMS) + numChildren * SizeOf(ULONG)
-            buffer = CAllocate(bufferSize)
-            If buffer Then
-                Dim params As TI_FINDCHILDREN_PARAMS Ptr = CPtr(TI_FINDCHILDREN_PARAMS Ptr, buffer)
-                params->Start = 0
-                params->Count = numChildren
+    Dim offset As Long = -1
 
-                If SymGetTypeInfo(g_hSymProcess, baseAddr, pSym->TypeIndex, TI_FINDCHILDREN, buffer) Then
-                    Dim typeIdArray As ULONG Ptr = CPtr(ULONG Ptr, buffer + SizeOf(TI_FINDCHILDREN_PARAMS))
-                    For i As ULONG = 0 To numChildren - 1
-                        pName = 0
-                        If SymGetTypeInfo(g_hSymProcess, baseAddr, typeIdArray[i], TI_GET_SYMNAME, @pName) Then
-                            If pName Then
-                                If wcscmp(pName, memberName) = 0 Then
-                                    SymGetTypeInfo(g_hSymProcess, baseAddr, typeIdArray[i], TI_GET_OFFSET, @offset)
-                                End If
-                                LocalFree(pName) ' 【修复】必释放,杜绝内存泄漏
-                                pName = 0
-                            End If
-                        End If
-                    Next
-                End If
-            End If
-        End If
+    SymbolActor_FindMemberOffsetRecursive( _
+        baseAddr, _
+        pSym->TypeIndex, _
+        memberName, _
+        0, _
+        0, _
+        offset)
+
+    Deallocate(pSym)
+
+    If offset >= 0 Then
+        MyLog.PrintInfo _
+            "SymbolActor_GetStructOffsetInternal",, _
+            *structName & "." & *memberName & _
+            "=0x" & Hex(offset)
     End If
 
-Cleanup:
-    ' 【修复】兜底释放所有内存,连续查询无泄漏
-    If buffer Then Deallocate(buffer)
-    If pSym Then Deallocate(pSym)
     Return offset
 End Function
 
@@ -427,7 +583,7 @@ Sub SymbolService_ProcessRequest(ByRef req As SYMBOL_QUERY_REQUEST, ByRef resp A
                     MyLog.PrintLog LOG_ERROR, "QuerySymbolToAddress", "QuerySymbolToAddress", "符号" & *CPtr(Wstring Ptr, @req.SymbolName(0)) & "解析失败"
                     resp.Status = STATUS_NOT_FOUND
                 End If
-                Deallocate(pReq)
+                SymbolActor_ReleaseRequest(pReq)
             End If
 
         Case QueryAddressToSymbol
@@ -436,7 +592,7 @@ Sub SymbolService_ProcessRequest(ByRef req As SYMBOL_QUERY_REQUEST, ByRef resp A
             If pReq Then
                 WaitForSingleObject(pReq->hComplete, INFINITE)
                 resp.Status = pReq->ResultStatus
-                Deallocate(pReq)
+                SymbolActor_ReleaseRequest(pReq)
             End If
 
         Case QueryStructOffset
@@ -451,7 +607,7 @@ Sub SymbolService_ProcessRequest(ByRef req As SYMBOL_QUERY_REQUEST, ByRef resp A
                 Else
                     resp.Status = STATUS_NOT_FOUND
                 End If
-                Deallocate(pReq)
+                SymbolActor_ReleaseRequest(pReq)
             End If
 
         Case Else
@@ -548,6 +704,7 @@ Enum SymbolRequestType
     REQ_SYMBOL_TO_ADDR     = 2
     REQ_ADDR_TO_SYMBOL     = 3
     REQ_STRUCT_OFFSET      = 4
+    REQ_MODULE_IDENTITY    = 5
     REQ_SHUTDOWN           = 99
 End Enum
 
@@ -565,9 +722,14 @@ Type SYMBOL_REQUEST
     ResultStatus   As Long
     ResultAddress  As ULONG64
     ResultOffset   As Long
+    PdbGuid        As GUID
+    PdbAge         As DWORD
+    ImageSize      As DWORD
+    TimeDateStamp  As DWORD
     ' 同步/通知
     hComplete      As HANDLE             ' 事件,调用者等待完成信号
     pNext          As SYMBOL_REQUEST Ptr ' 链表指针
+    RefCount       As Long               ' caller + queued actor ownership
 End Type
 
 Dim Shared g_hQueueNotEmpty As HANDLE      ' 自动重置事件,队列非空时触发
@@ -626,9 +788,24 @@ Function SymbolActor_SubmitRequest(ByVal reqType As SymbolRequestType, _
     pReq->pOutputName = pOutName
     pReq->NameLen   = nameLen
     pReq->hComplete = CreateEvent(NULL, FALSE, FALSE, NULL)  ' 自动重置
+    pReq->RefCount = 2
 
     Queue_Push(pReq)
     Return pReq   ' 调用者可 WaitForSingleObject 并释放
+End Function
+
+Sub SymbolActor_ReleaseRequest(ByVal pReq As SYMBOL_REQUEST Ptr)
+    If pReq = 0 Then Exit Sub
+    If InterlockedDecrement(@pReq->RefCount) = 0 Then
+        If pReq->hComplete Then CloseHandle(pReq->hComplete)
+        Deallocate pReq
+    End If
+End Sub
+
+Function SymbolActor_WaitRequest(ByVal pReq As SYMBOL_REQUEST Ptr, _
+                                 ByVal timeoutMs As ULong = 10000) As Boolean
+    If pReq = 0 OrElse pReq->hComplete = 0 Then Return False
+    Return WaitForSingleObject(pReq->hComplete, timeoutMs) = WAIT_OBJECT_0
 End Function
 
 ' ----------------------------------------------------------------------------
@@ -664,6 +841,34 @@ Function SymbolActor_Thread(ByVal p As Any Ptr) As DWORD
                 pReq->ResultAddress = SymbolActor_LoadModuleInternal(@pReq->ModulePath)
                 pReq->ResultStatus = STATUS_SUCCESS
 
+            Case REQ_MODULE_IDENTITY
+                pReq->ResultAddress = SymbolActor_LoadModuleInternal(@pReq->ModulePath)
+                If pReq->ResultAddress = 0 Then
+                    pReq->ResultStatus = STATUS_NOT_FOUND
+                Else
+                    Dim module_Info As IMAGEHLP_MODULEW64
+                    memset(@module_Info, 0, SizeOf(module_Info))
+                    module_Info.SizeOfStruct = SizeOf(module_Info)
+                    If SymGetModuleInfoW64(g_hSymProcess, pReq->ResultAddress, @module_Info) Then
+                        pReq->PdbGuid = module_Info.PdbSig70
+                        pReq->PdbAge = module_Info.PdbAge
+                        pReq->ImageSize = module_Info.ImageSize
+                        pReq->TimeDateStamp = module_Info.TimeDateStamp
+                        If pReq->PdbAge > 0 AndAlso pReq->PdbAge <= &H10000 AndAlso _
+                           (pReq->PdbGuid.Data1 Or pReq->PdbGuid.Data2 Or pReq->PdbGuid.Data3 Or _
+                            pReq->PdbGuid.Data4(0) Or pReq->PdbGuid.Data4(1) Or _
+                            pReq->PdbGuid.Data4(2) Or pReq->PdbGuid.Data4(3) Or _
+                            pReq->PdbGuid.Data4(4) Or pReq->PdbGuid.Data4(5) Or _
+                            pReq->PdbGuid.Data4(6) Or pReq->PdbGuid.Data4(7)) Then
+                            pReq->ResultStatus = STATUS_SUCCESS
+                        Else
+                            pReq->ResultStatus = STATUS_NOT_FOUND
+                        End If
+                    Else
+                        pReq->ResultStatus = STATUS_UNSUCCESSFUL
+                    End If
+                End If
+
             Case REQ_SYMBOL_TO_ADDR
                 pReq->ResultAddress = SymbolActor_SymbolToAddrInternal(@pReq->ModulePath, @pReq->SymbolName)
                 If pReq->ResultAddress Then
@@ -689,14 +894,13 @@ Function SymbolActor_Thread(ByVal p As Any Ptr) As DWORD
 
             Case REQ_SHUTDOWN
                 SetEvent(pReq->hComplete)
-                ' 不再 Deallocate,由调用者释放
+                SymbolActor_ReleaseRequest(pReq)
                 Exit Do
         End Select
 
         ' 通知完成
         If pReq->hComplete Then SetEvent(pReq->hComplete)
-        ' 注意：不立即释放 pReq,因为调用者可能还在读取结果。
-        ' 调用者负责在 WaitForSingleObject 后 Deallocate(pReq)
+        SymbolActor_ReleaseRequest(pReq)
     Loop
 
     SymEngine_CleanupInternal()
@@ -725,7 +929,7 @@ Sub SymbolActor_Shutdown()
     Dim pReq As SYMBOL_REQUEST Ptr = SymbolActor_SubmitRequest(REQ_SHUTDOWN)
     If pReq Then
         WaitForSingleObject(pReq->hComplete, INFINITE)
-        Deallocate(pReq)
+        SymbolActor_ReleaseRequest(pReq)
     End If
     WaitForSingleObject(g_hSymbolThread, INFINITE)
     CloseHandle(g_hSymbolThread)
@@ -834,4 +1038,63 @@ Function FuzzySymbolSearch(ByVal modulePath As WString Ptr, ByVal pattern As WSt
     MyLog.PrintInfo "FuzzySymbolSearch", "SymSearchW", "找到" & ctx.count & "个符号"
     If result = 0 Then MyLog.PrintWin32Error "FuzzySymbolSearch", "SymSearchW"
     Return result
+End Function
+
+Function KmdfQueryStructOffset( _
+    ByVal ModulePath As WString Ptr, _
+    ByVal StructName As WString Ptr, _
+    ByVal MemberName As WString Ptr, _
+    ByRef Offset As Long _
+) As Boolean
+
+    Dim pReq As SYMBOL_REQUEST Ptr
+
+    Offset = -1
+
+    pReq = SymbolActor_SubmitRequest( _
+        REQ_STRUCT_OFFSET, _
+        ModulePath, _
+        0, _
+        0, _
+        StructName, _
+        MemberName)
+
+    If pReq = 0 Then Return False
+
+    If Not SymbolActor_WaitRequest(pReq) Then
+        MyLog.PrintLog LOG_WARN, "KmdfQueryStructOffset",, "WDF PDB 字段请求超时"
+        SymbolActor_ReleaseRequest(pReq)
+        Return False
+    End If
+
+    If pReq->ResultStatus = STATUS_SUCCESS Then
+        Offset = pReq->ResultOffset
+    End If
+
+    Dim success As Boolean = _
+        (pReq->ResultStatus = STATUS_SUCCESS AndAlso Offset >= 0)
+
+    SymbolActor_ReleaseRequest(pReq)
+
+    Return success
+End Function
+
+Function KmdfQueryModuleIdentity(ByVal ModulePath As WString Ptr, ByRef Identity As WDF_MODULE_IDENTITY) As Boolean
+    Dim pReq As SYMBOL_REQUEST Ptr
+    memset(@Identity, 0, SizeOf(Identity))
+    pReq = SymbolActor_SubmitRequest(REQ_MODULE_IDENTITY, ModulePath)
+    If pReq = 0 Then Return False
+    If Not SymbolActor_WaitRequest(pReq) Then
+        SymbolActor_ReleaseRequest(pReq)
+        Return False
+    End If
+    If pReq->ResultStatus = STATUS_SUCCESS Then
+        Identity.PdbGuid = pReq->PdbGuid
+        Identity.PdbAge = pReq->PdbAge
+        Identity.ImageSize = pReq->ImageSize
+        Identity.TimeDateStamp = pReq->TimeDateStamp
+    End If
+    Dim success As Boolean = (pReq->ResultStatus = STATUS_SUCCESS)
+    SymbolActor_ReleaseRequest(pReq)
+    Return success
 End Function

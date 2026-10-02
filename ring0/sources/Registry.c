@@ -14,7 +14,7 @@ BOOLEAN GetFullPath(PUNICODE_STRING pRegistryPath, PVOID pRegistryObject)
     }
     // 申请内存
     ULONG ulSize = 512;
-    PVOID lpObjectNameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, ulSize, 'lpon');
+    PVOID lpObjectNameInfo = KernelAlloc_NonPagedPoolNx(ulSize, 'lpon');
     if (NULL == lpObjectNameInfo)
     {
         return FALSE;
@@ -37,6 +37,7 @@ BOOLEAN GetFullPath(PUNICODE_STRING pRegistryPath, PVOID pRegistryObject)
 NTSTATUS RegMonitorCallback(PVOID CallbackContext, PVOID Argument1, PVOID Argument2)
 {
 	UNREFERENCED_PARAMETER(CallbackContext);
+	UNREFERENCED_PARAMETER(Argument2);
     REG_NOTIFY_CLASS RegNotifyClass = (REG_NOTIFY_CLASS)(ULONG_PTR)Argument1;
 
     // 初始化受保护的注册表路径

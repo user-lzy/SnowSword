@@ -257,25 +257,14 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
     If pSystemTimers = NULL Then Return
     
     Dim ret As Long, NewIndex As Long
-    /'If GetSystemVersion <> "Windows 11 23H2" Then
-        AfxMsg "很抱歉,该功能暂时仅在Win11 23H2上可用!", "提示"
-        Exit Sub
-    End If '/
     
     InitListViewData lvwKernelTimer
     
     If IoControl(hDrv, IOCTL_EnumIoTimers, NULL, 0, pSystemTimers, 512 * SizeOf(SYSTEM_TIMER)) <> 0 Then
-        For i As Integer = 0 To 512
+        For i As Integer = 0 To 511
             If (pSystemTimers[i].Func <> 0) Then
-                /'NewIndex = AddItemEx(lvwKernelTimer,, pSystemTimers[i].strType)
-                SetItemTextEx lvwKernelTimer, NewIndex, 1, "0x" & Hex(pSystemTimers[i].TimerObject)
-                SetItemTextEx lvwKernelTimer, NewIndex, 2, "0x" & Hex(pSystemTimers[i].Func)
-                
-                ' pSystemTimers[i].uFlag
-                SetItemTextEx lvwKernelTimer, NewIndex, 4, WStr(pSystemTimers[i].uType)'
-                SetItemTextEx lvwKernelTimer, NewIndex, 5, GetDriverPathByAddr(pSystemTimers[i].Func) 'Callbacks[i].DriverName'/
-                Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 6,,, pSystemTimers[i].strType, "0x" & WHex(pSystemTimers[i].TimerObject), "0x" & WHex(pSystemTimers[i].Func), _
-                WStr(IIf(pSystemTimers[i].uFlag, "已启动", "已停止")), WStr(pSystemTimers[i].uType), WStr(GetDriverPathByAddr(pSystemTimers[i].Func)))
+                Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 7,,, pSystemTimers[i].strType, "0x" & WHex(pSystemTimers[i].TimerObject), "0x" & WHex(pSystemTimers[i].Func), _
+                WStr("1000"), WStr(IIf(pSystemTimers[i].uFlag, "已启动", "已停止")), WStr(GetDriverPathByAddr(pSystemTimers[i].Func)), "uType=0x" & WHex(pSystemTimers[i].uType))
                 SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
             End If
         Next
@@ -283,18 +272,32 @@ Public Sub GetKernelTimerList(lvwKernelTimer As Class_ListView)
         MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumIoTimers"
     End If
     
-    memset pSystemTimers, 0, 512 * SizeOf(SYSTEM_TIMER)
-    If IoControl(hDrv, IOCTL_EnumDpcTimers, NULL, 0, pSystemTimers, 512 * SizeOf(SYSTEM_TIMER)) <> 0 Then
-        For i As Integer = 0 To 512
-            If (pSystemTimers[i].strType <> "") Then
-                Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 7,,, pSystemTimers[i].strType, "0x" & WHex(pSystemTimers[i].TimerObject), "0x" & WHex(pSystemTimers[i].Func), _
-                WStr(pSystemTimers[i].Period), WStr(pSystemTimers[i].uType), WStr(GetDriverPathByAddr(pSystemTimers[i].Func)), "pDpc=0x" & WHex(pSystemTimers[i].pDpc))
-                SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
+    /'memset pSystemTimers, 0, 512 * SizeOf(SYSTEM_TIMER)
+    Dim DpcCount As ULong = 0
+
+    If IoControl(hDrv, IOCTL_EnumDpcTimers, NULL, 0, @DpcCount, SizeOf(DpcCount)) <> 0 Then
+        If DpcCount > 0 Then
+            Dim DpcCapacity As ULONG = DpcCount + 64
+            Dim pDpcTimers As SYSTEM_TIMER Ptr = CAllocate(DpcCapacity * SizeOf(SYSTEM_TIMER))
+
+            If pDpcTimers <> NULL Then
+                If IoControl(hDrv, IOCTL_EnumDpcTimers, NULL, 0, pDpcTimers, DpcCapacity * SizeOf(SYSTEM_TIMER)) <> 0 Then
+                    For i As ULONG = 0 To DpcCapacity - 1
+                        If pDpcTimers[i].strType <> "" Then
+                            Dim ItemIndex As Long = AddItemColListEx(lvwKernelTimer, 7,,, pDpcTimers[i].strType, "0x" & WHex(pDpcTimers[i].TimerObject), "0x" & WHex(pDpcTimers[i].Func), _
+                            WStr(pDpcTimers[i].Period), WStr(pDpcTimers[i].uType), WStr(GetDriverPathByAddr(pDpcTimers[i].Func)), "pDpc=0x" & WHex(pDpcTimers[i].pDpc))
+                            SetItemIconEx lvwKernelTimer, ItemIndex, ICON_SYSTEM_COMPONENT
+                        End If
+                    Next
+                Else
+                    MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumDpcTimers"
+                End If
+                Deallocate(pDpcTimers)
             End If
-        Next
+        End If
     Else
-        MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumDpcTimers"
-    End If
+        MyLog.PrintWin32Error "GetKernelTimerList", "IOCTL_EnumDpcTimers Count"
+    End If'/
     CommitListViewView lvwKernelTimer
 End Sub
 

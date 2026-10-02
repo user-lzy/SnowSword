@@ -426,7 +426,6 @@ NTSTATUS EnumProcessTimers(
                     // 内存分配（原有逻辑）
                     // ======================
                     PWINDOW_TIMER pNewArray = (PWINDOW_TIMER)KernelAlloc_NonPagedPoolNx(
-                        POOL_FLAG_NON_PAGED,
                         sizeof(WINDOW_TIMER) * (timerCount + 1),
                         'meT'
                     );
@@ -1236,7 +1235,6 @@ NTSTATUS EnumerateMsgHook_Win11(
     }
 
     pHookArray = (PWIN32K_MSG_HOOK_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED | POOL_FLAG_CACHE_ALIGNED,
         sizeof(WIN32K_MSG_HOOK_INFO) * uAllocatedCount,
         'MsHk'
     );
@@ -1281,7 +1279,7 @@ NTSTATUS EnumerateMsgHook_Win11(
             ExFreePoolWithTag(buffer, 'enuT');
             buffer = NULL;
         }
-        buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'enuT');
+        buffer = KernelAlloc_NonPagedPoolNx(bufferSize, 'enuT');
         if (!buffer) {
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
@@ -1428,9 +1426,8 @@ EnumerateMsgHook_Win10(
         return STATUS_NOT_FOUND;
     }
 
-    // 分配内存
+    // 分配内存 POOL_FLAG_NON_PAGED | POOL_FLAG_CACHE_ALIGNED,
     pHookArray = (PWIN32K_MSG_HOOK_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED | POOL_FLAG_CACHE_ALIGNED,
         sizeof(WIN32K_MSG_HOOK_INFO) * uHookCount,
         'MsHk'
     );
@@ -1648,7 +1645,6 @@ NTSTATUS EnumerateEventHook_Win10(
 
     // 分配结果数组
     pHookArray = (PWIN32K_EVENT_HOOK_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED | POOL_FLAG_CACHE_ALIGNED,
         sizeof(WIN32K_EVENT_HOOK_INFO) * uHookCount,
         'EvHk');
     if (!pHookArray) {
@@ -1810,7 +1806,6 @@ NTSTATUS EnumerateEventHook_Win11(
 
     // 分配结果数组
     PWIN32K_EVENT_HOOK_INFO pHookList = (PWIN32K_EVENT_HOOK_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         hookCount * sizeof(WIN32K_EVENT_HOOK_INFO),
         'EvHk');
     if (!pHookList) {
@@ -2148,7 +2143,6 @@ NTSTATUS EnumHotkey(
 
     // ---------- 5. 分配输出缓冲区 ----------
     pHotkeyArray = (PWIN32K_HOTKEY_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         sizeof(WIN32K_HOTKEY_INFO) * hotkeyCount,
         HOTKEY_POOL_TAG
     );

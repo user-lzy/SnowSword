@@ -4,6 +4,8 @@
 #include "OtherFunctions.h"
 #include "Symbol.h"
 
+NTKERNELAPI PVOID KeQueryPrcbAddress(int Index);
+
 PVOID FindIopTimerQueueHead()
 {
     ULONG64 addr = 0;
@@ -56,14 +58,14 @@ PVOID FindIopTimerQueueHead()
     return IopTimerQueueHeadAddr;
 }
 
-BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers)
+ULONG EnumIoTimers(PSYSTEM_TIMER SystemTimers, ULONG MaxCount)
 {
     PLIST_ENTRY IopTimerQueueHead = (PLIST_ENTRY)FindIopTimerQueueHead();
     // 枚举列表
     KIRQL OldIrql;
     ULONG i = 0;
 
-    if (!(IopTimerQueueHead && MmIsAddressValid((PVOID)IopTimerQueueHead))) return FALSE;
+    if (!(IopTimerQueueHead && MmIsAddressValid((PVOID)IopTimerQueueHead))) return 0;
 
     // 获得特权级
     OldIrql = KeRaiseIrqlToDpcLevel();
@@ -71,7 +73,7 @@ BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers)
     __try
     {
         PLIST_ENTRY NextEntry = IopTimerQueueHead->Flink;
-        while (MmIsAddressValid(NextEntry) && NextEntry != (PLIST_ENTRY)IopTimerQueueHead)
+        while (MmIsAddressValid(NextEntry) && NextEntry != (PLIST_ENTRY)IopTimerQueueHead && i < MaxCount)
         {
             PIO_TIMER Timer = CONTAINING_RECORD(NextEntry, IO_TIMER, TimerList);
 
@@ -96,7 +98,7 @@ BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers)
 
     // 恢复特权级
     KeLowerIrql(OldIrql);
-    return TRUE;
+    return i;
 }
 
 PVOID FindKiSetTimerEx()
@@ -167,31 +169,17 @@ PVOID FindKiSetTimerEx()
     return NULL;
 }
 
-PKDPC DecodeTimerDpc(
+static __forceinline PKDPC DecodeTimerDpc(
     PKTIMER Timer,
-    PVOID KiWaitNever,
-    PVOID KiWaitAlways
+    ULONG_PTR Never,
+    ULONG_PTR Always
 )
 {
-    if (!Timer || !KiWaitNever || !KiWaitAlways) return NULL;
-
     ULONG_PTR Dpc = (ULONG_PTR)Timer->Dpc;
-
-    ULONG_PTR Never =
-        *(volatile ULONG_PTR*)KiWaitNever;
-    ULONG_PTR Always =
-        *(volatile ULONG_PTR*)KiWaitAlways;
-
     ULONG Shift = (ULONG)(Never & 0xFF);
 
-    //
-    // Win10 / Win11 23H2
-    //
     Dpc ^= Never;
-    Dpc = _rotl64(
-        Dpc,
-        Shift
-    );
+    Dpc = _rotl64(Dpc, Shift);
     Dpc ^= (ULONG_PTR)Timer;
     Dpc = _byteswap_uint64(Dpc);
     Dpc ^= Always;
@@ -359,134 +347,383 @@ BOOLEAN FindKiWaitXXX(
     return FALSE;
 }
 
-void EnumDpcTimers(PSYSTEM_TIMER SystemTimers)
+static __forceinline VOID AcquireTimerTableEntryLock(volatile LONG64* Lock)
+{
+    ULONG SpinCount = 0;
+
+    while (_interlockedbittestandset64(Lock, 0))
+    {
+        do
+        {
+            _mm_pause();
+
+            if (++SpinCount == 0)
+                SpinCount = 1;
+        } while (*Lock != 0);
+    }
+}
+
+static __forceinline VOID ReleaseTimerTableEntryLock(volatile LONG64* Lock)
+{
+    _InterlockedAnd64(Lock, 0);
+}
+
+static __forceinline BOOLEAN IsKernelPointer(PVOID Address)
+{
+#ifdef _WIN64
+    return (ULONG_PTR)Address >= 0xFFFF800000000000ULL;
+#else
+    return Address != NULL;
+#endif
+}
+
+ULONG EnumDpcTimers(PSYSTEM_TIMER SystemTimers, ULONG MaxCount)
 {
     PVOID KiWaitNever = NULL, KiWaitAlways = NULL;
+
     __try
     {
-        PVOID KiSetTimerEx;
+        PVOID KiSetTimerEx = FindKiSetTimerEx();
 
-        KiSetTimerEx = FindKiSetTimerEx();
-        //if (!KiSetTimerEx) KiSetTimerEx = (PVOID)KeSetTimerEx;
-
-        if (!FindKiWaitXXX(
-            KiSetTimerEx,
-            &KiWaitNever,
-            &KiWaitAlways))
+        if (!FindKiWaitXXX(KiSetTimerEx, &KiWaitNever, &KiWaitAlways))
         {
             DbgPrint("Find KiWait failed\n");
-            return;
+            return 0;
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        DbgPrint("error1 status:%X", GetExceptionCode());
+        DbgPrint("Find KiWait exception:%X\n", GetExceptionCode());
+        return 0;
     }
 
-    // 获取 CPU 核心数
-    int i_cpuNum = KeNumberProcessors;
-    int k = 0;
-    DbgPrint("CPU核心数: %d \n", i_cpuNum);
+    RTL_OSVERSIONINFOEXW OSVersion = { 0 };
+    OSVersion.dwOSVersionInfoSize = sizeof(OSVersion);
+    RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
 
-    for (KAFFINITY i = 0; i < i_cpuNum; i++)
+    ULONG TimerTableOffset = 0;
+
+    if (OSVersion.dwMajorVersion == 10)
     {
-		DbgPrint("CPU核心: %llx \n", i);
-        // 线程绑定特定 CPU
-        KeSetSystemAffinityThread(i + 1);
-
-        // 获得 KPRCB 的地址
-        ULONG64 p_PRCB = (ULONG64)__readmsr(0xC0000101) + 0x20;
-        if (!MmIsAddressValid((PVOID64)p_PRCB))
-        {
-			DbgPrint("Get PRCB Failed!");
-            return;
-        }
-		//DbgPrint("PRCB地址: 0x%llx \n", p_PRCB);
-
-        // 取消绑定 CPU
-        KeRevertToUserAffinityThread();
-
-        // 判断操作系统版本
-        RTL_OSVERSIONINFOEXW OSVersion = { 0 };
-        OSVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOEXW);
-        RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
-
-        BOOLEAN IsWin11 =
-            (OSVersion.dwMajorVersion == 10 &&
-                OSVersion.dwBuildNumber >= 22000);
-
-        // 计算 TimerTable 在 _KPRCB 结构中的偏移
-        PKTIMER_TABLE p_TimeTable = NULL;
-        if (OSVersion.dwMajorVersion == 10)
-        {
-            if (IsWin11)
-            {
-                DbgPrint("Windows11\n");
-                p_TimeTable =
-                    (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x4100);
-            }
-            else
-            {
-                DbgPrint("Windows10\n");
-                p_TimeTable =
-                    (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x3c00);
-            }
-        }
-        else if (OSVersion.dwMajorVersion == 6 && OSVersion.dwMinorVersion == 1)
-        {
-            // Windows 7
-            p_TimeTable = (PKTIMER_TABLE)(*(PULONG64)p_PRCB + 0x2200);
-        }
+        if (OSVersion.dwBuildNumber >= 22000)
+            TimerTableOffset = 0x4100;
         else
-        {
-			DbgPrint("Unsupported OS Version!");
-            return;
-        }
+            TimerTableOffset = 0x3C00;
+    }
+    else if (OSVersion.dwMajorVersion == 6 &&
+        OSVersion.dwMinorVersion == 1)
+    {
+        TimerTableOffset = 0x2200;
+    }
+    else
+    {
+        DbgPrint("Unsupported OS version\n");
+        return 0;
+    }
 
-        // 遍历 TimerEntries[] 数组（大小 256）
-        for (int j = 0; j < 256; j++)
-        {
-            // 获取 Entry 双向链表地址
-            if (!MmIsAddressValid((PVOID64)p_TimeTable)) continue;
+    ULONG CpuCount = KeNumberProcessors;
+    ULONG k = 0;
 
-            PLIST_ENTRY p_ListEntryHead = NULL;
-            _try{
-                p_ListEntryHead = &(p_TimeTable->TimerEntries[j].Entry);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
+    for (ULONG Cpu = 0; Cpu < CpuCount; Cpu++)
+    {
+        PVOID Prcb = KeQueryPrcbAddress(Cpu);
+        if (!Prcb)
+            continue;
+
+        PKTIMER_TABLE TimerTable =
+            (PKTIMER_TABLE)((PUCHAR)Prcb + TimerTableOffset);
+
+        for (ULONG Table = 0; Table < 2; Table++)
+        {
+            for (ULONG Bucket = 0; Bucket < 256; Bucket++)
             {
-                DbgPrint("error2 status:%X", GetExceptionCode());
-            }
-            // 遍历 Entry 双向链表
-            PLIST_ENTRY p_ListEntry = p_ListEntryHead->Flink;
-            while (p_ListEntry && MmIsAddressValid(p_ListEntry) &&
-                p_ListEntry != p_ListEntryHead)
-            {
-                // 根据 Entry 取 _KTIMER 对象地址
-                PKTIMER p_Timer = CONTAINING_RECORD(p_ListEntry, KTIMER, TimerListEntry);
-                if (k >= 512)
+                PKTIMER_TABLE_ENTRY TimerEntry =
+                    &TimerTable->TimerEntries[Table][Bucket];
+
+                KIRQL OldIrql = KeRaiseIrqlToDpcLevel();
+
+                AcquireTimerTableEntryLock(&TimerEntry->Lock);
+
+                PLIST_ENTRY Head = &TimerEntry->Entry;
+                PLIST_ENTRY Entry = NULL;
+
+                __try
                 {
-                    DbgPrint("Timer buffer full\n");
-                    return;
+                    Entry = Head->Flink;
                 }
-                PKDPC p_Dpc = DecodeTimerDpc(p_Timer, KiWaitNever, KiWaitAlways);
-                RtlStringCbCopyW(SystemTimers[k].Name, sizeof(SystemTimers[k].Name), L"DpcTimer");
-                SystemTimers[k].TimerObject = p_Timer;
-                SystemTimers[k].pDpc = p_Dpc;
-                SystemTimers[k].Period = p_Timer->Period;
-				SystemTimers[k].Type = p_Timer->TimerType;
-                DbgPrint("定时器对象：0x%p | 触发周期: %d \n ", p_Timer, p_Timer->Period);
-                if (p_Dpc && MmIsAddressValid((PVOID64)p_Dpc)) {
-                    SystemTimers[k].Func = (PVOID)(p_Dpc->DeferredRoutine);
-					DbgPrint("DPC对象：0x%p | 函数入口: 0x%p \n", p_Dpc, p_Dpc->DeferredRoutine);
+                __except (EXCEPTION_EXECUTE_HANDLER)
+                {
+                    DbgPrint(
+                        "BAD TIMER HEAD: CPU=%lu Table=%lu Bucket=%lu Head=%p Code=%08X\n",
+                        Cpu,
+                        Table,
+                        Bucket,
+                        Head,
+                        GetExceptionCode());
+
+                    ReleaseTimerTableEntryLock(&TimerEntry->Lock);
+                    KeLowerIrql(OldIrql);
+                    continue;
                 }
-                k++;
 
-                if (!MmIsAddressValid(p_ListEntry))
-                    break;
+                ULONG WalkCount = 0;
 
-                p_ListEntry = p_ListEntry->Flink;
+                while (Entry != Head)
+                {
+                    // 先验证 Entry 本身是否有效
+                    if (!IsKernelPointer(Entry))
+                    {
+                        DbgPrint("BAD ENTRY POINTER: CPU=%lu Table=%lu Bucket=%lu Entry=%p\n",
+                            Cpu, Table, Bucket, Entry);
+                        break;
+                    }
+
+                    if (++WalkCount > 0x10000)
+                    {
+                        DbgPrint(
+                            "TIMER LIST LOOP: CPU=%lu Table=%lu Bucket=%lu Head=%p Entry=%p\n",
+                            Cpu,
+                            Table,
+                            Bucket,
+                            Head,
+                            Entry);
+
+                        break;
+                    }
+
+                    if (!IsKernelPointer(Entry))
+                    {
+                        DbgPrint(
+                            "BAD TIMER ENTRY: CPU=%lu Table=%lu Bucket=%lu "
+                            "Head=%p Entry=%p Lock=%llX\n",
+                            Cpu,
+                            Table,
+                            Bucket,
+                            Head,
+                            Entry,
+                            TimerEntry->Lock);
+
+                        break;
+                    }
+
+                    PKTIMER Timer =
+                        CONTAINING_RECORD(
+                            Entry,
+                            KTIMER,
+                            TimerListEntry);
+
+                    /*
+                     * TimerListEntry 属于 KTIMER。
+                     * 当前 Timer 必须与正在枚举的 table / bucket 对应。
+                     */
+                    if (Timer->TimerType != Table ||
+                        Timer->Header.Size != Bucket)
+                    {
+                        DbgPrint(
+                            "BAD TIMER BUCKET: CPU=%lu Table=%lu Bucket=%lu "
+                            "Timer=%p Type=%u Size=%u Entry=%p\n",
+                            Cpu,
+                            Table,
+                            Bucket,
+                            Timer,
+                            Timer->TimerType,
+                            Timer->Header.Size,
+                            Entry);
+
+                        break;
+                    }
+
+                    PLIST_ENTRY Next = NULL;
+
+                    /*
+                     * 先读取 Next，再验证。
+                     * 不要最后直接 Entry = Entry->Flink。
+                     */
+                    __try
+                    {
+                        Next = Entry->Flink;
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        DbgPrint(
+                            "TIMER FLINK EXCEPTION: CPU=%lu Table=%lu Bucket=%lu "
+                            "Entry=%p Code=%08X\n",
+                            Cpu,
+                            Table,
+                            Bucket,
+                            Entry,
+                            GetExceptionCode());
+
+                        break;
+                    }
+
+                    if (Next == NULL)
+                    {
+                        DbgPrint(
+                            "NULL TIMER FLINK: CPU=%lu Table=%lu Bucket=%lu "
+                            "Entry=%p\n",
+                            Cpu,
+                            Table,
+                            Bucket,
+                            Entry);
+
+                        break;
+                    }
+
+                    if (Next != Head)
+                    {
+                        if (!IsKernelPointer(Next))
+                        {
+                            DbgPrint(
+                                "BAD TIMER FLINK: CPU=%lu Table=%lu Bucket=%lu "
+                                "Head=%p Entry=%p Next=%p\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Head,
+                                Entry,
+                                Next);
+
+                            break;
+                        }
+
+                        PLIST_ENTRY Back = NULL;
+
+                        __try
+                        {
+                            Back = Next->Blink;
+                        }
+                        __except (EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            DbgPrint(
+                                "TIMER BLINK EXCEPTION: CPU=%lu Table=%lu Bucket=%lu "
+                                "Entry=%p Next=%p Code=%08X\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Entry,
+                                Next,
+                                GetExceptionCode());
+
+                            break;
+                        }
+
+                        if (Back != Entry)
+                        {
+                            DbgPrint(
+                                "CORRUPT TIMER LIST: CPU=%lu Table=%lu Bucket=%lu "
+                                "Entry=%p Next=%p NextBlink=%p\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Entry,
+                                Next,
+                                Back);
+
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        /*
+                         * Next 已经回到链表头。
+                         * 顺手验证 Head->Blink 是否确实指向当前项。
+                         */
+                        PLIST_ENTRY HeadBlink = NULL;
+
+                        __try
+                        {
+                            HeadBlink = Head->Blink;
+                        }
+                        __except (EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            DbgPrint(
+                                "HEAD BLINK EXCEPTION: CPU=%lu Table=%lu Bucket=%lu "
+                                "Head=%p Code=%08X\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Head,
+                                GetExceptionCode());
+
+                            break;
+                        }
+
+                        if (HeadBlink != Entry)
+                        {
+                            DbgPrint(
+                                "CORRUPT TIMER TAIL: CPU=%lu Table=%lu Bucket=%lu "
+                                "Head=%p Entry=%p HeadBlink=%p\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Head,
+                                Entry,
+                                HeadBlink);
+
+                            break;
+                        }
+                    }
+
+                    /*
+                     * 只有链表结构已经验证后，才读取 Timer / DPC 内容。
+                     *
+                     * 注意这些输出操作不应该影响第一遍
+                     * EnumDpcTimers(NULL, 0) 的完整性验证。
+                     */
+                    if (SystemTimers != NULL && k < MaxCount)
+                    {
+                        PKDPC Dpc = NULL;
+
+                        __try
+                        {
+                            Dpc = DecodeTimerDpc(
+                                Timer,
+                                (ULONG_PTR)KiWaitNever,
+                                (ULONG_PTR)KiWaitAlways);
+
+                            RtlStringCbCopyW(
+                                SystemTimers[k].Name,
+                                sizeof(SystemTimers[k].Name),
+                                L"DpcTimer");
+
+                            SystemTimers[k].TimerObject = Timer;
+                            SystemTimers[k].pDpc = Dpc;
+                            SystemTimers[k].Period = Timer->Period;
+                            SystemTimers[k].Type = Timer->TimerType;
+
+                            if (Dpc && IsKernelPointer(Dpc))
+                                SystemTimers[k].Func = (PVOID)Dpc->DeferredRoutine;
+                            else
+                                SystemTimers[k].Func = NULL;
+                        }
+                        __except (EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            SystemTimers[k].pDpc = NULL;
+                            SystemTimers[k].Func = NULL;
+
+                            DbgPrint(
+                                "TIMER DATA EXCEPTION: CPU=%lu Table=%lu Bucket=%lu "
+                                "Timer=%p Dpc=%p Code=%08X\n",
+                                Cpu,
+                                Table,
+                                Bucket,
+                                Timer,
+                                Dpc,
+                                GetExceptionCode());
+                        }
+                    }
+
+                    k++;
+                    Entry = Next;
+                }
+
+                ReleaseTimerTableEntryLock(&TimerEntry->Lock);
+
+                KeLowerIrql(OldIrql);
             }
         }
     }
+
+    return k;
 }

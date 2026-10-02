@@ -531,8 +531,8 @@ End Function
 
 Private Function GetEThread(ByVal dwThreadId As DWORD) As ULONG64
     Dim pEThread As ULONG64, lpRet As DWORD
-    IoControl hDrv, IOCTL_GetEThread, @dwThreadId, SizeOf(DWORD), @pEThread, SizeOf(ULONG64), @lpRet
-    'Print "TID:" & dwThreadId & " " & lpRet
+    Dim TID As HANDLE = Cast(HANDLE, Cast(ULONG_PTR, dwThreadId))
+    IoControl hDrv, IOCTL_GetEThread, @TID, SizeOf(TID), @pEThread, SizeOf(ULONG64), @lpRet
     Return pEThread
 End Function
 

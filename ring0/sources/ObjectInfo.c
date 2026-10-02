@@ -228,7 +228,7 @@ NTSTATUS QueryObject(HANDLE dwProcessId, HANDLE Handle, LPWSTR Type, ULONG TypeL
 		goto QueryType;
 	}
 	bufferSize = returnLength;
-	NameInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'aaaa');
+	NameInfo = KernelAlloc_NonPagedPoolNx(bufferSize, 'aaaa');
 	if (!NameInfo)
 	{
 		DbgPrint("查询0x%p名称分配空间失败:%X", Handle, STATUS_INSUFFICIENT_RESOURCES);
@@ -351,7 +351,6 @@ NTSTATUS QueryFileObject(
 	bufferSize = returnLength;
 
 	NameInfo = KernelAlloc_NonPagedPoolNx(
-		POOL_FLAG_NON_PAGED,
 		bufferSize,
 		'aaaa');
 
@@ -468,7 +467,7 @@ NTSTATUS CloseHandle(PDO_SOMETHING DoSomething) {
 
 	// 处理 STATUS_INFO_LENGTH_MISMATCH 错误 
 	if (status == STATUS_INFO_LENGTH_MISMATCH) {
-		pBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bufferSize, 'HdlT');
+		pBuffer = KernelAlloc_NonPagedPoolNx(bufferSize, 'HdlT');
 		status = ZwQuerySystemInformation(SystemHandleInformation, pBuffer, bufferSize, NULL);
 		if (!NT_SUCCESS(status)) {
 			DbgPrint("ZwQuerySysytemInformation failed!status=%X", status);
@@ -571,7 +570,7 @@ POBJECT_TYPE* FindExCallbackObjectType() {
 		if (pBuffer != NULL) ExFreePoolWithTag(pBuffer, 'pbuf');
 
 		ulLength = ulLength * 2;
-		pBuffer = (PDIRECTORY_BASIC_INFORMATION)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, ulLength, 'pbuf');
+		pBuffer = (PDIRECTORY_BASIC_INFORMATION)KernelAlloc_NonPagedPoolNx(ulLength, 'pbuf');
 		if (NULL == pBuffer)
 		{
 			if (pBuffer != NULL) ExFreePoolWithTag(pBuffer, 'pbuf');

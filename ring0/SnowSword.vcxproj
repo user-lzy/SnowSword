@@ -137,6 +137,7 @@
     <ClInclude Include="include\global.h" />
     <ClInclude Include="include\IDT.h" />
     <ClInclude Include="include\ioctl.h" />
+    <ClInclude Include="include\KmdfCallbacks.h" />
     <ClInclude Include="include\Memory.h" />
     <ClInclude Include="include\Module.h" />
     <ClInclude Include="include\Netstat.h" />
@@ -161,6 +162,7 @@
     <ClCompile Include="sources\File.c" />
     <ClCompile Include="sources\GDT.c" />
     <ClCompile Include="sources\global.c" />
+    <ClCompile Include="sources\KmdfCallbacks.c" />
     <ClCompile Include="sources\OffsetScanner.c" />
     <ClCompile Include="sources\Test.c" />
     <ClCompile Include="sources\IDT.c" />

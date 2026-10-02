@@ -280,6 +280,15 @@ Left=730
 Top=160
 Tag=
 
+[PopupMenu]
+Name=mnuDevice
+Help=
+Index=-1
+Menu=刷新FrmListView_mnuDevice_mnuRefresh0-10查看KMDF派遣函数FrmListView_mnuDevice_mnuKmdfDispatch0-10查看/编辑内存FrmListView_mnuDevice_mnuEditMemory0-10
+Left=10
+Top=210
+Tag=
+
 [ListView]
 Name=ListView
 Help=
@@ -753,6 +762,16 @@ Sub FrmListView_Shown(hWndForm As hWnd, UserData As Integer)
             End If
             If GetSymbolLinkCallbackList(False, CurrentInfo->SymbolLink, ListView) = -1 Then ShowErrorBox "枚举失败!"
             Me.Caption = "动态符号链接列表"
+        Case DriverDevice
+            If CurrentInfo->CurrentDriver.DriverObject <> 0 Then
+                GetDriverDeviceList ListView, CurrentInfo->CurrentDriver.DriverObject
+            End If
+            Me.Caption = "[" & CurrentInfo->CurrentDriver.DriverName & "] 设备对象列表"
+        Case KmdfDispatch
+            If CurrentInfo->CurrentDevice.DeviceObject <> 0 Then
+                GetKmdfCurrentCallbacks ListView, CurrentInfo->CurrentDevice.DeviceObject
+            End If
+            Me.Caption = "[" & CurrentInfo->CurrentDevice.DeviceName & "] Kmdf派遣函数列表"
         Case IOFunction
             If CurrentInfo->CurrentDriver.DriverObject <> 0 Then
                 GetDriverIOFunctionList ListView, CurrentInfo->CurrentDriver.DriverPath, CurrentInfo->CurrentDriver.DriverObject
@@ -847,6 +866,9 @@ Sub FrmListView_ListView_WM_ContextMenu(hWndForm As hWnd, hWndControl As hWnd, x
         Case SymbolLinkCallback
             mnuSymbolLinkCallback.hWndForm = hWndForm
             PopupMenu hWndForm, mnuSymbolLinkCallback.HMENU
+        Case DriverDevice
+            mnuDevice.hWndForm = hWndForm
+            PopupMenu hWndForm, mnuDevice.HMENU
         Case FileStream
             mnuFileStream.hWndForm = hWndForm
             PopupMenu hWndForm, mnuFileStream.HMENU
@@ -940,13 +962,13 @@ Sub FrmListView_mnuThread_WM_Command(hWndForm As hWnd, wID As ULong)
             lblNum.Caption = "数量:" & ListView.ItemCount
             If bSuccess Then ShowInfoBox "操作全部成功!" Else ShowErrorBox "操作部分或全部失败!"
         Case FrmListView_mnuThread_mnuViewThreadStack ' 查看线程栈
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->ProcessId = CurrentPID
             CurrentInfo_New->ThreadId = ValUInt(ListView.GetItemText(ListView.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadCallStack
             FrmListView.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuThread_mnuViewAllInfo ' 查看详细信息
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->ProcessId = CurrentPID
             CurrentInfo_New->ThreadId = ValUInt(ListView.GetItemText(ListView.SelectedItem, 0))
             CurrentInfo_New->intType = ThreadAllInfo
@@ -1016,17 +1038,17 @@ Sub FrmListView_mnuModule_WM_Command(hWndForm As hWnd, wID As ULong)
             lblNum.Caption = "数量:" & ListView.ItemCount
             If bSuccess Then ShowInfoBox "操作全部成功!" Else ShowErrorBox "操作部分或全部失败!"
         Case FrmListView_mnuModule_mnuFindProcessByCurrent ' 全局查找此模块
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->intType = GlobalModule
             CurrentInfo_New->CurrentModule.ModuleName = ListView.GetItemText(ListView.SelectedItem, 1)
             FrmListView.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuModule_mnuFindProcessByModule ' 全局查找指定模块
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->intType = GlobalModule
             CurrentInfo_New->CurrentModule.ModuleName = AfxInputBox(,,, "提示", "请输入模块名称", ListView.GetItemText(ListView.SelectedItem, 1))
             FrmListView.Show,, Cast(Integer, CurrentInfo_New)
         Case FrmListView_mnuModule_mnuViewHook ' 查看Hook
-            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = Allocate(SizeOf(CURRENT_INFORMATION))
+            Dim CurrentInfo_New As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
             CurrentInfo_New->intType = Hook
             CurrentInfo_New->ProcessId = CurrentPID
             CurrentInfo_New->CurrentModule.ModuleName = ListView.GetItemText(ListView.SelectedItem, 1)
@@ -1188,9 +1210,13 @@ Sub FrmListView_mnuHandle_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuHandle_mnuCloseHandle ' 关闭
             If ShowMsgBox("确认关闭所选句柄?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim HandleValue_Index As Integer = GetIndexByName(ListView, "值")
+            Dim PID_Index As Integer = GetIndexByName(ListView, "PID")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    If CloseProcessHandle(ValULng(ListView.GetItemText(i, 1)), Cast(HANDLE, ValULng(ListView.GetItemText(i, 4)))) Then
+                    Dim HandleValue As HANDLE = Cast(HANDLE, ValULng(ListView.GetItemText(i, HandleValue_Index)))
+                    Dim PID As DWORD = ValUInt(ListView.GetItemText(i, PID_Index))
+                    If CloseProcessHandle(PID, HandleValue) Then
                         DeleteItemEx ListView, i, False
                     Else
                         bSuccess = False
@@ -1244,21 +1270,17 @@ Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuWebConnect_mnuCloseConnect ' 关闭连接
             If ShowMsgBox("确认关闭所选连接?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim LocalAddr_Index As Integer, RemoteAddr_Index As Integer
+            Dim LocalAddr As String = "", RemoteAddr As String = ""
+            LocalAddr_Index = GetIndexByName(ListView, "本地地址")
+            RemoteAddr_Index = GetIndexByName(ListView, "远程地址")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Dim LocalAddr As String = "", RemoteAddr As String = ""
                     Dim LocalIP As String = "", RemoteIP As String = ""
                     Dim LocalPort As Integer, RemotePort As Integer
                     
-                    If GetMenuCheckState(mnuWebConnect, FrmListView_mnuWebConnect_mnuViewAll) Then
-                        ' 非过滤模式列：协议(0), PID(1), 状态(2), 本地地址(3), 远程地址(4), 路径(5)
-                        LocalAddr  = ListView.GetItemText(i, 3)
-                        RemoteAddr = ListView.GetItemText(i, 4)
-                    Else
-                        ' 过滤模式列：协议(0), 状态(1), 本地地址(2), 远程地址(3)
-                        LocalAddr  = ListView.GetItemText(i, 2)
-                        RemoteAddr = ListView.GetItemText(i, 3)
-                    End If
+                    LocalAddr = ListView.GetItemText(i, LocalAddr_Index)
+                    RemoteAddr = ListView.GetItemText(i, RemoteAddr_Index)
                     
                     ' 解析 IP:Port 或 [IPv6]:Port
                     ParseAddrPort(LocalAddr, LocalIP, LocalPort)
@@ -1291,7 +1313,8 @@ Sub FrmListView_mnuWebConnect_WM_Command(hWndForm As hWnd, wID As ULong)
             GetWebConnectList CurrentPID, ListView, bShowAll
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuWebConnect_mnuGotoProcess ' 转到进程
-            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, SelectIndex, 1))
+            Dim PID_Index As Integer = GetIndexByName(ListView, "PID")
+            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, SelectIndex, PID_Index))
             SwitchToModule("进程")
             If Not FindProcessInListView(FrmMain.ListView1, PID) Then ShowErrorBox "未找到进程!"
         Case FrmListView_mnuWebConnect_mnuLittleCopy ' 复制单格数据
@@ -1312,7 +1335,8 @@ Sub FrmListView_mnuWindow_WM_Command(hWndForm As hWnd, wID As ULong)
     Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
     Dim CurrentPID As DWORD = CurrentInfo->ProcessId
     Dim CurrentProcessName As StringW = GetNameByPath(GetProcessPath(CurrentPID))
-    Dim hWnd As HWND = Cast(HWND, ValLng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, 0), "0x", "&H")))
+    Dim hWnd_Index As Integer = GetIndexByName(ListView, "句柄")
+    Dim hWnd As HWND = Cast(HWND, ValLng(FF_Replace(ListView.GetItemText(ListView.SelectedItem, hWnd_Index), "0x", "&H")))
     Select Case wID
         Case FrmListView_mnuWindow_mnuRefresh ' 刷新
             lblNum.Caption = "正在刷新..."
@@ -1422,9 +1446,10 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuMsgHook_mnuRemove ' 移除
             If ShowMsgBox("确认移除所选消息钩子?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim hHook_Index As Integer = GetIndexByName(ListView, "hHook")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H")))
+                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, hHook_Index), "0x", "&H")))
                     If UnhookWindowsHookEx(hHook) <> 0 Then
                         DeleteItemEx ListView, i, False
                     Else
@@ -1461,7 +1486,6 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
                 Me.Caption = "[" & CurrentProcessName & " " & CurrentPID & "]" & " 消息钩子列表"
             End If
             
-            ' 调用：bAll = bShowAll, bGlobal = bShowGlobalOnly
             GetMsgHookList bShowAll, bShowGlobalOnly, CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
             
@@ -1486,12 +1510,13 @@ Sub FrmListView_mnuMsgHook_WM_Command(hWndForm As hWnd, wID As ULong)
             GetMsgHookList bShowAll, bShowGlobalOnly, CurrentPID, ListView
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuMsgHook_mnuGotoProcess ' 转到进程
-            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, 5))
+            Dim PID_Index As Integer = GetIndexByName(ListView, "PID")
+            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, PID_Index))
             SwitchToModule("进程")
             If Not FindProcessInListView(FrmMain.ListView1, PID) Then ShowErrorBox "未找到进程!"
         Case FrmListView_mnuMsgHook_mnuEditMemory ' 查看/编辑内存
-            If ListView.ColumnText(LastClickedSubItem) <> "回调函数" Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            Dim Callback_Index As Integer = GetIndexByName(ListView, "回调函数")
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, Callback_Index), "0x", "&H"))
             Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
             MemoryInfo->Addr = Cast(PVOID, Addr)
             MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
@@ -1526,9 +1551,10 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuEventHook_mnuRemove ' 移除
             If ShowMsgBox("确认移除所选事件钩子?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim hHook_Index As Integer = GetIndexByName(ListView, "hHook")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H")))
+                    Dim hHook As HANDLE = Cast(HANDLE, ValULng(FF_Replace(ListView.GetItemText(i, hHook_Index), "0x", "&H")))
                     If UnhookWinEvent(hHook) <> 0 Then
                         DeleteItemEx ListView, i, False
                     Else
@@ -1559,7 +1585,8 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
             SetMenuCheckState mnuEventHook, FrmListView_mnuEventHook_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuEventHook_mnuGotoPID ' 转到PID对应进程
-            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, 5))
+            Dim PID_Index As Integer = GetIndexByName(ListView, "PID")
+            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, PID_Index))
             SwitchToModule("进程")
             For i As Integer = 0 To FrmMain.ListView1.ItemCount - 1
                 If ValUInt(FrmMain.ListView1.GetItemText(i, 0)) = PID Then
@@ -1570,10 +1597,11 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
             Next
             ShowErrorBox "未找到进程!"
         Case FrmListView_mnuEventHook_mnuGotoTargetPID ' 转到TargetPID对应进程
-            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, 7))
+            Dim TargetPID_Index As Integer = GetIndexByName(ListView, "TargetPID")
+            Dim TargetPID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, TargetPID_Index))
             SwitchToModule("进程")
             For i As Integer = 0 To FrmMain.ListView1.ItemCount - 1
-                If ValUInt(FrmMain.ListView1.GetItemText(i, 0)) = PID Then
+                If ValUInt(FrmMain.ListView1.GetItemText(i, 0)) = TargetPID Then
                     FrmMain.ListView1.SelectedItem = i
                     ListView_EnsureVisible(FrmMain.ListView1.hWnd, i, False)
                     Return
@@ -1581,8 +1609,8 @@ Sub FrmListView_mnuEventHook_WM_Command(hWndForm As hWnd, wID As ULong)
             Next
             ShowErrorBox "未找到进程!"
         Case FrmListView_mnuEventHook_mnuEditMemory ' 查看/编辑内存
-            If LastClickedSubItem <> 3 Then Exit Sub
-            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, LastClickedSubItem), "0x", "&H"))
+            Dim Callback_Index As Integer = GetIndexByName(ListView, "回调函数")
+            Dim Addr As ULONG64 = ValULng(FF_Replace(ListView.GetItemText(LastClickedItem, Callback_Index), "0x", "&H"))
             Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
             MemoryInfo->Addr = Cast(PVOID, Addr)
             MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
@@ -1615,11 +1643,13 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
         Case FrmListView_mnuHotkey_mnuRemove ' 移除
             If ShowMsgBox("确认移除所选热键?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim id_Index As Integer = GetIndexByName(ListView, "热键id")
+            Dim hwnd_Index As Integer = GetIndexByName(ListView, "所属窗口")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(i, 1), "0x", "&H"))
-                    Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(i, 3), "0x", "&H")))
-                    If UnregisterHotKey(hWnd, id) <> 0 Then                    
+                    Dim id As Long = ValInt(FF_Replace(ListView.GetItemText(i, id_Index), "0x", "&H"))
+                    Dim hWnd As hWnd = Cast(HWND, ValULng(FF_Replace(ListView.GetItemText(i, hwnd_Index), "0x", "&H")))
+                    If UnregisterHotKey(hWnd, id) <> 0 Then
                         DeleteItemEx ListView, i, False
                     Else
                         MyLog.PrintWin32Error "FrmListView_mnuHotkey_mnuRemove", "UnregisterHotKey", "0x" & WHex(hWnd) & " 0x" & WHex(id)
@@ -1649,11 +1679,13 @@ Sub FrmListView_mnuHotkey_WM_Command(hWndForm As hWnd,wID As ULong)
             SetMenuCheckState mnuHotkey, FrmListView_mnuHotkey_mnuViewAll, Not bGlobal
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
         Case FrmListView_mnuHotkey_mnuGotoProcess ' 转到进程
-            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, 4))
+            Dim PID_Index As Integer = GetIndexByName(ListView, "PID")
+            Dim PID As DWORD = ValUInt(GetViewItemTextEx(ListView, ListView.SelectedItem, PID_Index))
             SwitchToModule("进程")
             If Not FindProcessInListView(FrmMain.ListView1, PID) Then ShowErrorBox "未找到进程!"
         Case FrmListView_mnuHotkey_mnuEditMemory ' 查看/编辑内存
-            Dim Addr As ULONG64 = ValULng(FF_Replace(GetViewItemTextEx(ListView, LastClickedItem, 0), "0x", "&H"))
+            Dim hHotkey_Index As Integer = GetIndexByName(ListView, "hHotkey")
+            Dim Addr As ULONG64 = ValULng(FF_Replace(GetViewItemTextEx(ListView, LastClickedItem, hHotkey_Index), "0x", "&H"))
             Dim MemoryInfo As MemoryStruct Ptr = Allocate(SizeOf(MemoryStruct))
             MemoryInfo->Addr = Cast(PVOID, Addr)
             MemoryInfo->dwProcessId = Cast(HANDLE, Cast(ULONG64, CurrentPID))
@@ -1686,10 +1718,12 @@ Sub FrmListView_mnuProcessTimer_WM_Command(hWndForm As hWnd, wID As ULong)
         Case FrmListView_mnuProcessTimer_mnuRemove ' 移除
             If ShowMsgBox("确认移除所选进程定时器?",, MB_YESNO) = IDNO Then Exit Sub
             Dim bSuccess As Boolean = True
+            Dim hWnd_Index As Integer = GetIndexByName(ListView, "所属窗口")
+            Dim uIDEvent_Index As Integer = GetIndexByName(ListView, "定时器ID")
             For i As Integer = ListView.ItemCount - 1 To 0 Step -1
                 If IsListViewItemSelected(ListView, i) Then
-                    Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(i, 4), "0x", "&H")))
-                    Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(i, 0), "0x", "&H"))
+                    Dim hWnd As hWnd = Cast(PVOID, ValULng(FF_Replace(ListView.GetItemText(i, hWnd_Index), "0x", "&H")))
+                    Dim uIDEvent As ULong = ValUInt(FF_Replace(ListView.GetItemText(i, uIDEvent_Index), "0x", "&H"))
                     If KillTimer(hWnd, uIDEvent) <> 0 Then
                         DeleteItemEx ListView, i, False
                     Else
@@ -2071,5 +2105,31 @@ Sub FrmListView_mnuSymbolLinkCallback_WM_Command(hWndForm As hWnd, wID As ULong)
             lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
     End Select
 End Sub
+
+'[FrmListView.mnuDevice]事件 : 点击了菜单项
+'hWndForm 当前窗口的句柄(WIN系统用来识别窗口的一个编号，如果多开本窗口，必须 Me.hWndForm = hWndForm 后才可以执行后续操作本窗口的代码)
+''           本控件为功能控件，就是无窗口，无显示，只有功能。如果多开本窗口，必须 Me.控件名.hWndForm = hWndForm 后才可以执行后续操作本控件的代码 
+'wID      菜单项命令ID
+Sub FrmListView_mnuDevice_WM_Command(hWndForm As hWnd, wID As ULong)
+    Dim SelectIndex As Integer = ListView.SelectedItem
+    Dim CurrentInfo As CURRENT_INFORMATION Ptr = Cast(CURRENT_INFORMATION Ptr, Me.UserData(0))
+    Select Case wID
+        Case FrmListView_mnuDevice_mnuRefresh ' 刷新
+            lblNum.Caption = "正在刷新..."
+            GetKmdfCurrentCallbacks ListView, CurrentInfo->CurrentDevice.DeviceObject
+            lblNum.Caption = "数量:" & WStr(ListView.ItemCount)
+        Case FrmListView_mnuDevice_mnuKmdfDispatch ' 查看KMDF派遣函数
+            Dim NewInfo As CURRENT_INFORMATION Ptr = CAllocate(SizeOf(CURRENT_INFORMATION))
+            NewInfo->intType = KmdfDispatch
+            NewInfo->CurrentDevice.DeviceObject = ValULng(FF_Replace(ListView.GetItemText(SelectIndex, 1), "0x", "&H"))
+            NewInfo->CurrentDevice.DeviceName = ListView.GetItemText(ListView.SelectedItem, 0)
+            MyLog.PrintInfo "FrmListView_mnuDevice_mnuKmdfDispatch", "", "ListView.GetItemText(SelectIndex, 1):" & ListView.GetItemText(SelectIndex, 1)
+            MyLog.PrintInfo "FrmListView_mnuDevice_mnuKmdfDispatch", "", "DeviceObject=0x" & WHex(NewInfo->CurrentDevice.DeviceObject)
+            FrmListView.Show,, Cast(Integer, NewInfo)
+        Case FrmListView_mnuDevice_mnuEditMemory ' 查看/编辑内存
+
+    End Select
+End Sub
+
 
 

@@ -29,54 +29,8 @@ Function CTL_CODE_GEN(ByVal lngFunction As Long) As Long
     Return (FILE_DEVICE_UNKNOWN * (2 ^ 16)) Or (FILE_ANY_ACCESS * (2 ^ 14)) Or (lngFunction * (2 ^ 2)) Or METHOD_BUFFERED
 End Function
 
-/'// 删除注册表项及其所有子项
-void DeleteRegistryKey(HKEY hKeyRoot, LPCWSTR subKey) {
-    HKEY hKey;
-    DWORD retCode;
-
-    // 打开注册表项
-    retCode = RegOpenKeyExW(hKeyRoot, subKey, 0, KEY_ALL_ACCESS, &hKey);
-    if (retCode == ERROR_SUCCESS) {
-        TCHAR path[2048];
-        DWORD pathLen = 2048;
-        FILETIME ftLastWriteTime;
-
-        // 枚举并删除子项
-        for (DWORD i = 0; ; i++) {
-            pathLen = sizeof(path) / sizeof(TCHAR);
-            retCode = RegEnumKeyExW(hKey, i, path, &pathLen, NULL, NULL, NULL, &ftLastWriteTime);
-            if (retCode == ERROR_SUCCESS) {
-                // 递归删除子项
-                DeleteRegistryKey(hKey, path);
-            } else if (retCode == ERROR_NO_MORE_ITEMS) {
-                break;
-            } else {
-                printf("Error enumerating registry keys: %d\n", retCode);
-                break;
-            }
-        }
-
-        // 删除当前项
-        retCode = RegDeleteKeyW(hKeyRoot, subKey);
-        if (retCode != ERROR_SUCCESS) {
-            printf("Failed to delete registry key: %d\n", retCode);
-        }
-
-        RegCloseKey(hKey);
-    } else {
-        printf("Failed to open registry key: %d\n", retCode);
-    }
-End Sub'/
-
 Function LoadDriver(ByVal szDrvPath As String, ByVal IsMiniFilter As Boolean) As Boolean
     Function = True
-    /'If Not IsAdmin Then
-        If AfxMsg("需要管理员权限,是否重启进程以获取?", "提示", MB_YESNO) = IDYES Then
-            RestartasAdmin True
-        Else
-            Return False
-        End If
-    End If'/
     Dim hNtdll As HMODULE = DyLibLoad("ntdll.dll")
     If (hNtdll = NULL) Then
         MyLog.PrintLog LOG_ERROR, "LoadDriver", "DyLibLoad" "加载NTDLL"

@@ -73,7 +73,7 @@ NTSTATUS ValidateUserUnicodeString(PUNICODE_STRING pUserUnicodeString, PUNICODE_
 
     // 步骤5：（可选）将用户空间字符串复制到内核空间（避免用户后续修改内存）
     pKernelUnicodeString->MaximumLength = pUserUnicodeString->MaximumLength;
-    pKernelUnicodeString->Buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pKernelUnicodeString->MaximumLength, 'tag');
+    pKernelUnicodeString->Buffer = KernelAlloc_NonPagedPoolNx(pKernelUnicodeString->MaximumLength, 'tag');
     if (pKernelUnicodeString->Buffer == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }

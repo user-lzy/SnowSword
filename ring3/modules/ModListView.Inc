@@ -36,7 +36,10 @@ Enum Interface
     Registry
     Service
     KernelTimer
+    DriverDevice
+    KmdfDispatch
     IOFunction
+    
     IPScan
     Sniffer
     ProcessTimer
@@ -67,6 +70,11 @@ Type CurrentDriverInfo
     DriverPath As Wstring * MAX_PATH ' SafeStringW_NTS
 End Type
 
+Type CurrentDeviceInfo
+    DeviceObject As UInteger
+    DeviceName As Wstring * MAX_PATH ' SafeStringW_NTS
+End Type
+
 Type CurrentModuleInfo
     ModuleName As Wstring * MAX_PATH ' SafeStringW_NTS
     ModuleHandle As Any Ptr
@@ -79,6 +87,7 @@ Type CURRENT_INFORMATION
     ThreadId As DWORD
     CurrentModule As CurrentModuleInfo
     CurrentDriver As CurrentDriverInfo
+    CurrentDevice As CurrentDeviceInfo
     FilePath As Wstring * MAX_PATH
     SymbolLink As Wstring * MAX_PATH
 End Type
@@ -557,6 +566,20 @@ Sub InitializeListView(ByVal FuncType As Interface, ListView As Class_ListView)
                 .AddColumn "状态",, 100
                 .AddColumn "所属模块",, 300
                 .AddColumn "上下文",, 300
+            Case DriverDevice
+                .AddColumn "设备名称",, 360
+                .AddColumn "DeviceObject",, 180
+                .AddColumn "DeviceType",, 180
+                .AddColumn "AttachedDevice",, 180
+                .AddColumn "LowerDevice",, 180
+                '.AddColumn "NextDevice",, 180
+                .AddColumn "Flags",, 120
+            Case KmdfDispatch
+                .AddColumn "名称",, 220
+                .AddColumn "当前地址",, 170
+                .AddColumn "所属模块",, 320
+                .AddColumn "容器",, 140
+                .AddColumn "对象地址",, 170
             Case IOFunction
                 .AddColumn "名称",, 250
                 .AddColumn "当前地址",, 300
@@ -1969,21 +1992,21 @@ End Function
 ' 插入排序：仅用于32行以内的小数据量
 Private Sub InsertionSort( _
     arr() As Long, _
+    ByVal count As Long, _
     ctx As ListViewContext Ptr, _
     sortCol As Long, _
     isNumber As Boolean, _
     isAsc As Boolean _
 )
-    Dim count As Long = UBound(arr) + 1
     If count <= 1 Then Exit Sub
-    
+
     For i As Long = 1 To count - 1
         Dim key As Long = arr(i)
         Dim j As Long = i - 1
-        
+
         While j >= 0
             Dim cmp As Long = CompareRow(ctx, arr(j), key, sortCol, isNumber)
-            ' 升序：前值大于当前值则后移；降序反之
+
             If (isAsc AndAlso cmp > 0) OrElse (Not isAsc AndAlso cmp < 0) Then
                 arr(j + 1) = arr(j)
                 j -= 1
@@ -1991,6 +2014,7 @@ Private Sub InsertionSort( _
                 Exit While
             End If
         Wend
+
         arr(j + 1) = key
     Next
 End Sub
@@ -2022,14 +2046,16 @@ End Function
 ' 迭代版快速排序：用自定义栈替代递归，彻底避免栈溢出
 Private Sub ListView_QuickSort_Iterative( _
     arr() As Long, _
+    ByVal count As Long, _
     ctx As ListViewContext Ptr, _
     sortCol As Long, _
     isNumber As Boolean, _
     isAsc As Boolean _
 )
+    If count <= 1 Then Exit Sub
+
     Dim nLeft As Long = 0
-    Dim nRight As Long = UBound(arr)
-    If nRight - nLeft + 1 <= 1 Then Exit Sub
+    Dim nRight As Long = count - 1
     
     ' 显式栈：每个元素存(left, right)对
     ' 最大深度约 log2(n)，对于10万数据只需约17层
@@ -2220,22 +2246,23 @@ End Sub
 Sub SortListViewVisibleIndex(ctx As ListViewContext Ptr)
     If ctx = NULL OrElse ctx->VisibleCount <= 1 Then Exit Sub
     If ctx->SortedColumn < 0 Then Exit Sub
-    
-    Dim snap As ListViewSnapshot Ptr = ctx->Snap
+    If ctx->Snap = NULL Then Exit Sub
+
     Dim sortCol As Long = ctx->SortedColumn
     Dim isAsc As Boolean = ctx->SortAscending
-    
+
     If UBound(ctx->ColumnIsNumber) < 0 Then
         CacheColumnTypes(ctx)
     End If
+
     If sortCol > UBound(ctx->ColumnIsNumber) Then Exit Sub
+
     Dim isNumber As Boolean = ctx->ColumnIsNumber(sortCol)
-    
-    ' 改用迭代版快排
+
     If ctx->VisibleCount <= 32 Then
-        InsertionSort(ctx->VisibleIndex(), ctx, sortCol, isNumber, isAsc)
+        InsertionSort(ctx->VisibleIndex(), ctx->VisibleCount, ctx, sortCol, isNumber, isAsc)
     Else
-        ListView_QuickSort_Iterative(ctx->VisibleIndex(), ctx, sortCol, isNumber, isAsc)
+        ListView_QuickSort_Iterative(ctx->VisibleIndex(), ctx->VisibleCount, ctx, sortCol, isNumber, isAsc)
     End If
 End Sub
 
@@ -2594,7 +2621,6 @@ End Function
 Sub CommitListViewView(ListView As Class_ListView)
     Dim ctx As ListViewContext Ptr = Cast(ListViewContext Ptr, GetWindowLongPtr(ListView.hWnd, GWLP_USERDATA))
     
-    ' 安全校验：上下文/快照为空直接退出
     If ctx = NULL Then Exit Sub
     If ctx->Snap = NULL Then Exit Sub
     If ctx->Snap->RowCount = 0 Then
@@ -2605,8 +2631,6 @@ Sub CommitListViewView(ListView As Class_ListView)
         Exit Sub
     End If
 
-    ' ===================== 【最佳位置】自动缓存列类型 =====================
-    ' 每次刷新数据时，仅执行1次列类型校验（性能无损耗）
     CacheColumnTypes(ctx)
 
     ctx->VisibleCount = 0
@@ -2635,6 +2659,11 @@ Sub CommitListViewView(ListView As Class_ListView)
             ctx->VisibleCount += 1
         End If
     Next
+
+    ' 筛选重建 VisibleIndex 后，重新应用已有排序状态
+    If ctx->SortedColumn >= 0 AndAlso ctx->VisibleCount > 1 Then
+        SortListViewVisibleIndex(ctx)
+    End If
 
     SendMessage(ListView.hWnd, LVM_SETITEMCOUNT, ctx->VisibleCount, 0)
     InvalidateRect(ListView.hWnd, NULL, True)

@@ -26,16 +26,24 @@ typedef struct _IO_TIMER
 
 typedef struct _KTIMER_TABLE_ENTRY
 {
-    ULONG_PTR   Lock;
-    LIST_ENTRY  Entry;
-    ULONG_PTR   Time;
+    volatile LONG64 Lock;
+    LIST_ENTRY Entry;
+    ULARGE_INTEGER Time;
 }KTIMER_TABLE_ENTRY, * PKTIMER_TABLE_ENTRY;
 
 typedef struct _KTIMER_TABLE
 {
     ULONG_PTR           TimerExpiry[64];
-    KTIMER_TABLE_ENTRY  TimerEntries[256];
+    KTIMER_TABLE_ENTRY  TimerEntries[2][256];
 }KTIMER_TABLE, * PKTIMER_TABLE;
+
+static_assert(sizeof(KTIMER_TABLE_ENTRY) == 0x20, "bad entry size");
+static_assert(FIELD_OFFSET(KTIMER_TABLE_ENTRY, Entry) == 0x08, "bad Entry");
+static_assert(FIELD_OFFSET(KTIMER_TABLE_ENTRY, Time) == 0x18, "bad Time");
+
+static_assert(
+    FIELD_OFFSET(KTIMER_TABLE, TimerEntries) == 0x200,
+    "bad TimerEntries");
 
 typedef struct _PROCESS_TIMER {
     HANDLE ThreadId;
@@ -48,5 +56,5 @@ typedef struct _PROCESS_TIMER_INFO {
     PROCESS_TIMER Timers[1];
 }PROCESS_TIMER_INFO, * PPROCESS_TIMER_INFO;
 
-BOOLEAN EnumIoTimers(PSYSTEM_TIMER SystemTimers);
-void EnumDpcTimers(PSYSTEM_TIMER SystemTimers);
+ULONG EnumIoTimers(PSYSTEM_TIMER SystemTimers, ULONG MaxCount);
+ULONG EnumDpcTimers(PSYSTEM_TIMER SystemTimers, ULONG MaxCount);

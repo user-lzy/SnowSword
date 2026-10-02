@@ -17,6 +17,50 @@ typedef struct _DRIVER_INFO {
     PVOID FastIOFunctionAddr[FAST_IO_MAX_COUNT];
 }DRIVER_INFO, * PDRIVER_INFO;
 
+#define MAX_DEVICE_NAME_LEN 260
+
+typedef struct _ENUM_DRIVER_DEVICES_INPUT {
+    ULONG64 DriverObject;
+} ENUM_DRIVER_DEVICES_INPUT, * PENUM_DRIVER_DEVICES_INPUT;
+
+typedef struct _DRIVER_DEVICE_LIST_HEADER {
+    ULONG Count;       // 本次实际返回数量
+    ULONG TotalCount;  // 驱动实际设备总数，R3可据此扩容重试
+} DRIVER_DEVICE_LIST_HEADER, * PDRIVER_DEVICE_LIST_HEADER;
+
+typedef struct _DRIVER_DEVICE_INFO {
+    ULONG64 DeviceObject;
+    ULONG64 DriverObject;
+    ULONG64 NextDevice;
+    ULONG64 AttachedDevice;
+    ULONG64 LowerDevice;
+    ULONG64 TopDevice;
+    ULONG64 BaseDevice;
+    ULONG64 CurrentIrp;
+    ULONG64 Timer;
+    ULONG64 Vpb;
+    ULONG64 VpbDeviceObject;
+    ULONG64 VpbRealDevice;
+    ULONG64 DeviceExtension;
+    ULONG64 DeviceObjectExtension;
+    ULONG64 SecurityDescriptor;
+
+    LONG ReferenceCount;
+    ULONG DeviceType;
+    ULONG Characteristics;
+    ULONG Flags;
+    ULONG AlignmentRequirement;
+    ULONG ActiveThreadCount;
+    ULONG VpbFlags;
+    ULONG VpbReferenceCount;
+    ULONG VpbSerialNumber;
+    USHORT SectorSize;
+    UCHAR StackSize;
+    UCHAR Reserved0;
+
+    WCHAR DeviceName[MAX_DEVICE_NAME_LEN];
+} DRIVER_DEVICE_INFO, * PDRIVER_DEVICE_INFO;
+
 //_OBJECT_HEADER 内两个成员的偏移
 enum _OBJECT_HEADER_Offset {
     _OBJECT_HEADER_Body_Offset = 0x30,
@@ -89,18 +133,6 @@ PDRIVER_OBJECT GetDirectoryDrivers(POBJECT_DIRECTORY DirObj, PVOID BaseAddress);
 PVOID GetDriverObjectByBaseAddress(PVOID BaseAddress);
 POBJECT_TYPE GetObjectType(_In_ PVOID Object);
 
-// 声明ObReferenceObjectByName
-/*NTSTATUS ObReferenceObjectByName(
-    PUNICODE_STRING ObjectName,
-    ULONG Attributes,
-    PACCESS_STATE AccessState,
-    ACCESS_MASK DesiredAccess,
-    POBJECT_TYPE ObjectType,
-    KPROCESSOR_MODE AccessMode,
-    PVOID ParseContext,
-    PVOID* Object
-);*/
-
 #define MAP_POOL_TAG                'paMG'  // GMap
 #define ATTACH_INFO_POOL_TAG        'iaGA'  // AGia
 #define MAX_FILTER_DEPTH            32
@@ -159,3 +191,5 @@ VOID FreeGlobalDeviceAttachmentMap();
 NTSTATUS CalculateGlobalDataSize(OUT PULONG pTotalSize);
 ULONG CalculateDeviceLevel(PDEVICE_OBJECT StackTop, PDEVICE_OBJECT TargetDev);
 NTSTATUS FillGlobalData(PVOID OutputBuffer, ULONG OutputBufferSize, PULONG pBytesWritten);
+
+NTSTATUS EnumDriverDeviceObjects(ULONG64 DriverObjectAddress, PVOID OutputBuffer, ULONG OutputLength, PULONG_PTR BytesReturned);

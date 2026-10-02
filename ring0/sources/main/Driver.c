@@ -6,6 +6,7 @@
 #include "GDT.h"
 #include "IDT.h"
 #include "ioctl.h"
+#include "KmdfCallbacks.h"
 #include "Memory.h"
 #include "Module.h"
 #include "Netstat.h"
@@ -19,10 +20,10 @@
 #include "Thread.h"
 #include "Window.h"
 
-typedef struct _EProcessInfo {
+typedef struct _EPROCESS_INFO {
 	ULONG64 EProcess;
     BOOLEAN bExited;
-}EProcessInfo, * PEProcessInfo;
+}EPROCESS_INFO, * PEPROCESS_INFO;
 
 //设备与设备之间通信
 #define DEVICE_OBJECT_NAME  L"\\Device\\SnowSword"
@@ -140,7 +141,7 @@ NTSTATUS GetVolumeDeviceObjectByPath(
 
     // 2. 查询符号链接目标，得到卷设备路径
     target.MaximumLength = 128 * sizeof(WCHAR);
-    target.Buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, target.MaximumLength, 'tvol');
+    target.Buffer = KernelAlloc_NonPagedPoolNx(target.MaximumLength, 'tvol');
     if (!target.Buffer) {
         ZwClose(hLink);
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -223,7 +224,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
 
     // ✅ 关键：将传入的常量字符串拷贝到我们自己的可写非分页内存
     USHORT pathLength = (USHORT)(wcslen(filePathWchar) * sizeof(WCHAR));
-    PWCHAR pathBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, pathLength + sizeof(WCHAR), 'Path');
+    PWCHAR pathBuffer = KernelAlloc_NonPagedPoolNx(pathLength + sizeof(WCHAR), 'Path');
     if (!pathBuffer) return STATUS_INSUFFICIENT_RESOURCES;
     RtlCopyMemory(pathBuffer, filePathWchar, pathLength);
     pathBuffer[pathLength / sizeof(WCHAR)] = L'\0';  // 可选的 NULL 终止
@@ -251,7 +252,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
     }
 
     // 3. 分配读缓冲区
-    buffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bytesToRead, 'pdAr');
+    buffer = KernelAlloc_NonPagedPoolNx(bytesToRead, 'pdAr');
     if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
 
     // 4. 读取文件开头 512 字节
@@ -269,7 +270,7 @@ NTSTATUS SampleReadAndPrintAsciiHeader(PCWSTR filePathWchar)
 
     // 5. 打印为 ASCII 可视字符串
     {
-        PCHAR asciiStr = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, bytesRead + 1, 'sApm');
+        PCHAR asciiStr = KernelAlloc_NonPagedPoolNx(bytesRead + 1, 'sApm');
         if (!asciiStr) { status = STATUS_INSUFFICIENT_RESOURCES; goto Cleanup; }
 
         PUCHAR src = (PUCHAR)buffer;
@@ -298,8 +299,6 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
     PDEVICE_OBJECT pDeviceObject = NULL;
     UNICODE_STRING DeviceObjectName = { 0 };
     UNICODE_STRING DeviceLinkName = { 0 };
-
-    DbgPrint("Driver is loaded!");
 
     //创建设备对象名称
     RtlInitUnicodeString(&DeviceObjectName, DEVICE_OBJECT_NAME);
@@ -340,6 +339,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT pDriverObject, _In_ PUNICODE_STRING Reg
 
     KeServiceDescriptorTable = GetKeServiceDescriptorTable();
     KeServiceDescriptorTableShadow = GetKeServiceDescriptorTableShadow();
+    InitializeKmdfCallbackSupport();
 
     return STATUS_SUCCESS;
 }
@@ -425,19 +425,38 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     case IOCTL_GetEProcess:
-        if (pInputData != NULL && InputDataLength > 0)
-        {
-			EProcessInfo EProcessInfo = { 0 };
-            dwProcessId = *(PHANDLE)pInputData;
-            PEPROCESS pEProcess = NULL;
-            status = GetEProcess(dwProcessId, &pEProcess);
-			EProcessInfo.EProcess = (ULONG64)pEProcess;
-			EProcessInfo.bExited = (status == STATUS_PROCESS_IS_TERMINATING);
-            memcpy(pOutputData, &EProcessInfo, sizeof(EProcessInfo));
-            Information = sizeof(EProcessInfo);
-            status = STATUS_SUCCESS;
+    {
+        if (pInputData == NULL || InputDataLength < sizeof(HANDLE)) {
+            status = STATUS_INVALID_PARAMETER;
+            Information = 0;
+            break;
         }
+
+        if (pOutputData == NULL || OutputDataLength < sizeof(EPROCESS_INFO)) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            Information = 0;
+            break;
+        }
+
+        HANDLE processId = *(PHANDLE)pInputData;
+        PEPROCESS pEProcess = NULL;
+        NTSTATUS queryStatus = GetEProcess(processId, &pEProcess);
+
+        if (!NT_SUCCESS(queryStatus) && queryStatus != STATUS_PROCESS_IS_TERMINATING) {
+            status = queryStatus;
+            Information = 0;
+            break;
+        }
+
+        EPROCESS_INFO info = { 0 };
+        info.EProcess = (ULONG64)pEProcess;
+        info.bExited = (queryStatus == STATUS_PROCESS_IS_TERMINATING);
+
+        memcpy(pOutputData, &info, sizeof(info));
+        Information = sizeof(info);
+        status = STATUS_SUCCESS;
         break;
+    }
     case IOCTL_GetEThread:
         if (pInputData != NULL && InputDataLength > 0)
         {
@@ -481,7 +500,6 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             UNICODE_STRING usImage;
 
             pProcessPath = KernelAlloc_NonPagedPoolNx(
-                POOL_FLAG_NON_PAGED,
                 260 * sizeof(WCHAR),
                 'cbin');
 
@@ -592,7 +610,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         break;
         
     case IOCTL_DeleteFileByXCB:
-		ustrFileName = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
+		ustrFileName = KernelAlloc_NonPagedPoolNx(sizeof(WCHAR) * 260, 'cbin');
 		if (ustrFileName == NULL) {
 			DbgPrint("Failed to allocate memory for ustrFileName\n");
 			status = STATUS_INSUFFICIENT_RESOURCES;
@@ -609,7 +627,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     case IOCTL_DeleteFileByIRP:
-        ustrFileName = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'cbin');
+        ustrFileName = KernelAlloc_NonPagedPoolNx(sizeof(WCHAR) * 260, 'cbin');
         if (ustrFileName == NULL) {
             DbgPrint("Failed to allocate memory for ustrFileName\n");
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -631,8 +649,8 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength >= sizeof(COPY_PATH)) {
             _try{
                 COPY_PATH stCopyPath = *(PCOPY_PATH)pInputData;
-                PWCHAR sourcePath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'scph');
-                PWCHAR destPath = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WCHAR) * 260, 'dcph');
+                PWCHAR sourcePath = KernelAlloc_NonPagedPoolNx(sizeof(WCHAR) * 260, 'scph');
+                PWCHAR destPath = KernelAlloc_NonPagedPoolNx(sizeof(WCHAR) * 260, 'dcph');
                 if (sourcePath == NULL || destPath == NULL) {
                     DbgPrint("Failed to allocate memory for sourcePath or destPath\n");
                     status = STATUS_INSUFFICIENT_RESOURCES;
@@ -744,7 +762,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pCallbacks = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(CallbackInfo) * 512, 'cbin');
+            pCallbacks = KernelAlloc_NonPagedPoolNx(sizeof(CallbackInfo) * 512, 'cbin');
             if (pCallbacks == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -756,43 +774,58 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     case IOCTL_EnumIoTimers:
-		SYSTEM_TIMER SystemTimers[64] = { 0 };
-        if (EnumIoTimers(SystemTimers)) {
-            if (pOutputData != NULL && OutputDataLength >= sizeof(SystemTimers))
-            {
-                memcpy(pOutputData, SystemTimers, sizeof(SystemTimers));
-                Information = sizeof(SystemTimers);
-                status = STATUS_SUCCESS;
-            }
-            else
-            {
-                status = STATUS_INFO_LENGTH_MISMATCH;
-            }
+    {
+        SYSTEM_TIMER SystemTimers[64] = { 0 };
+        ULONG Count = EnumIoTimers(SystemTimers, RTL_NUMBER_OF(SystemTimers));
+
+        if (pOutputData != NULL && OutputDataLength >= Count * sizeof(SYSTEM_TIMER))
+        {
+            memcpy(pOutputData, SystemTimers, Count * sizeof(SYSTEM_TIMER));
+            Information = Count * sizeof(SYSTEM_TIMER);
+            status = STATUS_SUCCESS;
         }
-        else {
-            status = STATUS_NOT_FOUND;
+        else
+        {
+            Information = Count * sizeof(SYSTEM_TIMER);
+            status = STATUS_INFO_LENGTH_MISMATCH;
         }
         break;
+    }
     case IOCTL_EnumDpcTimers:
-		PSYSTEM_TIMER pDpcTimers = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, 512 * sizeof(SYSTEM_TIMER), 'syst');
-        if (pDpcTimers) {
-            EnumDpcTimers(pDpcTimers);
-            if (pOutputData != NULL && OutputDataLength >= 512 * sizeof(SYSTEM_TIMER))
-            {
-                memcpy(pOutputData, pDpcTimers, 512 * sizeof(SYSTEM_TIMER));
-                Information = 512 * sizeof(SYSTEM_TIMER);
-                status = STATUS_SUCCESS;
-            }
-            else
-            {
-                DbgPrint("OutputDataLength:%d", OutputDataLength);
-                status = STATUS_INFO_LENGTH_MISMATCH;
-            }
+    {
+        if (pOutputData == NULL || OutputDataLength < sizeof(ULONG))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            Information = 0;
+            break;
         }
-        else {
-            status = STATUS_INSUFFICIENT_RESOURCES;
+
+        if (OutputDataLength == sizeof(ULONG))
+        {
+            ULONG Count = EnumDpcTimers(NULL, 0);
+            *(PULONG)pOutputData = Count;
+            Information = sizeof(ULONG);
+            status = STATUS_SUCCESS;
+            break;
         }
-		break;
+
+        ULONG MaxCount = OutputDataLength / sizeof(SYSTEM_TIMER);
+        if (MaxCount == 0)
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            Information = 0;
+            break;
+        }
+
+        RtlZeroMemory(pOutputData, MaxCount * sizeof(SYSTEM_TIMER));
+
+        ULONG ActualCount = EnumDpcTimers((PSYSTEM_TIMER)pOutputData, MaxCount);
+        ULONG ReturnedCount = min(ActualCount, MaxCount);
+
+        Information = (ULONG_PTR)ReturnedCount * sizeof(SYSTEM_TIMER);
+        status = ActualCount > MaxCount ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+        break;
+    }
     case IOCTL_GetDriverObjectByBaseAddress:
 		if (pInputData != NULL && InputDataLength > 0)
 		{
@@ -807,7 +840,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         if (pInputData != NULL && InputDataLength > 0)
         {
             PDRIVER_OBJECT DriverBase = *(PDRIVER_OBJECT*)pInputData;
-            PDRIVER_INFO pDriverInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(DRIVER_INFO), 'pdio');
+            PDRIVER_INFO pDriverInfo = KernelAlloc_NonPagedPoolNx(sizeof(DRIVER_INFO), 'pdio');
             if (pDriverInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1074,7 +1107,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             ulTimerCount = 0;
 
             // 分配缓存
-            pTimerArray = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(WINDOW_TIMER) * 512, 'meT');
+            pTimerArray = KernelAlloc_NonPagedPoolNx(sizeof(WINDOW_TIMER) * 512, 'meT');
             if (!pTimerArray)
             {
                 DbgPrint("[IOCTL_TIMER] 内存分配失败\n");
@@ -1235,6 +1268,82 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         break;
     }
+    case IOCTL_EnumKmdfCurrentCallbacks:
+    {
+        if (!pInputData ||
+            InputDataLength < sizeof(KMDF_CALLBACK_ENUM_REQUEST) ||
+            !pOutputData ||
+            OutputDataLength < sizeof(KMDF_CALLBACK_ENUM_RESULT))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        PKMDF_CALLBACK_ENUM_REQUEST request =
+            (PKMDF_CALLBACK_ENUM_REQUEST)pInputData;
+
+        PDEVICE_OBJECT deviceObject =
+            (PDEVICE_OBJECT)(ULONG_PTR)request->DeviceObject;
+
+        KMDF_CALLBACK_ENUM_RESULT result;
+
+        status = EnumKmdfCurrentCallbacks(
+            deviceObject,
+            &result);
+
+        if (NT_SUCCESS(status))
+        {
+            RtlCopyMemory(
+                pOutputData,
+                &result,
+                sizeof(result));
+
+            Information = sizeof(result);
+        }
+
+        break;
+    }
+    case IOCTL_SetKmdfSymbolLayout:
+    {
+        if (!pInputData ||
+            InputDataLength != sizeof(KMDF_SYMBOL_LAYOUT))
+        {
+            status = STATUS_INFO_LENGTH_MISMATCH;
+            break;
+        }
+
+        status = KmdfSetSymbolLayout(
+            (PKMDF_SYMBOL_LAYOUT)pInputData);
+
+        Information = 0;
+
+        break;
+    }
+    case IOCTL_QueryKmdfDriverInfo:
+    {
+        if (!pInputData ||
+            InputDataLength < sizeof(KMDF_DRIVER_INFO_REQUEST) ||
+            !pOutputData ||
+            OutputDataLength < sizeof(KMDF_DRIVER_INFO))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        PKMDF_DRIVER_INFO_REQUEST request =
+            (PKMDF_DRIVER_INFO_REQUEST)pInputData;
+        KMDF_DRIVER_INFO result;
+
+        status = QueryKmdfDriverInfo(
+            (PDRIVER_OBJECT)(ULONG_PTR)request->DriverObject,
+            &result);
+        if (NT_SUCCESS(status))
+        {
+            RtlCopyMemory(pOutputData, &result, sizeof(result));
+            Information = sizeof(result);
+        }
+        break;
+    }
     case IOCTL_GetGDT:
         static PGDT_INFO pGdtInfo = NULL;
         static ULONG num3 = 0;
@@ -1248,7 +1357,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pGdtInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(GDT_INFO) * 512, 'gdti');
+            pGdtInfo = KernelAlloc_NonPagedPoolNx(sizeof(GDT_INFO) * 512, 'gdti');
             if (pGdtInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1272,7 +1381,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         }
         else
         {
-            pIdtInfo = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(IDT_INFO) * 512, 'idti');
+            pIdtInfo = KernelAlloc_NonPagedPoolNx(sizeof(IDT_INFO) * 512, 'idti');
             if (pIdtInfo == NULL)
             {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1434,8 +1543,7 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             }
 
             // 分配内核缓冲区
-            PVOID pKernelBuffer = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED,
-                stMemory.Size,
+            PVOID pKernelBuffer = KernelAlloc_NonPagedPoolNx(                stMemory.Size,
                 'pmdK');
             if (!pKernelBuffer) {
                 status = STATUS_INSUFFICIENT_RESOURCES;
@@ -2011,6 +2119,32 @@ NTSTATUS IoctlDispatchRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             status = RemoveAttachedDevice(DeviceObject) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 		}
         break;
+
+    case IOCTL_EnumDriverDevices:
+    {
+        ENUM_DRIVER_DEVICES_INPUT input;
+
+        if (!pInputData || InputDataLength < sizeof(ENUM_DRIVER_DEVICES_INPUT)) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        if (!pOutputData || OutputDataLength < sizeof(DRIVER_DEVICE_LIST_HEADER)) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        input = *(PENUM_DRIVER_DEVICES_INPUT)pInputData;
+
+        status = EnumDriverDeviceObjects(
+            input.DriverObject,
+            pOutputData,
+            OutputDataLength,
+            &Information
+        );
+
+        break;
+    }
 
     case IOCTL_SectorIo_Read:
         return HandleVolumeSectorRead(pIrp, IoStackLocation);

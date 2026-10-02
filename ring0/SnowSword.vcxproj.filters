@@ -100,6 +100,9 @@
     <ClInclude Include="include\OffsetScanner.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\KmdfCallbacks.h">
+      <Filter>Header Files\EnumCallbacks</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources\DriverControl.c">
@@ -173,6 +176,9 @@
     </ClCompile>
     <ClCompile Include="sources\OffsetScanner.c">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\KmdfCallbacks.c">
+      <Filter>Source Files\EnumCallbacks</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

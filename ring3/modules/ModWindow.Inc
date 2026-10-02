@@ -201,9 +201,9 @@ Public Sub GetWindowList(ByVal bGlobal As Boolean, ByVal ProcessId As DWORD, lvw
     InitListViewData lvwWindow
 
     If Not bGlobal Then
-        If lvwWindow.ColumnText(0) = "PID" Then lvwWindow.InsertColumn 0, "PID",, 150
+        If lvwWindow.ColumnText(0) = "PID" Then lvwWindow.DeleteColumn 0
     Else
-        lvwWindow.DeleteColumn 0
+        If lvwWindow.ColumnText(0) <> "PID" Then lvwWindow.InsertColumn 0, "PID",, 150
     End If
 
     For i As Integer = 0 To WindowCount - 1
@@ -258,7 +258,7 @@ Public Sub GetWindowList(ByVal bGlobal As Boolean, ByVal ProcessId As DWORD, lvw
                 WStr(strProcessPath)
         Else
             AddItemColListEx lvwWindow, 8,,, _
-                WStr(ProcessId), _
+                WStr(dwProcessId), _
                 WStr("0x" & WHex(hWindows(i))), _
                 IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
                 WStr(window_Title), _
@@ -320,7 +320,7 @@ Public Sub GetWindowList(ByVal bGlobal As Boolean, ByVal ProcessId As DWORD, lvw
                     WStr(strProcessPath)
             Else
                 AddItemColListEx lvwWindow, 8,,, _
-                    WStr(ProcessId), _
+                    WStr(dwProcessId), _
                     WStr("0x" & WHex(hChildWindows(i))), _
                     IIf(ParenthWnd <> NULL, "0x" & WHex(ParenthWnd), WStr("-")), _
                     WStr(window_Title), _
@@ -330,7 +330,6 @@ Public Sub GetWindowList(ByVal bGlobal As Boolean, ByVal ProcessId As DWORD, lvw
                     WStr(strProcessPath)
             End If
         Next
-
         FF_DoEvents
     Next
 

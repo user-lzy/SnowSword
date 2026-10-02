@@ -237,7 +237,6 @@ NTSTATUS EnumWorkItemThread(
 
     // ==================== 第二步：分配内存 ====================
     pArray = (PWORKER_THREAD_INFO)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED,
         threadCount * sizeof(WORKER_THREAD_INFO),
         'WrkE'  // 内存标签: WorkE
     );
@@ -723,7 +722,7 @@ NTSTATUS ForceKillThread(HANDLE ThreadId)
 
     BOOLEAN status;
     PKAPC ExitApc = NULL;
-    ExitApc = (PKAPC)KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, sizeof(KAPC), '1111');
+    ExitApc = (PKAPC)KernelAlloc_NonPagedPoolNx(sizeof(KAPC), '1111');
     if (ExitApc == NULL)
     {
         DbgPrint("[KillProcessWithApc] malloc memory failed \n");

@@ -603,12 +603,12 @@ Function FindValueName(arr() As REG_VALUE_ITEM, valueName As String) As Boolean
 End Function
 
 ' ########## 辅助函数：获取当前用户SID ##########
-Function GetCurrentUserSid() As String
+Function GetCurrentUserSid() As StringW
     Dim hToken As HANDLE = NULL
     Dim pTokenUser As PTOKEN_USER = NULL
     Dim dwReturnLen As DWORD = 0
-    Dim szSid As LPSTR = NULL
-    Dim sResult As String = ""
+    Dim szSid As LPWSTR = NULL
+    Dim sResult As StringW = ""
 
     If OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, hToken) = 0 Then GoTo Cleanup
     GetTokenInformation(hToken, TokenUser, NULL, 0, @dwReturnLen)

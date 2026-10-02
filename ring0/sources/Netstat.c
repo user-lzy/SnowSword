@@ -35,7 +35,7 @@ static NTSTATUS GetNdisModuleInfo(_Out_ PVOID* Base, _Out_ ULONG* Size)
     if (Status != STATUS_INFO_LENGTH_MISMATCH)
         return Status;
 
-    Buf = KernelAlloc_NonPagedPoolNx(POOL_FLAG_NON_PAGED, Need, 'mNds');
+    Buf = KernelAlloc_NonPagedPoolNx(Need, 'mNds');
     if (!Buf) return STATUS_INSUFFICIENT_RESOURCES;
 
     Status = NtQuerySystemInformation(SystemModuleInformation, Buf, Need, &Need);
@@ -657,7 +657,6 @@ NdisEnumMiniportsAlloc(
         return STATUS_SUCCESS;
 
     buffer = (PNDIS_MINIPORT_ENUM_ENTRY)KernelAlloc_NonPagedPoolNx(
-        POOL_FLAG_NON_PAGED | POOL_FLAG_UNINITIALIZED,
         needed * sizeof(NDIS_MINIPORT_ENUM_ENTRY),
         NDIS_ENUM_TAG
     );

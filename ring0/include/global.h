@@ -14,8 +14,22 @@ typedef unsigned long DWORD;
 typedef void VOID;
 #endif
 
-#define KernelAlloc_NonPagedPoolNx(Type, Count, Tag) \
-    ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(Type) * (Count), (Tag))
+__forceinline PVOID KernelAllocatePoolZero(POOL_TYPE PoolType, SIZE_T NumberOfBytes, ULONG Tag)
+{
+	PVOID Buffer;
+
+	if (NumberOfBytes == 0)
+		return NULL;
+
+	Buffer = ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
+	if (Buffer)
+		RtlZeroMemory(Buffer, NumberOfBytes);
+
+	return Buffer;
+}
+
+#define KernelAlloc_NonPagedPoolNx(Size, Tag) \
+    KernelAllocatePoolZero(NonPagedPoolNx, (Size), (Tag))
 
 // 声明自定义结构体
 struct AdvancedOptions {

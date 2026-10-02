@@ -203,7 +203,7 @@ Public Function GetMsgHookList(ByVal bAll As Boolean, ByVal bGlobal As Boolean, 
             "[预热] 加载失败，将在首次查询时自动重试"
         FrmListView.lblNum.Refresh
     End If
-    Deallocate(pReq)
+    SymbolActor_ReleaseRequest(pReq)
 
     ' 第一次IOCTL：获取缓冲区大小
     SetLastError 0
